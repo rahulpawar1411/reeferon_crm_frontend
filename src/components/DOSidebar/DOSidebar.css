@@ -1,0 +1,151 @@
+/* ====================================================================
+   DO Sidebar Component Styles (src/components/DOSidebar/DOSidebar.css)
+   Dedicated Left Navigation Sidebar for Data Operator (DO) Window
+   ==================================================================== */
+
+.do-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--sidebar-width);
+  height: 100vh;
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 20px 16px;
+  z-index: 120;
+  box-shadow: 4px 0 15px rgba(0, 0, 0, 0.03);
+}
+
+.do-sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.do-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.do-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.do-sidebar-link:hover {
+  background-color: var(--bg-main);
+  color: var(--primary);
+}
+
+.do-sidebar-link.active {
+  background: linear-gradient(135deg, #00a2e8, #0081ba);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 162, 232, 0.3);
+}
+
+.do-sidebar-link.inward.active {
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+}
+
+.do-sidebar-link.outward.active {
+  background: linear-gradient(135deg, #d97706, #b45309);
+}
+
+.do-add-btn {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #84c225, #6ea31e);
+  color: #ffffff;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  box-shadow: 0 4px 12px rgba(132, 194, 37, 0.3);
+}
+
+.do-sidebar-bottom {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.do-user-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-main);
+  border: 1px solid var(--border);
+}
+
+.do-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a2e8, #84c225);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.do-user-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.do-user-info strong {
+  font-size: 0.85rem;
+  color: var(--text-dark);
+}
+
+.do-user-info span {
+  font-size: 0.72rem;
+  color: #0284c7;
+  font-weight: 700;
+}
+
+/* Tablet View */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .do-sidebar {
+    width: var(--tablet-sidebar-width);
+    padding: 16px 8px;
+    align-items: center;
+  }
+
+  .do-sidebar-link span,
+  .do-add-btn span,
+  .do-user-info {
+    display: none;
+  }
+
+  .do-sidebar-link {
+    justify-content: center;
+    padding: 12px;
+  }
+}

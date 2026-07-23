@@ -1,0 +1,217 @@
+/* ====================================================================
+   Global Styles & Multi-Device Design System (src/index.css)
+   100% Strict No Horizontal Overflow & Device Comfort
+   ==================================================================== */
+
+:root {
+  /* ReeferON Brand Colors */
+  --primary: #00a2e8;           /* ReeferON Cyan Blue */
+  --primary-hover: #0081ba;
+  --primary-light: #e0f2fe;
+  
+  --secondary: #84c225;         /* ReeferON Fresh Green */
+  --secondary-hover: #6ea31e;
+  --secondary-light: #f0fdf4;
+
+  /* Status Colors */
+  --status-new-bg: #e0f2fe;
+  --status-new-text: #0369a1;
+  
+  --status-contacted-bg: #fef3c7;
+  --status-contacted-text: #92400e;
+  
+  --status-progress-bg: #f3e8ff;
+  --status-progress-text: #6b21a8;
+  
+  --status-won-bg: #dcfce7;
+  --status-won-text: #15803d;
+  
+  --status-lost-bg: #fee2e2;
+  --status-lost-text: #b91c1c;
+  
+  /* Neutral Shades */
+  --bg-main: #f8fafc;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text-dark: #0f172a;
+  --text-muted: #64748b;
+  --text-light: #94a3b8;
+  
+  /* Shadows & Radius */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.1);
+  
+  /* Layout Dimensions */
+  --header-height: 64px;
+  --sidebar-width: 260px;
+  --tablet-sidebar-width: 80px;
+}
+
+/* Reset & Universal Box Sizing */
+html, body {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  background-color: var(--bg-main);
+  color: var(--text-dark);
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* App Outer Shell */
+#root {
+  width: 100%;
+  max-width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+/* ====================================================================
+   DEVICE BREAKPOINTS (Desktop, Tablet, Mobile)
+   ==================================================================== */
+
+/* --- 1. DESKTOP VIEWPORT (>1024px) --- */
+@media (min-width: 1024px) {
+  #root {
+    flex-direction: row;
+  }
+  
+  .app-viewport {
+    flex: 1;
+    width: calc(100% - var(--sidebar-width));
+    max-width: calc(100% - var(--sidebar-width));
+    margin-left: var(--sidebar-width);
+    padding-top: 16px;
+    padding-bottom: 32px;
+    padding-left: 28px;
+    padding-right: 28px;
+    box-sizing: border-box;
+  }
+
+  .desktop-only {
+    display: flex !important;
+  }
+
+  .mobile-only {
+    display: none !important;
+  }
+}
+
+/* --- 2. TABLET VIEWPORT (768px to 1023px) --- */
+@media (min-width: 768px) and (max-width: 1023px) {
+  #root {
+    flex-direction: row;
+  }
+
+  .app-viewport {
+    flex: 1;
+    width: calc(100% - var(--tablet-sidebar-width));
+    max-width: calc(100% - var(--tablet-sidebar-width));
+    margin-left: var(--tablet-sidebar-width);
+    padding-top: 14px;
+    padding-bottom: 24px;
+    padding-left: 18px;
+    padding-right: 18px;
+    box-sizing: border-box;
+  }
+
+  .desktop-only {
+    display: flex !important;
+  }
+
+  .mobile-only {
+    display: none !important;
+  }
+}
+
+/* --- 3. MOBILE VIEWPORT (<767px) --- */
+@media (max-width: 767px) {
+  #root {
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .app-viewport {
+    flex: 1;
+    width: 100%;
+    max-width: 100%;
+    padding-top: 10px;
+    padding-bottom: 20px;
+    padding-left: 10px;
+    padding-right: 10px;
+    box-sizing: border-box;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+
+  .mobile-only {
+    display: flex !important;
+  }
+}
+
+/* Common Status Badge Component */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 20px;
+}
+
+.status-badge.New {
+  background-color: var(--status-new-bg);
+  color: var(--status-new-text);
+}
+
+.status-badge.Contacted {
+  background-color: var(--status-contacted-bg);
+  color: var(--status-contacted-text);
+}
+
+.status-badge.In-Progress,
+.status-badge.In\ Progress {
+  background-color: var(--status-progress-bg);
+  color: var(--status-progress-text);
+}
+
+.status-badge.Won {
+  background-color: var(--status-won-bg);
+  color: var(--status-won-text);
+}
+
+.status-badge.Lost {
+  background-color: var(--status-lost-bg);
+  color: var(--status-lost-text);
+}
+
+/* Button Animations */
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: transform 0.1s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+button:active {
+  transform: scale(0.97);
+}

@@ -1,0 +1,164 @@
+/* ====================================================================
+   Sidebar Component Styles (src/components/Sidebar/Sidebar.css)
+   Desktop & Tablet Left Navigation Bar with ReeferON Branding
+   ==================================================================== */
+
+.app-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--sidebar-width);
+  height: 100vh;
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 20px 16px;
+  z-index: 120;
+  box-shadow: 4px 0 15px rgba(0, 0, 0, 0.03);
+}
+
+.sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.sidebar-logo-container {
+  padding-left: 8px;
+}
+
+.sidebar-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.sidebar-link:hover {
+  background-color: var(--bg-main);
+  color: var(--primary);
+}
+
+.sidebar-link.active {
+  background: linear-gradient(135deg, #00a2e8, #0081ba);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 162, 232, 0.3);
+}
+
+.sidebar-link.active svg {
+  color: #ffffff;
+}
+
+.sidebar-add-btn {
+  width: 100%;
+  padding: 12px;
+  background-color: var(--secondary);
+  color: #ffffff;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  box-shadow: 0 4px 12px rgba(132, 194, 37, 0.3);
+}
+
+.sidebar-add-btn:hover {
+  background-color: var(--secondary-hover);
+}
+
+.sidebar-bottom {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.user-profile-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-main);
+}
+
+.avatar-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a2e8, #84c225);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-info strong {
+  font-size: 0.82rem;
+  color: var(--text-dark);
+}
+
+.user-info span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* Responsive adjust for Tablet View (Compact Icon Sidebar) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-sidebar {
+    width: 80px;
+    padding: 16px 8px;
+    align-items: center;
+  }
+
+  .sidebar-logo-container {
+    padding-left: 0;
+  }
+
+  .sidebar-link span,
+  .sidebar-add-btn span,
+  .user-info,
+  .brand-text-block,
+  .brand-tagline {
+    display: none;
+  }
+
+  .sidebar-link {
+    justify-content: center;
+    padding: 12px;
+  }
+
+  .sidebar-add-btn {
+    padding: 12px 0;
+    justify-content: center;
+  }
+}

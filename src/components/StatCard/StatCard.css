@@ -1,0 +1,43 @@
+/* ====================================================================
+   Stat Card Component Styles (src/components/StatCard/StatCard.css)
+   Clean metric card with vibrant icon & value for mobile view.
+   ==================================================================== */
+
+.stat-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.stat-icon-box {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-title {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.stat-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-dark);
+  margin-top: 2px;
+}

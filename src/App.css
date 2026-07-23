@@ -1,0 +1,10 @@
+/* ====================================================================
+   App Root Component Styles (src/App.css)
+   Paired with: src/App.jsx
+   ==================================================================== */
+
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}

@@ -1,0 +1,46 @@
+/* ====================================================================
+   Settings Page Styles (src/pages/Settings/Settings.css)
+   Settings screen for DB info, developer configurations, & help
+   ==================================================================== */
+
+.settings-page {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-card h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-dark);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.info-row span {
+  color: var(--text-muted);
+}
+
+.info-row strong {
+  color: var(--text-dark);
+  font-weight: 600;
+}

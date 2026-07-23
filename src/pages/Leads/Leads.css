@@ -1,0 +1,90 @@
+/* ====================================================================
+   Leads Page Styles (src/pages/Leads/Leads.css)
+   Responsive Multi-Device Lead List & Filters
+   ==================================================================== */
+
+.leads-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Search Bar Wrapper */
+.search-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.search-input {
+  width: 100%;
+  padding: 14px 18px 14px 46px;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 0.92rem;
+  color: var(--text-dark);
+  box-shadow: var(--shadow-sm);
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+}
+
+.search-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+}
+
+/* Horizontal Scrollable Status Filter Pills */
+.filter-pills-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.filter-pills-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.pill-btn {
+  padding: 8px 16px;
+  border-radius: 20px;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.pill-btn.active {
+  background-color: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+  box-shadow: 0 4px 10px rgba(0, 162, 232, 0.3);
+}
+
+/* Responsive Grid for Lead Cards */
+.leads-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 600px) {
+  .leads-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}

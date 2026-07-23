@@ -1,0 +1,107 @@
+/* ====================================================================
+   Dashboard Page Styles (src/pages/Dashboard/Dashboard.css)
+   Responsive Multi-Device Dashboard (Desktop, Tablet, & Mobile)
+   ==================================================================== */
+
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Hero Welcome Banner */
+.welcome-banner {
+  background: linear-gradient(135deg, #0081ba, #00a2e8);
+  color: #ffffff;
+  padding: 24px 28px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  position: relative;
+  overflow: hidden;
+}
+
+.welcome-banner h2 {
+  font-size: 1.4rem;
+  font-weight: 800;
+}
+
+.welcome-banner p {
+  font-size: 0.88rem;
+  color: #e0f2fe;
+  margin-top: 4px;
+}
+
+.pipeline-highlight {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pipeline-highlight span {
+  font-size: 0.82rem;
+  color: #bae6fd;
+}
+
+.pipeline-highlight strong {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+/* Metrics Grid - Responsive Multi-Column Layout */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1023px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+}
+
+/* Section Headers */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-header h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-dark);
+}
+
+.see-all-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* Responsive Grid for Recent Leads */
+.recent-leads-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 600px) {
+  .recent-leads-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
