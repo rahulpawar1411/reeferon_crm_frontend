@@ -44,7 +44,7 @@ export default function DOHeader({ activeTitle, activeDOMenu, setActiveDOMenu })
   const formattedTime = timeState.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
-    hour12: true
+    hour12: false
   });
 
   const toggleMobileMenu = () => {
@@ -73,13 +73,14 @@ export default function DOHeader({ activeTitle, activeDOMenu, setActiveDOMenu })
         </div>
 
         {/* Desktop Only Title */}
-        <div className="desktop-only" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="desktop-only" style={{ display: 'flex', alignItems: 'center' }}>
           <h1 style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-dark)' }}>{activeTitle || 'DO Daily Temp Monitor'}</h1>
-          <span className="do-role-tag">DO Operator Window</span>
         </div>
 
-        {/* Right: Top Right Hamburger Menu Button for Mobile */}
+        {/* Right: Top Right Hamburger Menu Button for Mobile & Role Badge */}
         <div className="do-header-actions">
+          <span className="do-role-tag desktop-only">DO Operator Window</span>
+          
           <button 
             className={`mobile-hamburger-btn mobile-only ${isMobileMenuOpen ? 'open' : ''}`}
             onClick={toggleMobileMenu}

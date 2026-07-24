@@ -43,7 +43,7 @@ export default function Header({ title, activeTab, setActiveTab }) {
   const formattedTime = timeState.toLocaleTimeString('en-IN', {
     hour: '2-digit',
     minute: '2-digit',
-    hour12: true
+    hour12: false
   });
 
   const toggleMobileMenu = () => {
@@ -72,15 +72,16 @@ export default function Header({ title, activeTab, setActiveTab }) {
         </div>
 
         {/* Desktop Only Title */}
-        <div className="desktop-only" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="desktop-only" style={{ display: 'flex', alignItems: 'center' }}>
           <h1 className="header-title-text">{title || 'Super Admin Dashboard'}</h1>
-          <span style={{ backgroundColor: '#ecfccb', color: '#65a30d', padding: '3px 10px', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 800 }}>
-            Super Admin
-          </span>
         </div>
 
-        {/* Right: Top Right Hamburger Menu Button for Mobile */}
+        {/* Right: Top Right Hamburger Menu Button for Mobile & Role Badge */}
         <div className="header-actions">
+          <span className="desktop-only" style={{ backgroundColor: '#ecfccb', color: '#65a30d', padding: '3px 10px', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 800 }}>
+            Super Admin
+          </span>
+          
           <button 
             className={`mobile-hamburger-btn mobile-only ${isMobileMenuOpen ? 'open' : ''}`}
             onClick={toggleMobileMenu}

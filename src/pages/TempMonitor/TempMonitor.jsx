@@ -4,11 +4,12 @@
 // Strictly 24-Hour Inspection Time Format (HH:MM - No AM/PM)
 // ====================================================================
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Thermometer, Plus, CheckCircle, PlusCircle, Camera, Loader2, Check, Trash2, RefreshCw
 } from 'lucide-react';
-import { addChamberLog } from '../../services/api';
+import { addChamberLog, fetchChamberLogs, deleteChamberLog } from '../../services/api';
+import exifr from 'exifr';
 import './TempMonitor.css'; // Paired CSS file
 
 export default function TempMonitor() {
@@ -18,6 +19,7 @@ export default function TempMonitor() {
   const [submitting, setSubmitting] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+  const [showErrors, setShowErrors] = useState(false);
 
   // Is Chamber Name in custom text mode?
   const [isChamberCustom, setIsChamberCustom] = useState(false);
@@ -28,6 +30,14 @@ export default function TempMonitor() {
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
 
+  // Inspection Logs & Loading States
+  const [logs, setLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(true);
+  const [lightboxImage, setLightboxImage] = useState(null);
+
+  // Verification Step Data State
+  const [verificationData, setVerificationData] = useState(null);
+
   // Direct On-Screen Form State (Strict 24-Hour Time)
   const [formData, setFormData] = useState({
     entry_date: todayStr,
@@ -37,6 +47,52 @@ export default function TempMonitor() {
     chamber_temp: '',
     monitor_supervisor_name: ''
   });
+
+  const formatDateTime = (date) => {
+    if (!date || isNaN(date.getTime())) return '';
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    const ss = String(date.getSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  };
+
+  const calculateVariance = (entryDateStr, inspectionTimeStr, captureDate) => {
+    try {
+      if (!entryDateStr || !inspectionTimeStr || !captureDate) return 0;
+      const [hours, minutes] = inspectionTimeStr.split(':').map(Number);
+      const [year, month, day] = entryDateStr.split('-').map(Number);
+      
+      // Timezone-safe local Date instantiation
+      const inspectionDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+
+      const diffMs = Math.abs(captureDate.getTime() - inspectionDate.getTime());
+      return Math.round(diffMs / (1000 * 60));
+    } catch (e) {
+      console.error(e);
+      return 0;
+    }
+  };
+
+  const loadLogs = async () => {
+    setLoadingLogs(true);
+    const data = await fetchChamberLogs();
+    setLogs(data || []);
+    setLoadingLogs(false);
+  };
+
+  useEffect(() => {
+    loadLogs();
+  }, []);
+
+  const handleDeleteLog = async (id) => {
+    if (window.confirm('Are you sure you want to delete this log?')) {
+      await deleteChamberLog(id);
+      loadLogs();
+    }
+  };
 
   // Client-Side Canvas Image Compressor
   const compressImageFile = (file) => {
@@ -77,7 +133,7 @@ export default function TempMonitor() {
             if (blob) {
               const compressedFile = new File([blob], file.name || 'temp-sensor-photo.jpg', {
                 type: 'image/jpeg',
-                lastModified: Date.now()
+                lastModified: file.lastModified
               });
               setCompressing(false);
               resolve({ file: compressedFile, previewUrl: URL.createObjectURL(blob) });
@@ -96,8 +152,30 @@ export default function TempMonitor() {
     const file = e.target.files[0];
     if (!file) return;
 
+    // 1. Parse EXIF DateTimeOriginal from the original file BEFORE Canvas compression strips it
+    let originalCaptureDate = null;
+    try {
+      const exif = await exifr.parse(file);
+      if (exif && exif.DateTimeOriginal) {
+        originalCaptureDate = new Date(exif.DateTimeOriginal);
+      }
+    } catch (err) {
+      console.warn('Failed to parse EXIF metadata on frontend:', err.message);
+    }
+
+    // 2. Compress image using Canvas
     const compressed = await compressImageFile(file);
-    setImageFile(compressed.file);
+
+    // 3. Fallback hierarchy: EXIF camera capture time -> File lastModified time -> Current server time
+    const captureTime = originalCaptureDate || new Date(file.lastModified || Date.now());
+
+    // 4. Wrap compressed blob/file in a new File preserving the resolved capture timestamp
+    const finalFile = new File([compressed.file], file.name || 'temp-sensor-photo.jpg', {
+      type: 'image/jpeg',
+      lastModified: captureTime.getTime()
+    });
+
+    setImageFile(finalFile);
     setImagePreview(compressed.previewUrl);
   };
 
@@ -148,17 +226,49 @@ export default function TempMonitor() {
   };
 
   // Handle Direct On-Screen Form Submit
-  const handleDirectFormSubmit = async (e) => {
+  const handleDirectFormSubmit = (e) => {
     e.preventDefault();
 
-    if (!formData.client_name || !formData.chamber_name || !formData.chamber_temp || !formData.monitor_supervisor_name) {
-      alert('Please fill all required fields: Entry Date, Client Name, Chamber Name, Chamber Temp, and Monitor Supervisor Name.');
+    const isDateEmpty = !formData.entry_date;
+    const isClientEmpty = !formData.client_name || !formData.client_name.trim();
+    const isChamberEmpty = !formData.chamber_name || !formData.chamber_name.trim();
+    const isTimeEmpty = !formData.inspection_time;
+    const isTempEmpty = !formData.chamber_temp;
+    const isSupervisorEmpty = !formData.monitor_supervisor_name || !formData.monitor_supervisor_name.trim();
+    const isPhotoEmpty = !imageFile;
+
+    if (isDateEmpty || isClientEmpty || isChamberEmpty || isTimeEmpty || isTempEmpty || isSupervisorEmpty || isPhotoEmpty) {
+      setShowErrors(true);
+      
+      const missingFields = [];
+      if (isDateEmpty) missingFields.push('Entry Date');
+      if (isClientEmpty) missingFields.push('Client Name');
+      if (isChamberEmpty) missingFields.push('Chamber Name');
+      if (isTimeEmpty) missingFields.push('Inspection Time');
+      if (isTempEmpty) missingFields.push('Chamber Temp');
+      if (isSupervisorEmpty) missingFields.push('Monitor Supervisor Name');
+      if (isPhotoEmpty) missingFields.push('Temp Sensor Photo');
+
+      alert(`⚠️ Validation Error:\nPlease fill all required fields:\n- ${missingFields.join('\n- ')}`);
       return;
     }
 
+    setShowErrors(false);
+
+    // Calculate metadata from the file uploaded on client
+    const captureTime = new Date(imageFile.lastModified || Date.now());
+    const formattedCapture = formatDateTime(captureTime);
+    const variance = calculateVariance(formData.entry_date, formData.inspection_time, captureTime);
+
+    setVerificationData({
+      photo_capture_time_str: formattedCapture,
+      time_variance_minutes: variance
+    });
+  };
+
+  const handleConfirmSubmit = async () => {
     setSubmitting(true);
 
-    // Prepare FormData for Multi-part File Upload
     const submissionData = new FormData();
     submissionData.append('entry_date', formData.entry_date);
     submissionData.append('client_name', formData.client_name);
@@ -166,6 +276,12 @@ export default function TempMonitor() {
     submissionData.append('inspection_time', formData.inspection_time);
     submissionData.append('chamber_temp', formData.chamber_temp);
     submissionData.append('monitor_supervisor_name', formData.monitor_supervisor_name);
+    
+    // Pass frontend-audited capture times to the backend database insert
+    if (verificationData) {
+      submissionData.append('photo_capture_time', verificationData.photo_capture_time_str);
+      submissionData.append('time_variance_minutes', verificationData.time_variance_minutes);
+    }
 
     if (imageFile) {
       submissionData.append('temp_sensor_image', imageFile);
@@ -173,9 +289,11 @@ export default function TempMonitor() {
 
     await addChamberLog(submissionData);
     setSubmitting(false);
+    setVerificationData(null);
+    loadLogs();
 
     // Show Success Alert Notification
-    setSuccessMsg(`Chamber temperature record for "${formData.client_name}" saved successfully in MySQL database!`);
+    setSuccessMsg('Chamber temperature saved successfully');
 
     // Reset Form
     setIsChamberCustom(false);
@@ -198,6 +316,10 @@ export default function TempMonitor() {
     }, 4000);
   };
 
+  const handleCancelVerification = () => {
+    setVerificationData(null);
+  };
+
   return (
     <div className="temp-monitor-page">
       {/* 1. Header Banner */}
@@ -208,7 +330,7 @@ export default function TempMonitor() {
             <span>DO Daily Chamber Temp Monitor</span>
           </h2>
           <p>
-            Record daily chamber temperatures directly into MySQL database with compressed temp sensor photo capture.
+            Make sure the sensor image capture time and inspection time match closely to avoid audit discrepancies.
           </p>
         </div>
       </div>
@@ -240,6 +362,7 @@ export default function TempMonitor() {
                 value={formData.entry_date}
                 onChange={(e) => setFormData({ ...formData, entry_date: e.target.value })}
                 required
+                className={showErrors && !formData.entry_date ? 'input-error' : ''}
               />
             </div>
 
@@ -252,6 +375,7 @@ export default function TempMonitor() {
                 value={formData.client_name}
                 onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
                 required
+                className={showErrors && !formData.client_name ? 'input-error' : ''}
               />
             </div>
 
@@ -263,6 +387,7 @@ export default function TempMonitor() {
                   value={formData.chamber_name}
                   onChange={(e) => handleChamberChange(e.target.value)}
                   required
+                  className={showErrors && !formData.chamber_name ? 'input-error' : ''}
                 >
                   <option value="BDF-1">BDF-1</option>
                   <option value="BDF-2">BDF-2</option>
@@ -282,6 +407,7 @@ export default function TempMonitor() {
                   onChange={(e) => setFormData({ ...formData, chamber_name: e.target.value })}
                   required
                   autoFocus
+                  className={showErrors && !formData.chamber_name ? 'input-error' : ''}
                 />
               )}
             </div>
@@ -294,6 +420,7 @@ export default function TempMonitor() {
                   value={formData.inspection_time}
                   onChange={(e) => handleTimeChange(e.target.value)}
                   required
+                  className={showErrors && !formData.inspection_time ? 'input-error' : ''}
                 >
                   <option value="11:00">11:00</option>
                   <option value="18:00">18:00</option>
@@ -306,6 +433,7 @@ export default function TempMonitor() {
                   onChange={(e) => setFormData({ ...formData, inspection_time: e.target.value })}
                   required
                   autoFocus
+                  className={showErrors && !formData.inspection_time ? 'input-error' : ''}
                 />
               )}
             </div>
@@ -320,6 +448,7 @@ export default function TempMonitor() {
                 value={formData.chamber_temp}
                 onChange={(e) => setFormData({ ...formData, chamber_temp: e.target.value })}
                 required
+                className={showErrors && !formData.chamber_temp ? 'input-error' : ''}
               />
             </div>
 
@@ -332,12 +461,13 @@ export default function TempMonitor() {
                 value={formData.monitor_supervisor_name}
                 onChange={(e) => setFormData({ ...formData, monitor_supervisor_name: e.target.value })}
                 required
+                className={showErrors && !formData.monitor_supervisor_name ? 'input-error' : ''}
               />
             </div>
 
             {/* Field 7: Temp Sensor Photo */}
             <div className="direct-form-group">
-              <label>Temp Sensor Photo</label>
+              <label>Temp Sensor Photo *</label>
               <input 
                 type="file" 
                 accept="image/*"
@@ -358,7 +488,7 @@ export default function TempMonitor() {
                   // Camera Trigger Button
                   <button 
                     type="button" 
-                    className="sensor-camera-trigger"
+                    className={`sensor-camera-trigger ${showErrors && !imageFile ? 'error' : ''}`}
                     onClick={() => fileInputRef.current && fileInputRef.current.click()}
                   >
                     <Camera size={18} color="#00a2e8" />
@@ -407,6 +537,229 @@ export default function TempMonitor() {
           </div>
         </form>
       </div>
+
+      {/* 3. Daily Temp Logs History List */}
+      <div className="direct-form-card logs-history-card">
+        <div className="direct-form-header">
+          <h3>
+            <Thermometer size={18} color="#00a2e8" />
+            <span>Inspection Log History</span>
+          </h3>
+        </div>
+
+        {(() => {
+          const todayLogs = logs.filter(log => {
+            const logDate = log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '');
+            return logDate === todayStr;
+          });
+
+          if (loadingLogs) {
+            return (
+              <div className="loading-logs">
+                <Loader2 size={24} className="spinner-icon" color="#00a2e8" />
+                <span>Loading history logs...</span>
+              </div>
+            );
+          }
+
+          if (todayLogs.length === 0) {
+            return (
+              <div className="no-logs">
+                <p>No daily temperature inspection logs found for today.</p>
+              </div>
+            );
+          }
+
+          return (
+            <div className="table-responsive">
+              <table className="logs-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th className="wrap-text">Client</th>
+                    <th>Chamber</th>
+                    <th>Inspection Time</th>
+                    <th>Sensor Temp</th>
+                    <th className="wrap-text">Supervisor</th>
+                    <th>Image</th>
+                    <th className="wrap-text">Capture Time (Actual)</th>
+                    <th>Variance</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todayLogs.map((log) => {
+                    const varMin = log.time_variance_minutes || 0;
+                    let varianceClass = varMin > 120 ? 'variance-red' : 'variance-green';
+                  let varianceLabel = `${varMin} mins`;
+
+                  const imageSrc = log.temp_sensor_image && log.temp_sensor_image.startsWith('data:image') 
+                    ? log.temp_sensor_image 
+                    : `http://localhost:5000/${log.temp_sensor_image}`;
+
+                  return (
+                    <tr key={log.id}>
+                      <td>{log.formatted_date || log.entry_date}</td>
+                      <td className="wrap-text"><strong>{log.client_name}</strong></td>
+                      <td><span className="chamber-badge">{log.chamber_name}</span></td>
+                      <td>{log.inspection_time}</td>
+                      <td className="temp-cell"><strong>{log.chamber_temp}°C</strong></td>
+                      <td className="wrap-text">{log.monitor_supervisor_name}</td>
+                      <td className="photo-cell">
+                        {log.temp_sensor_image ? (
+                          <div 
+                            className="view-photo-link"
+                            onClick={() => setLightboxImage(imageSrc)}
+                          >
+                            <img 
+                              src={imageSrc} 
+                              alt="Sensor" 
+                              className="table-photo-thumb"
+                            />
+                          </div>
+                        ) : (
+                          <span className="no-photo-text">No Photo</span>
+                        )}
+                      </td>
+                      <td className="time-text">
+                        {log.photo_capture_time ? (
+                          <span>{log.photo_capture_time.split(' ')[1] || log.photo_capture_time}</span>
+                        ) : (
+                          <span className="no-photo-text">-</span>
+                        )}
+                      </td>
+                      <td>
+                        {log.photo_capture_time ? (
+                          <span className={`variance-pill ${varianceClass}`}>
+                            {varianceLabel}
+                          </span>
+                        ) : (
+                          <span className="no-photo-text">-</span>
+                        )}
+                      </td>
+                      <td>
+                        <button 
+                          onClick={() => handleDeleteLog(log.id)}
+                          className="delete-log-action-btn"
+                          title="Delete Log"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+    </div>
+
+      {/* Lightbox Modal */}
+      {lightboxImage && (
+        <div className="lightbox-overlay" onClick={() => setLightboxImage(null)}>
+          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+            <img src={lightboxImage} alt="Temperature Sensor Full Size" />
+            <button className="lightbox-close" onClick={() => setLightboxImage(null)}>×</button>
+          </div>
+        </div>
+      )}
+
+      {/* Verification Modal Popup Overlay */}
+      {verificationData && (
+        <div className="verification-modal-overlay">
+          <div className="verification-modal-content">
+            <div className="direct-form-header">
+              <h3 className="verify-title">
+                <CheckCircle size={20} color="#10b981" />
+                <span>Verify Time Audit Details</span>
+              </h3>
+            </div>
+            
+            <div className="verification-content-wrapper-modal">
+              {/* Time variance box */}
+              <div className="verify-time-comparison-box">
+                <h4>Time Audit Comparison</h4>
+                
+                <div className="comparison-row">
+                  <div className="comp-item">
+                    <span className="comp-label">Reported Time</span>
+                    <div className="comp-val-dt">
+                      <span className="comp-date">{formData.entry_date}</span>
+                      <span className="comp-time">{formData.inspection_time}</span>
+                    </div>
+                  </div>
+                  <div className="comp-divider">⚡</div>
+                  <div className="comp-item">
+                    <span className="comp-label">Actual Photo Time</span>
+                    <div className="comp-val-dt">
+                      <span className="comp-date">{verificationData.photo_capture_time_str.split(' ')[0]}</span>
+                      <span className="comp-time">{verificationData.photo_capture_time_str.split(' ')[1]}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="variance-audit-result">
+                  <span>Variance Detected:</span>
+                  <strong className={`variance-pill ${
+                    verificationData.time_variance_minutes > 120 ? 'variance-red' : 'variance-green'
+                  }`}>
+                    {verificationData.time_variance_minutes} minutes
+                  </strong>
+                </div>
+
+                {verificationData.time_variance_minutes <= 120 ? (
+                  <div className="variance-success-banner">
+                    ✅ Audit Verified: Inspection completed within the scheduled window.
+                  </div>
+                ) : (
+                  <div className="variance-alert-banner">
+                    ⚠️ Audit Alert: Entry recorded outside the scheduled inspection window.
+                  </div>
+                )}
+
+                {/* Show Date Discrepancy Alert to the DO operator */}
+                {verificationData.photo_capture_time_str.split(' ')[0] !== formData.entry_date && (
+                  <div className="variance-alert-banner" style={{ marginTop: '8px', border: '1.5px solid #ef4444', color: '#b91c1c', backgroundColor: '#fef2f2' }}>
+                    ⚠️ Date Alert: Photo captured on {verificationData.photo_capture_time_str.split(' ')[0]}, but you are submitting for {formData.entry_date}!
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="verification-actions">
+              <button 
+                type="button" 
+                className="cancel-verify-btn" 
+                onClick={handleCancelVerification}
+                disabled={submitting}
+              >
+                <span>Back to Edit Form</span>
+              </button>
+
+              <button 
+                type="button" 
+                className="confirm-submit-btn" 
+                onClick={handleConfirmSubmit}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 size={16} className="spinner-icon" />
+                    <span>Submitting...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle size={16} />
+                    <span>Confirm & Continue</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

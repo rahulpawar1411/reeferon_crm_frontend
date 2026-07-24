@@ -139,8 +139,8 @@ html, body {
   }
 }
 
-/* --- 3. MOBILE VIEWPORT (<767px) --- */
-@media (max-width: 767px) {
+/* --- 3. MOBILE VIEWPORT (<=768px) --- */
+@media (max-width: 768px) {
   #root {
     flex-direction: column;
     width: 100%;
@@ -151,7 +151,7 @@ html, body {
     flex: 1;
     width: 100%;
     max-width: 100%;
-    padding-top: 10px;
+    padding-top: 105px;
     padding-bottom: 20px;
     padding-left: 10px;
     padding-right: 10px;

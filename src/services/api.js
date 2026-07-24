@@ -106,6 +106,77 @@ export const deleteChamberLog = async (id) => {
 };
 
 // ====================================================================
+// Inward DO Logs APIs
+// ====================================================================
+let fallbackInwardLogs = [];
+
+export const fetchInwardLogs = async (search = '') => {
+  try {
+    const query = search ? `?search=${encodeURIComponent(search)}` : '';
+    const res = await fetch(`${API_BASE_URL}/inward-logs${query}`);
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  let list = [...fallbackInwardLogs];
+  if (search) {
+    const q = search.toLowerCase();
+    list = list.filter(l => 
+      (l.vehicle_no && l.vehicle_no.toLowerCase().includes(q)) ||
+      (l.client_name && l.client_name.toLowerCase().includes(q))
+    );
+  }
+  return list;
+};
+
+export const addInwardLog = async (formData) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/inward-logs`, {
+      method: 'POST',
+      body: formData
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  
+  // Local fallback entry mapping
+  const newLog = {
+    id: Date.now(),
+    entry_date: formData.get('entry_date'),
+    vehicle_no: formData.get('vehicle_no'),
+    client_name: formData.get('client_name'),
+    seal_no: formData.get('seal_no'),
+    vehicle_temp: formData.get('vehicle_temp'),
+    material_temp: formData.get('material_temp'),
+    transporter_name: formData.get('transporter_name'),
+    driver_name: formData.get('driver_name'),
+    driver_no: formData.get('driver_no'),
+    dock_no: formData.get('dock_no'),
+    vehicle_reporting_time: formData.get('vehicle_reporting_time'),
+    unloading_start_time: formData.get('unloading_start_time'),
+    unloading_end_time: formData.get('unloading_end_time'),
+    pallets_in_qty: formData.get('pallets_in_qty') || 0,
+    invoice_qty: formData.get('invoice_qty') || 0,
+    received_qty: formData.get('received_qty') || 0,
+    received_boxes_qty: formData.get('received_boxes_qty') || 0,
+    short_received_boxes_qty: formData.get('short_received_boxes_qty') || 0,
+    excess_received_boxes_qty: formData.get('excess_received_boxes_qty') || 0,
+    damage_received_boxes_qty: formData.get('damage_received_boxes_qty') || 0,
+    material_type: formData.get('material_type'),
+    unloading_supervisor_name: formData.get('unloading_supervisor_name'),
+    remarks: formData.get('remarks')
+  };
+  fallbackInwardLogs.unshift(newLog);
+  return { id: newLog.id, message: 'Saved (local)' };
+};
+
+export const deleteInwardLog = async (id) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  fallbackInwardLogs = fallbackInwardLogs.filter(l => l.id != id);
+  return { message: 'Deleted (local)' };
+};
+
+// ====================================================================
 // 2. Legacy Inward & Outward DO Logs APIs
 // ====================================================================
 let fallbackTempLogs = [];

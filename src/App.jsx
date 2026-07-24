@@ -16,6 +16,7 @@ import PortalEntry from './pages/PortalEntry/PortalEntry';
 import DOHeader from './components/DOHeader/DOHeader';
 import DOSidebar from './components/DOSidebar/DOSidebar';
 import TempMonitor from './pages/TempMonitor/TempMonitor';
+import InwardMonitor from './pages/InwardMonitor/InwardMonitor';
 
 // Admin Pages
 import Dashboard from './pages/Dashboard/Dashboard';
@@ -35,9 +36,15 @@ export default function App() {
   };
 
   const [selectedWindow, setSelectedWindow] = useState(getWindowFromURL());
-  const [activeDOMenu, setActiveDOMenu] = useState('All');
+  const [activeDOMenu, setActiveDOMenu] = useState(() => {
+    return localStorage.getItem('activeDOMenu') || 'All';
+  });
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLead, setSelectedLead] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem('activeDOMenu', activeDOMenu);
+  }, [activeDOMenu]);
 
   const navigateToWindow = (win) => {
     setSelectedWindow(win);
@@ -97,10 +104,14 @@ export default function App() {
           />
 
           <main className="app-viewport">
-            <TempMonitor 
-              forcedMenu={activeDOMenu}
-              onMenuChange={setActiveDOMenu}
-            />
+            {activeDOMenu === 'Inward' ? (
+              <InwardMonitor />
+            ) : (
+              <TempMonitor 
+                forcedMenu={activeDOMenu}
+                onMenuChange={setActiveDOMenu}
+              />
+            )}
           </main>
         </>
       ) : (

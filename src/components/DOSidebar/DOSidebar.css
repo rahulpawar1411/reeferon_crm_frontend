@@ -30,6 +30,8 @@
   flex-direction: column;
   gap: 8px;
   list-style: none;
+  padding: 0;
+  margin: 0;
 }
 
 .do-sidebar-link {
@@ -46,6 +48,7 @@
   width: 100%;
   text-align: left;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .do-sidebar-link:hover {

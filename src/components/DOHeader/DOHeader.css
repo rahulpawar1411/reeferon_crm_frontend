@@ -271,6 +271,12 @@
   .do-header {
     padding: 10px 14px;
     background-color: #ffffff !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
 
   .do-header-brand-group {
@@ -294,3 +300,25 @@
     display: inline-block !important;
   }
 }
+
+/* Desktop & Tablet Layout Adjustments to prevent sidebar overlap */
+@media (min-width: 1024px) {
+  .do-header {
+    margin-left: var(--sidebar-width);
+    width: calc(100% - var(--sidebar-width));
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .do-header {
+    margin-left: var(--tablet-sidebar-width);
+    width: calc(100% - var(--tablet-sidebar-width));
+  }
+}
+
+@media (min-width: 768px) {
+  .do-header .reeferon-logo-wrapper {
+    display: none !important;
+  }
+}
+
