@@ -5,15 +5,22 @@
 // ====================================================================
 
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  ArrowDownLeft, Plus, CheckCircle, PlusCircle, Camera, Loader2, Trash2, Calendar, FileText, Truck, Thermometer
+import {
+  ArrowDownLeft, Plus, CheckCircle, PlusCircle, Camera, Loader2, Trash2, Calendar, FileText, Truck, Thermometer, Check, RefreshCw
 } from 'lucide-react';
 import { addInwardLog, fetchInwardLogs, deleteInwardLog } from '../../services/api';
 import exifr from 'exifr';
 import './InwardMonitor.css';
 
 export default function InwardMonitor() {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const getLocalTodayStr = () => {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+  const todayStr = getLocalTodayStr();
   const fileInputRef = useRef({});
 
   const [logs, setLogs] = useState([]);
@@ -25,37 +32,40 @@ export default function InwardMonitor() {
 
   // Form State
   const [formData, setFormData] = useState({
-    entry_date: todayStr,
-    vehicle_no: '',
-    seal_no: '',
-    vehicle_temp: '',
-    material_temp: '',
-    transporter_name: '',
-    driver_name: '',
-    driver_no: '',
-    client_name: '',
-    dock_no: '',
-    vehicle_reporting_time: '11:00',
-    unloading_start_time: '11:30',
-    unloading_end_time: '12:30',
-    pallets_in_qty: '',
-    invoice_qty: '',
-    received_qty: '',
-    received_boxes_qty: '',
-    short_received_boxes_qty: 0,
-    excess_received_boxes_qty: 0,
-    damage_received_boxes_qty: '',
-    material_type: 'Frozen',
-    unloading_supervisor_name: '',
-    remarks: ''
+    inward_entry_date: todayStr,
+    inward_vehicle_no: '',
+    inward_seal_no: '',
+    inward_vehicle_temp: '',
+    inward_material_temp: '',
+    inward_transporter_name: '',
+    inward_driver_name: '',
+    inward_driver_no: '',
+    inward_client_name: '',
+    inward_dock_no: '',
+    inward_vehicle_reporting_time: '11:00',
+    inward_unloading_start_time: '11:30',
+    inward_unloading_duration_hours: '1',
+    inward_unloading_duration_mins: '0',
+    inward_unloading_end_time: '12:30',
+    inward_pallets_in_qty: '',
+    inward_invoice_qty: '',
+    inward_received_qty: '',
+    inward_received_boxes_qty: '',
+    inward_short_received_boxes_qty: 0,
+    inward_excess_received_boxes_qty: 0,
+    inward_damage_received_boxes_qty: '',
+    inward_material_type: 'Frozen',
+    inward_unloading_supervisor_name: '',
+    inward_remarks: ''
   });
 
   // Custom text triggers for dropdown inputs
   const [isMaterialCustom, setIsMaterialCustom] = useState(false);
+  const [driverCountryCode, setDriverCountryCode] = useState('+91');
 
   // Uploaded Files State
-  const [invoicePhotos, setInvoicePhotos] = useState([]);
-  const [invoicePreviews, setInvoicePreviews] = useState([]);
+  const [invoicePhoto, setInvoicePhoto] = useState(null);
+  const [invoicePreview, setInvoicePreview] = useState(null);
   const [podPhoto, setPodPhoto] = useState(null);
   const [podPreview, setPodPreview] = useState(null);
   const [sealPhoto, setSealPhoto] = useState(null);
@@ -66,8 +76,12 @@ export default function InwardMonitor() {
   const [materialTempPreview, setMaterialTempPreview] = useState(null);
   const [vehicleBackPhoto, setVehicleBackPhoto] = useState(null);
   const [vehicleBackPreview, setVehicleBackPreview] = useState(null);
-  const [damagePhoto, setDamagePhoto] = useState(null);
-  const [damagePreview, setDamagePreview] = useState(null);
+  const [vehicleBackWithMaterialPhoto, setVehicleBackWithMaterialPhoto] = useState(null);
+  const [vehicleBackWithMaterialPreview, setVehicleBackWithMaterialPreview] = useState(null);
+  const [countSheetPhoto, setCountSheetPhoto] = useState(null);
+  const [countSheetPreview, setCountSheetPreview] = useState(null);
+  const [damagePhotos, setDamagePhotos] = useState([]);
+  const [damagePreviews, setDamagePreviews] = useState([]);
 
   // Time Verification Modal State
   const [verificationData, setVerificationData] = useState(null);
@@ -86,15 +100,63 @@ export default function InwardMonitor() {
 
   // Update auto-calculated boxes quantity
   useEffect(() => {
-    const inv = parseInt(formData.invoice_qty) || 0;
-    const rec = parseInt(formData.received_qty) || 0;
-    
+    const inv = parseInt(formData.inward_invoice_qty) || 0;
+    const rec = parseInt(formData.inward_received_qty) || 0;
+
     setFormData(prev => ({
       ...prev,
-      short_received_boxes_qty: inv > rec ? inv - rec : 0,
-      excess_received_boxes_qty: rec > inv ? rec - inv : 0
+      inward_short_received_boxes_qty: inv > rec ? inv - rec : 0,
+      inward_excess_received_boxes_qty: rec > inv ? rec - inv : 0
     }));
-  }, [formData.invoice_qty, formData.received_qty]);
+  }, [formData.inward_invoice_qty, formData.inward_received_qty]);
+
+  // Reset damage photo files if damage quantity is reset to 0
+  useEffect(() => {
+    const damageQty = parseInt(formData.inward_damage_received_boxes_qty) || 0;
+    if (damageQty === 0) {
+      setDamagePhotos([]);
+      setDamagePreviews([]);
+    }
+  }, [formData.inward_damage_received_boxes_qty]);
+
+  const calculateEndDateTime = (dateStr, timeStr, durationMinutes) => {
+    if (!dateStr || !timeStr || isNaN(durationMinutes)) return '';
+
+    // Parse entry date & reporting time
+    const [yyyy, mm, dd] = dateStr.split('-').map(Number);
+    const [hours, mins] = timeStr.split(':').map(Number);
+
+    // Create Date object
+    const startDateTime = new Date(yyyy, mm - 1, dd, hours, mins, 0);
+    // Add duration minutes
+    const endDateTime = new Date(startDateTime.getTime() + durationMinutes * 60 * 1000);
+
+    // Format outputs
+    const endYear = endDateTime.getFullYear();
+    const endMonth = String(endDateTime.getMonth() + 1).padStart(2, '0');
+    const endDate = String(endDateTime.getDate()).padStart(2, '0');
+    const endHours = String(endDateTime.getHours()).padStart(2, '0');
+    const endMinutes = String(endDateTime.getMinutes()).padStart(2, '0');
+
+    return `${endDate}-${endMonth}-${endYear} ${endHours}:${endMinutes}`;
+  };
+
+  // Update unloading end times dynamically based on unloading start time and duration
+  useEffect(() => {
+    const hours = parseInt(formData.inward_unloading_duration_hours) || 0;
+    const mins = parseInt(formData.inward_unloading_duration_mins) || 0;
+    const totalMinutes = hours * 60 + mins;
+
+    const unloadingStartTime = formData.inward_unloading_start_time || '11:30';
+    const entryDate = formData.inward_entry_date || todayStr;
+
+    const endDateTimeStr = calculateEndDateTime(entryDate, unloadingStartTime, totalMinutes);
+
+    setFormData(prev => ({
+      ...prev,
+      inward_unloading_end_time: endDateTimeStr
+    }));
+  }, [formData.inward_entry_date, formData.inward_unloading_start_time, formData.inward_unloading_duration_hours, formData.inward_unloading_duration_mins]);
 
   // Client-Side Canvas Image Compressor
   const compressImageFile = (file) => {
@@ -146,7 +208,8 @@ export default function InwardMonitor() {
   };
 
   // Image Selection Handlers
-  const handleMultipleInvoicesChange = async (e) => {
+
+  const handleMultipleDamageChange = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
 
@@ -155,14 +218,34 @@ export default function InwardMonitor() {
     const previewList = [];
 
     for (let file of files) {
+      let originalCaptureDate = null;
+      try {
+        const exif = await exifr.parse(file);
+        if (exif && exif.DateTimeOriginal) {
+          originalCaptureDate = new Date(exif.DateTimeOriginal);
+        }
+      } catch (err) {
+        console.warn('Failed to parse EXIF metadata on frontend:', err.message);
+      }
+
       const res = await compressImageFile(file);
-      compressedList.push(res.file);
+      const captureTime = originalCaptureDate || new Date(file.lastModified || Date.now());
+
+      const finalFile = new File([res.file], file.name || 'damage-photo.jpg', {
+        type: 'image/jpeg',
+        lastModified: captureTime.getTime()
+      });
+
+      compressedList.push(finalFile);
       previewList.push(res.previewUrl);
     }
 
-    setInvoicePhotos(prev => [...prev, ...compressedList]);
-    setInvoicePreviews(prev => [...prev, ...previewList]);
+    setDamagePhotos(prev => [...prev, ...compressedList]);
+    setDamagePreviews(prev => [...prev, ...previewList]);
     setCompressing(false);
+
+    // Clear input value so selecting files repeatedly triggers onChange
+    e.target.value = '';
   };
 
   const handleSingleImageChange = async (e, setFile, setPreview) => {
@@ -170,21 +253,45 @@ export default function InwardMonitor() {
     if (!file) return;
 
     setCompressing(true);
+
+    // Parse EXIF DateTimeOriginal before compression strips it
+    let originalCaptureDate = null;
+    try {
+      const exif = await exifr.parse(file);
+      if (exif && exif.DateTimeOriginal) {
+        originalCaptureDate = new Date(exif.DateTimeOriginal);
+      }
+    } catch (err) {
+      console.warn('Failed to parse EXIF metadata on frontend:', err.message);
+    }
+
     const res = await compressImageFile(file);
-    setFile(res.file);
+    const captureTime = originalCaptureDate || new Date(file.lastModified || Date.now());
+
+    const finalFile = new File([res.file], file.name || 'compressed-photo.jpg', {
+      type: 'image/jpeg',
+      lastModified: captureTime.getTime()
+    });
+
+    setFile(finalFile);
     setPreview(res.previewUrl);
     setCompressing(false);
+
+    // Clear input value so selecting files repeatedly triggers onChange
+    e.target.value = '';
   };
 
-  // Variance calculator (Reporting Time vs Vehicle Temp Photo capture)
-  const calculateVariance = (entryDateStr, inspectionTimeStr, captureDate) => {
+  // Variance calculator (Unloading End Time vs Vehicle Temp Photo capture)
+  const calculateVariance = (endDateTimeStr, captureDate) => {
     try {
-      if (!entryDateStr || !inspectionTimeStr || !captureDate) return 0;
-      const [hours, minutes] = inspectionTimeStr.split(':').map(Number);
-      const [year, month, day] = entryDateStr.split('-').map(Number);
-      
-      const inspectionDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
-      const diffMs = Math.abs(captureDate.getTime() - inspectionDate.getTime());
+      if (!endDateTimeStr || !captureDate) return 0;
+      // endDateTimeStr is "DD-MM-YYYY HH:MM"
+      const [datePart, timePart] = endDateTimeStr.split(' ');
+      const [day, month, year] = datePart.split('-').map(Number);
+      const [hours, minutes] = timePart.split(':').map(Number);
+
+      const expectedEndDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      const diffMs = Math.abs(captureDate.getTime() - expectedEndDate.getTime());
       return Math.round(diffMs / (1000 * 60));
     } catch (e) {
       return 0;
@@ -195,7 +302,7 @@ export default function InwardMonitor() {
   const handleFormSubmit = async (e) => {
     e.preventDefault();
 
-    const required = ['entry_date', 'vehicle_no', 'client_name'];
+    const required = ['inward_entry_date', 'inward_vehicle_no', 'inward_client_name'];
     const missing = required.filter(f => !formData[f] || !formData[f].toString().trim());
 
     if (missing.length > 0) {
@@ -203,20 +310,23 @@ export default function InwardMonitor() {
       return;
     }
 
+    if (formData.inward_driver_no) {
+      const digits = formData.inward_driver_no.replace(/\D/g, '');
+      const expectedDigits = (driverCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverCountryCode) ? 9 : (driverCountryCode === '+65' ? 8 : 10));
+      if (digits.length < expectedDigits) {
+        alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${driverCountryCode}.`);
+        return;
+      }
+    }
+
     let captureDate = new Date();
     let photoDateStr = todayStr;
-    
-    if (vehicleTempPhoto) {
-      try {
-        const exif = await exifr.parse(vehicleTempPhoto);
-        if (exif && exif.DateTimeOriginal) {
-          captureDate = new Date(exif.DateTimeOriginal);
-        } else {
-          captureDate = new Date(vehicleTempPhoto.lastModified);
-        }
-      } catch (err) {
-        captureDate = new Date(vehicleTempPhoto.lastModified);
-      }
+
+    // Choose the first available uploaded photo as the inspection reference
+    const refPhoto = vehicleTempPhoto || materialTempPhoto || podPhoto || sealPhoto || vehicleBackPhoto || vehicleBackWithMaterialPhoto || countSheetPhoto || invoicePhoto || damagePhotos[0];
+
+    if (refPhoto) {
+      captureDate = new Date(refPhoto.lastModified);
     }
 
     const yyyy = captureDate.getFullYear();
@@ -225,15 +335,17 @@ export default function InwardMonitor() {
     const hh = String(captureDate.getHours()).padStart(2, '0');
     const min = String(captureDate.getMinutes()).padStart(2, '0');
     const ss = String(captureDate.getSeconds()).padStart(2, '0');
-    
-    photoDateStr = `${yyyy}-${mm}-${dd}`;
-    const formattedCapture = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
 
-    const variance = calculateVariance(formData.entry_date, formData.vehicle_reporting_time, captureDate);
+    photoDateStr = `${dd}-${mm}-${yyyy}`;
+    const formattedCapture = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+    const photoTimeStr = `${hh}:${min}`;
+
+    const variance = calculateVariance(formData.inward_unloading_end_time, captureDate);
 
     setVerificationData({
       photo_capture_time_str: formattedCapture,
       photo_date_str: photoDateStr,
+      photo_time_str: photoTimeStr,
       time_variance_minutes: variance
     });
   };
@@ -244,19 +356,26 @@ export default function InwardMonitor() {
 
     const submissionData = new FormData();
     Object.keys(formData).forEach(key => {
-      submissionData.append(key, formData[key]);
+      if (key === 'inward_driver_no') {
+        const fullPhone = formData.inward_driver_no ? `${driverCountryCode} ${formData.inward_driver_no}` : '';
+        submissionData.append('inward_driver_no', fullPhone);
+      } else {
+        submissionData.append(key, formData[key]);
+      }
     });
 
-    invoicePhotos.forEach(file => {
-      submissionData.append('invoice_photos', file);
-    });
+    if (invoicePhoto) submissionData.append('inward_invoice_photos', invoicePhoto);
+    if (podPhoto) submissionData.append('inward_pod_photo', podPhoto);
+    if (sealPhoto) submissionData.append('inward_vehicle_seal_photo', sealPhoto);
+    if (vehicleTempPhoto) submissionData.append('inward_vehicle_temp_photo', vehicleTempPhoto);
+    if (materialTempPhoto) submissionData.append('inward_material_temp_photo', materialTempPhoto);
+    if (vehicleBackPhoto) submissionData.append('inward_vehicle_back_side_photo', vehicleBackPhoto);
+    if (vehicleBackWithMaterialPhoto) submissionData.append('inward_vehicle_back_side_photo_with_material', vehicleBackWithMaterialPhoto);
+    if (countSheetPhoto) submissionData.append('inward_count_sheet_photo', countSheetPhoto);
 
-    if (podPhoto) submissionData.append('pod_photo', podPhoto);
-    if (sealPhoto) submissionData.append('vehicle_seal_photo', sealPhoto);
-    if (vehicleTempPhoto) submissionData.append('vehicle_temp_photo', vehicleTempPhoto);
-    if (materialTempPhoto) submissionData.append('material_temp_photo', materialTempPhoto);
-    if (vehicleBackPhoto) submissionData.append('vehicle_back_side_photo', vehicleBackPhoto);
-    if (damagePhoto) submissionData.append('damage_boxes_photo', damagePhoto);
+    damagePhotos.forEach(file => {
+      submissionData.append('inward_damage_boxes_photo', file);
+    });
 
     const res = await addInwardLog(submissionData);
     setSubmitting(false);
@@ -265,35 +384,38 @@ export default function InwardMonitor() {
     if (res) {
       setSuccessMsg('Inward temperature saved successfully');
       loadLogs();
-      
+
       // Reset State
+      setDriverCountryCode('+91');
       setFormData({
-        entry_date: todayStr,
-        vehicle_no: '',
-        seal_no: '',
-        vehicle_temp: '',
-        material_temp: '',
-        transporter_name: '',
-        driver_name: '',
-        driver_no: '',
-        client_name: '',
-        dock_no: '',
-        vehicle_reporting_time: '11:00',
-        unloading_start_time: '11:30',
-        unloading_end_time: '12:30',
-        pallets_in_qty: '',
-        invoice_qty: '',
-        received_qty: '',
-        received_boxes_qty: '',
-        short_received_boxes_qty: 0,
-        excess_received_boxes_qty: 0,
-        damage_received_boxes_qty: '',
-        material_type: 'Frozen',
-        unloading_supervisor_name: '',
-        remarks: ''
+        inward_entry_date: todayStr,
+        inward_vehicle_no: '',
+        inward_seal_no: '',
+        inward_vehicle_temp: '',
+        inward_material_temp: '',
+        inward_transporter_name: '',
+        inward_driver_name: '',
+        inward_driver_no: '',
+        inward_client_name: '',
+        inward_dock_no: '',
+        inward_vehicle_reporting_time: '11:00',
+        inward_unloading_start_time: '11:30',
+        inward_unloading_duration_hours: '1',
+        inward_unloading_duration_mins: '0',
+        inward_unloading_end_time: '12:30',
+        inward_pallets_in_qty: '',
+        inward_invoice_qty: '',
+        inward_received_qty: '',
+        inward_received_boxes_qty: '',
+        inward_short_received_boxes_qty: 0,
+        inward_excess_received_boxes_qty: 0,
+        inward_damage_received_boxes_qty: '',
+        inward_material_type: 'Frozen',
+        inward_unloading_supervisor_name: '',
+        inward_remarks: ''
       });
-      setInvoicePhotos([]);
-      setInvoicePreviews([]);
+      setInvoicePhoto(null);
+      setInvoicePreview(null);
       setPodPhoto(null);
       setPodPreview(null);
       setSealPhoto(null);
@@ -304,8 +426,12 @@ export default function InwardMonitor() {
       setMaterialTempPreview(null);
       setVehicleBackPhoto(null);
       setVehicleBackPreview(null);
-      setDamagePhoto(null);
-      setDamagePreview(null);
+      setVehicleBackWithMaterialPhoto(null);
+      setVehicleBackWithMaterialPreview(null);
+      setCountSheetPhoto(null);
+      setCountSheetPreview(null);
+      setDamagePhotos([]);
+      setDamagePreviews([]);
 
       setTimeout(() => setSuccessMsg(''), 4000);
     }
@@ -319,7 +445,82 @@ export default function InwardMonitor() {
   };
 
   const handleInputChange = (e) => {
-    const { name, value } = e.target;
+    let { name, value } = e.target;
+
+    // 1. Vehicle Number (uppercase and auto hyphen formatting like MP-04-ZD-1990)
+    if (name === 'inward_vehicle_no') {
+      const raw = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
+      let formatted = '';
+      if (raw.length <= 2) {
+        formatted = raw;
+      } else if (raw.length <= 4) {
+        formatted = `${raw.slice(0, 2)}-${raw.slice(2)}`;
+      } else if (raw.length <= 6) {
+        formatted = `${raw.slice(0, 2)}-${raw.slice(2, 4)}-${raw.slice(4)}`;
+      } else {
+        formatted = `${raw.slice(0, 2)}-${raw.slice(2, 4)}-${raw.slice(4, 6)}-${raw.slice(6)}`;
+      }
+      value = formatted;
+    }
+    // 2. Seal Number (uppercase only)
+    else if (name === 'inward_seal_no') {
+      value = value.toUpperCase();
+    }
+    // 3. Phone number (Allow only digits, restrict length dynamically)
+    else if (name === 'inward_driver_no') {
+      const digits = value.replace(/\D/g, '');
+      const maxDigits = (driverCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverCountryCode) ? 9 : (driverCountryCode === '+65' ? 8 : 10));
+      value = digits.slice(0, maxDigits);
+    }
+    // 4. Integer fields (Pallets, Boxes, Quantities)
+    else if (['inward_pallets_in_qty', 'inward_invoice_qty', 'inward_received_qty', 'inward_damage_received_boxes_qty'].includes(name)) {
+      value = value.replace(/\D/g, '');
+    }
+    // 4b. Duration fields (with 60-mins rollover validation)
+    else if (name === 'inward_unloading_duration_hours') {
+      value = value.replace(/\D/g, '');
+      if (parseInt(value) > 24) value = '24';
+    }
+    else if (name === 'inward_unloading_duration_mins') {
+      value = value.replace(/\D/g, '');
+      const minsNum = parseInt(value) || 0;
+      if (minsNum >= 60) {
+        const extraHours = Math.floor(minsNum / 60);
+        const remMins = minsNum % 60;
+
+        setFormData(prev => {
+          const currentHours = parseInt(prev.inward_unloading_duration_hours) || 0;
+          const newHours = Math.min(currentHours + extraHours, 24);
+          return {
+            ...prev,
+            inward_unloading_duration_hours: newHours.toString(),
+            inward_unloading_duration_mins: remMins.toString()
+          };
+        });
+        return;
+      }
+    }
+    // 5. Float/Decimal fields (Temperatures)
+    else if (['inward_vehicle_temp', 'inward_material_temp'].includes(name)) {
+      // Allow only digits, dot, and minus sign
+      let clean = value.replace(/[^\d\.\-]/g, '');
+      // Ensure minus sign only at start
+      if (clean.includes('-')) {
+        const parts = clean.split('-');
+        clean = (clean.startsWith('-') ? '-' : '') + parts.join('');
+      }
+      // Ensure only single dot
+      if (clean.includes('.')) {
+        const parts = clean.split('.');
+        clean = parts[0] + '.' + parts.slice(1).join('');
+      }
+      value = clean;
+    }
+    // 6. Text-only Name fields (no numbers or punctuation except dot and dash)
+    else if (name.toLowerCase().includes('name')) {
+      value = value.replace(/[^a-zA-Z\s\.\-]/g, '');
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -356,7 +557,7 @@ export default function InwardMonitor() {
 
         <form className="inward-entry-form" onSubmit={handleFormSubmit}>
           <div className="form-cards-grid">
-            
+
             {/* Section 1: Basic Inward Info */}
             <div className="form-section-box">
               <h5 className="section-box-title">
@@ -367,8 +568,8 @@ export default function InwardMonitor() {
                   <label>Entry Date *</label>
                   <input
                     type="date"
-                    name="entry_date"
-                    value={formData.entry_date}
+                    name="inward_entry_date"
+                    value={formData.inward_entry_date}
                     onChange={handleInputChange}
                     required
                   />
@@ -378,8 +579,8 @@ export default function InwardMonitor() {
                   <label>Client Name *</label>
                   <input
                     type="text"
-                    name="client_name"
-                    value={formData.client_name}
+                    name="inward_client_name"
+                    value={formData.inward_client_name}
                     onChange={handleInputChange}
                     placeholder="e.g. ColdStore Logistics"
                     required
@@ -390,8 +591,8 @@ export default function InwardMonitor() {
                   <label>Dock No.</label>
                   <input
                     type="text"
-                    name="dock_no"
-                    value={formData.dock_no}
+                    name="inward_dock_no"
+                    value={formData.inward_dock_no}
                     onChange={handleInputChange}
                     placeholder="e.g. Dock-1"
                   />
@@ -403,30 +604,30 @@ export default function InwardMonitor() {
                     <div className="input-with-reset">
                       <input
                         type="text"
-                        name="material_type"
-                        value={formData.material_type}
+                        name="inward_material_type"
+                        value={formData.inward_material_type}
                         onChange={handleInputChange}
                         placeholder="Enter Material Type"
                       />
-                      <button type="button" className="field-reset-btn" onClick={() => { setIsMaterialCustom(false); setFormData(p => ({ ...p, material_type: 'Frozen' })); }}>Select</button>
+                      <button type="button" className="field-reset-btn" onClick={() => { setIsMaterialCustom(false); setFormData(p => ({ ...p, inward_material_type: 'Frozen' })); }}>Select</button>
                     </div>
                   ) : (
                     <select
-                      name="material_type"
-                      value={formData.material_type}
+                      name="inward_material_type"
+                      value={formData.inward_material_type}
                       onChange={(e) => {
-                        if (e.target.value === 'OTHER_CUSTOM') {
+                        if (e.target.value === 'other') {
                           setIsMaterialCustom(true);
-                          setFormData(p => ({ ...p, material_type: '' }));
+                          setFormData(p => ({ ...p, inward_material_type: '' }));
                         } else {
                           handleInputChange(e);
                         }
                       }}
                     >
-                      <option value="Frozen">Frozen (Below -18°C)</option>
-                      <option value="Chilled">Chilled (2°C to 8°C)</option>
-                      <option value="Ambient">Ambient (Dry Cargo)</option>
-                      <option value="OTHER_CUSTOM">++ Add Custom Type ++</option>
+                      <option value="Frozen">Frozen</option>
+                      <option value="dry">dry</option>
+                      <option value="chiller">chiller</option>
+                      <option value="other">other</option>
                     </select>
                   )}
                 </div>
@@ -443,8 +644,8 @@ export default function InwardMonitor() {
                   <label>Vehicle No. *</label>
                   <input
                     type="text"
-                    name="vehicle_no"
-                    value={formData.vehicle_no}
+                    name="inward_vehicle_no"
+                    value={formData.inward_vehicle_no}
                     onChange={handleInputChange}
                     placeholder="e.g. MH-12-QW-1234"
                     required
@@ -455,8 +656,8 @@ export default function InwardMonitor() {
                   <label>Seal No.</label>
                   <input
                     type="text"
-                    name="seal_no"
-                    value={formData.seal_no}
+                    name="inward_seal_no"
+                    value={formData.inward_seal_no}
                     onChange={handleInputChange}
                     placeholder="e.g. SL-998822"
                   />
@@ -466,8 +667,8 @@ export default function InwardMonitor() {
                   <label>Transporter Name</label>
                   <input
                     type="text"
-                    name="transporter_name"
-                    value={formData.transporter_name}
+                    name="inward_transporter_name"
+                    value={formData.inward_transporter_name}
                     onChange={handleInputChange}
                     placeholder="e.g. BlueDart Express"
                   />
@@ -485,28 +686,55 @@ export default function InwardMonitor() {
                   <label>Driver Name</label>
                   <input
                     type="text"
-                    name="driver_name"
-                    value={formData.driver_name}
+                    name="inward_driver_name"
+                    value={formData.inward_driver_name}
                     onChange={handleInputChange}
-                    placeholder="e.g. Rajesh Kumar"
+                    placeholder="e.g. Rajesh kumar"
                   />
                 </div>
                 <div className="inward-form-group">
                   <label>Driver Phone No.</label>
-                  <input
-                    type="text"
-                    name="driver_no"
-                    value={formData.driver_no}
-                    onChange={handleInputChange}
-                    placeholder="10-digit number"
-                  />
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <select
+                      value={driverCountryCode}
+                      onChange={(e) => {
+                        const newCode = e.target.value;
+                        setDriverCountryCode(newCode);
+                        const maxDigits = (newCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(newCode) ? 9 : (newCode === '+65' ? 8 : 10));
+                        setFormData(prev => ({
+                          ...prev,
+                          inward_driver_no: (prev.inward_driver_no || '').replace(/\D/g, '').slice(0, maxDigits)
+                        }));
+                      }}
+                      style={{ width: '90px', padding: '8px 4px', fontSize: '0.85rem', border: '1px solid #ccc', borderRadius: '4px', background: 'var(--surface)' }}
+                    >
+                      <option value="+91">+91 (IN)</option>
+                      <option value="+1">+1 (US)</option>
+                      <option value="+44">+44 (UK)</option>
+                      <option value="+971">+971 (AE)</option>
+                      <option value="+966">+966 (SA)</option>
+                      <option value="+65">+65 (SG)</option>
+                      <option value="+61">+61 (AU)</option>
+                      <option value="+92">+92 (PK)</option>
+                      <option value="+880">+880 (BD)</option>
+                      <option value="+977">+977 (NP)</option>
+                    </select>
+                    <input
+                      type="text"
+                      name="inward_driver_no"
+                      value={formData.inward_driver_no}
+                      onChange={handleInputChange}
+                      placeholder="98765 43210"
+                      style={{ flex: 1 }}
+                    />
+                  </div>
                 </div>
                 <div className="inward-form-group">
                   <label>Vehicle Reporting Time</label>
                   <input
                     type="time"
-                    name="vehicle_reporting_time"
-                    value={formData.vehicle_reporting_time}
+                    name="inward_vehicle_reporting_time"
+                    value={formData.inward_vehicle_reporting_time}
                     onChange={handleInputChange}
                   />
                 </div>
@@ -514,18 +742,45 @@ export default function InwardMonitor() {
                   <label>Unloading Start Time</label>
                   <input
                     type="time"
-                    name="unloading_start_time"
-                    value={formData.unloading_start_time}
+                    name="inward_unloading_start_time"
+                    value={formData.inward_unloading_start_time}
                     onChange={handleInputChange}
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Unloading End Time</label>
+                  <label>Unloading Duration</label>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      name="inward_unloading_duration_hours"
+                      value={formData.inward_unloading_duration_hours}
+                      onChange={handleInputChange}
+                      placeholder="Hrs"
+                      style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
+                    />
+                    <span style={{ fontSize: '0.85rem', color: '#666' }}>hrs</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      name="inward_unloading_duration_mins"
+                      value={formData.inward_unloading_duration_mins}
+                      onChange={handleInputChange}
+                      placeholder="Mins"
+                      style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
+                    />
+                    <span style={{ fontSize: '0.85rem', color: '#666' }}>mins</span>
+                  </div>
+                </div>
+                <div className="inward-form-group">
+                  <label>Unloading End Time (Auto)</label>
                   <input
-                    type="time"
-                    name="unloading_end_time"
-                    value={formData.unloading_end_time}
-                    onChange={handleInputChange}
+                    type="text"
+                    name="inward_unloading_end_time"
+                    value={formData.inward_unloading_end_time}
+                    readOnly
+                    className="readonly-field"
+                    style={{ background: 'var(--surface-overlay, #f5f5f5)', cursor: 'not-allowed' }}
                   />
                 </div>
               </div>
@@ -538,23 +793,23 @@ export default function InwardMonitor() {
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Vehicle Temp. (°C)</label>
+                  <label>Inward Vehicle Temp. (°C)</label>
                   <input
-                    type="number"
-                    step="0.1"
-                    name="vehicle_temp"
-                    value={formData.vehicle_temp}
+                    type="text"
+                    inputMode="decimal"
+                    name="inward_vehicle_temp"
+                    value={formData.inward_vehicle_temp}
                     onChange={handleInputChange}
                     placeholder="-18.5"
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Material Temp. (°C)</label>
+                  <label>Inward Material Temp. (°C)</label>
                   <input
-                    type="number"
-                    step="0.1"
-                    name="material_temp"
-                    value={formData.material_temp}
+                    type="text"
+                    inputMode="decimal"
+                    name="inward_material_temp"
+                    value={formData.inward_material_temp}
                     onChange={handleInputChange}
                     placeholder="-20.2"
                   />
@@ -571,49 +826,53 @@ export default function InwardMonitor() {
                 <div className="inward-form-group">
                   <label>Pallets In Qty</label>
                   <input
-                    type="number"
-                    name="pallets_in_qty"
-                    value={formData.pallets_in_qty}
+                    type="text"
+                    inputMode="numeric"
+                    name="inward_pallets_in_qty"
+                    value={formData.inward_pallets_in_qty}
                     onChange={handleInputChange}
-                    placeholder="12"
+                    placeholder="0"
                   />
                 </div>
                 <div className="inward-form-group">
                   <label>Invoice Boxes Qty</label>
                   <input
-                    type="number"
-                    name="invoice_qty"
-                    value={formData.invoice_qty}
+                    type="text"
+                    inputMode="numeric"
+                    name="inward_invoice_qty"
+                    value={formData.inward_invoice_qty}
                     onChange={handleInputChange}
-                    placeholder="350"
+                    placeholder="0"
                   />
                 </div>
                 <div className="inward-form-group">
                   <label>Actual Received Qty</label>
                   <input
-                    type="number"
-                    name="received_qty"
-                    value={formData.received_qty}
+                    type="text"
+                    inputMode="numeric"
+                    name="inward_received_qty"
+                    value={formData.inward_received_qty}
                     onChange={handleInputChange}
-                    placeholder="348"
+                    placeholder="0"
                   />
                 </div>
                 <div className="inward-form-group">
                   <label>Damage Qty</label>
                   <input
-                    type="number"
-                    name="damage_received_boxes_qty"
-                    value={formData.damage_received_boxes_qty}
+                    type="text"
+                    inputMode="numeric"
+                    name="inward_damage_received_boxes_qty"
+                    value={formData.inward_damage_received_boxes_qty}
                     onChange={handleInputChange}
-                    placeholder="2"
+                    placeholder="0"
                   />
                 </div>
                 <div className="inward-form-group">
                   <label>Short Qty (Auto)</label>
                   <input
-                    type="number"
-                    name="short_received_boxes_qty"
-                    value={formData.short_received_boxes_qty}
+                    type="text"
+                    name="inward_short_received_boxes_qty"
+                    value={formData.inward_short_received_boxes_qty}
                     readOnly
                     className="readonly-field short"
                   />
@@ -621,9 +880,9 @@ export default function InwardMonitor() {
                 <div className="inward-form-group">
                   <label>Excess Qty (Auto)</label>
                   <input
-                    type="number"
-                    name="excess_received_boxes_qty"
-                    value={formData.excess_received_boxes_qty}
+                    type="text"
+                    name="inward_excess_received_boxes_qty"
+                    value={formData.inward_excess_received_boxes_qty}
                     readOnly
                     className="readonly-field excess"
                   />
@@ -641,8 +900,8 @@ export default function InwardMonitor() {
                   <label>Unloading Supervisor Name</label>
                   <input
                     type="text"
-                    name="unloading_supervisor_name"
-                    value={formData.unloading_supervisor_name}
+                    name="inward_unloading_supervisor_name"
+                    value={formData.inward_unloading_supervisor_name}
                     onChange={handleInputChange}
                     placeholder="e.g. Sandeep V."
                   />
@@ -650,8 +909,8 @@ export default function InwardMonitor() {
                 <div className="inward-form-group span-3">
                   <label>Remarks</label>
                   <textarea
-                    name="remarks"
-                    value={formData.remarks}
+                    name="inward_remarks"
+                    value={formData.inward_remarks}
                     onChange={handleInputChange}
                     placeholder="Write inward monitoring notes..."
                     rows="2"
@@ -666,31 +925,47 @@ export default function InwardMonitor() {
                 <Camera size={15} /> 7. Inspection Photos Upload
               </h5>
               <div className="inward-form-grid">
-                
-                {/* Multiple Invoice Upload */}
+
+                {/* Invoice Photo */}
                 <div className="inward-form-group file-field">
-                  <label>Invoice Photos (Multiple allowed)</label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>Choose Invoice Photos</span>
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*"
-                      onChange={handleMultipleInvoicesChange}
-                    />
-                  </div>
-                  {invoicePreviews.length > 0 && (
-                    <div className="preview-thumbnails">
-                      {invoicePreviews.map((url, idx) => (
-                        <div key={idx} className="thumb-container">
-                          <img src={url} alt="Invoice preview" className="mini-thumb" />
-                          <button type="button" className="thumb-remove" onClick={() => {
-                            setInvoicePhotos(p => p.filter((_, i) => i !== idx));
-                            setInvoicePreviews(p => p.filter((_, i) => i !== idx));
-                          }}>×</button>
+                  <label>Invoice Photo</label>
+                  {!invoicePreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Invoice Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setInvoicePhoto, setInvoicePreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={invoicePreview} alt="Invoice Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
                         </div>
-                      ))}
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setInvoicePhoto(null); setInvoicePreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setInvoicePhoto(null); setInvoicePreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -698,20 +973,42 @@ export default function InwardMonitor() {
                 {/* POD Upload */}
                 <div className="inward-form-group file-field">
                   <label>POD Photo</label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>{podPhoto ? 'Change POD Photo' : 'Choose POD Photo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleSingleImageChange(e, setPodPhoto, setPodPreview)}
-                    />
-                  </div>
-                  {podPreview && (
-                    <div className="preview-thumbnails">
-                      <div className="thumb-container">
-                        <img src={podPreview} alt="POD preview" className="mini-thumb" />
-                        <button type="button" className="thumb-remove" onClick={() => { setPodPhoto(null); setPodPreview(null); }}>×</button>
+                  {!podPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose POD Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setPodPhoto, setPodPreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={podPreview} alt="POD Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setPodPhoto(null); setPodPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setPodPhoto(null); setPodPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     </div>
                   )}
@@ -720,64 +1017,42 @@ export default function InwardMonitor() {
                 {/* Vehicle Seal Upload */}
                 <div className="inward-form-group file-field">
                   <label>Vehicle Seal Photo</label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>{sealPhoto ? 'Change Seal Photo' : 'Choose Seal Photo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleSingleImageChange(e, setSealPhoto, setSealPreview)}
-                    />
-                  </div>
-                  {sealPreview && (
-                    <div className="preview-thumbnails">
-                      <div className="thumb-container">
-                        <img src={sealPreview} alt="Seal preview" className="mini-thumb" />
-                        <button type="button" className="thumb-remove" onClick={() => { setSealPhoto(null); setSealPreview(null); }}>×</button>
-                      </div>
+                  {!sealPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Seal Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setSealPhoto, setSealPreview)}
+                      />
                     </div>
-                  )}
-                </div>
-
-                {/* Vehicle Temp Upload */}
-                <div className="inward-form-group file-field">
-                  <label>Vehicle Temp Photo</label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>{vehicleTempPhoto ? 'Change Vehicle Temp Photo' : 'Choose Vehicle Temp Photo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleSingleImageChange(e, setVehicleTempPhoto, setVehicleTempPreview)}
-                    />
-                  </div>
-                  {vehicleTempPreview && (
-                    <div className="preview-thumbnails">
-                      <div className="thumb-container">
-                        <img src={vehicleTempPreview} alt="Vehicle Temp preview" className="mini-thumb" />
-                        <button type="button" className="thumb-remove" onClick={() => { setVehicleTempPhoto(null); setVehicleTempPreview(null); }}>×</button>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={sealPreview} alt="Seal Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Material Temp Upload */}
-                <div className="inward-form-group file-field">
-                  <label>Material Temp Photo</label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>{materialTempPhoto ? 'Change Material Temp Photo' : 'Choose Material Temp Photo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleSingleImageChange(e, setMaterialTempPhoto, setMaterialTempPreview)}
-                    />
-                  </div>
-                  {materialTempPreview && (
-                    <div className="preview-thumbnails">
-                      <div className="thumb-container">
-                        <img src={materialTempPreview} alt="Material Temp preview" className="mini-thumb" />
-                        <button type="button" className="thumb-remove" onClick={() => { setMaterialTempPhoto(null); setMaterialTempPreview(null); }}>×</button>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setSealPhoto(null); setSealPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setSealPhoto(null); setSealPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     </div>
                   )}
@@ -786,20 +1061,218 @@ export default function InwardMonitor() {
                 {/* Vehicle Back Side Upload */}
                 <div className="inward-form-group file-field">
                   <label>Vehicle Back Side Photo</label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>{vehicleBackPhoto ? 'Change Back Side Photo' : 'Choose Back Side Photo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleSingleImageChange(e, setVehicleBackPhoto, setVehicleBackPreview)}
-                    />
-                  </div>
-                  {vehicleBackPreview && (
-                    <div className="preview-thumbnails">
-                      <div className="thumb-container">
-                        <img src={vehicleBackPreview} alt="Back side preview" className="mini-thumb" />
-                        <button type="button" className="thumb-remove" onClick={() => { setVehicleBackPhoto(null); setVehicleBackPreview(null); }}>×</button>
+                  {!vehicleBackPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Back Side Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setVehicleBackPhoto, setVehicleBackPreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={vehicleBackPreview} alt="Back Side Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setVehicleBackPhoto(null); setVehicleBackPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setVehicleBackPhoto(null); setVehicleBackPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Vehicle Back Side with Material Upload */}
+                <div className="inward-form-group file-field">
+                  <label>Vehicle Back Side Photo with Material</label>
+                  {!vehicleBackWithMaterialPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Back Side Photo with Material</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setVehicleBackWithMaterialPhoto, setVehicleBackWithMaterialPreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={vehicleBackWithMaterialPreview} alt="Back Side with Material Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setVehicleBackWithMaterialPhoto(null); setVehicleBackWithMaterialPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setVehicleBackWithMaterialPhoto(null); setVehicleBackWithMaterialPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Vehicle Temp Upload */}
+                <div className="inward-form-group file-field">
+                  <label>Inward Vehicle Temp Photo</label>
+                  {!vehicleTempPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Inward Vehicle Temp Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setVehicleTempPhoto, setVehicleTempPreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={vehicleTempPreview} alt="Vehicle Temp Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setVehicleTempPhoto(null); setVehicleTempPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setVehicleTempPhoto(null); setVehicleTempPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Material Temp Upload */}
+                <div className="inward-form-group file-field">
+                  <label>Inward Material Temp Photo</label>
+                  {!materialTempPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Inward Material Temp Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setMaterialTempPhoto, setMaterialTempPreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={materialTempPreview} alt="Material Temp Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setMaterialTempPhoto(null); setMaterialTempPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setMaterialTempPhoto(null); setMaterialTempPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Inward Count Sheet Photo Upload */}
+                <div className="inward-form-group file-field">
+                  <label>Inward Count Sheet Photo</label>
+                  {!countSheetPreview ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Inward Count Sheet Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleSingleImageChange(e, setCountSheetPhoto, setCountSheetPreview)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sensor-photo-verified-card">
+                      <div className="verified-thumb-wrapper">
+                        <img src={countSheetPreview} alt="Count Sheet Verified" />
+                        <div className="verified-check-badge">
+                          <Check size={8} />
+                        </div>
+                      </div>
+                      <div className="verified-action-group">
+                        <button
+                          type="button"
+                          className="retake-icon-btn"
+                          onClick={() => { setCountSheetPhoto(null); setCountSheetPreview(null); }}
+                          title="Retake Photo"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Retake</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="delete-photo-btn"
+                          onClick={() => { setCountSheetPhoto(null); setCountSheetPreview(null); }}
+                          title="Remove Photo"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     </div>
                   )}
@@ -807,22 +1280,42 @@ export default function InwardMonitor() {
 
                 {/* Damage Boxes Photo */}
                 <div className="inward-form-group file-field">
-                  <label>Damage Boxes Photo</label>
-                  <div className="image-uploader-btn">
+                  <label>Damage Boxes Photos (Multiple allowed)</label>
+                  <div
+                    className={`image-uploader-btn ${((parseInt(formData.inward_damage_received_boxes_qty) || 0) <= 0) ? 'disabled' : ''}`}
+                    style={((parseInt(formData.inward_damage_received_boxes_qty) || 0) <= 0) ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : {}}
+                  >
                     <Camera size={18} />
-                    <span>{damagePhoto ? 'Change Damage Photo' : 'Choose Damage Photo'}</span>
+                    <span>Choose Damage Photos</span>
                     <input
                       type="file"
+                      multiple
                       accept="image/*"
-                      onChange={(e) => handleSingleImageChange(e, setDamagePhoto, setDamagePreview)}
+                      onChange={handleMultipleDamageChange}
+                      disabled={((parseInt(formData.inward_damage_received_boxes_qty) || 0) <= 0)}
                     />
                   </div>
-                  {damagePreview && (
+                  {damagePreviews.length > 0 && (
                     <div className="preview-thumbnails">
-                      <div className="thumb-container">
-                        <img src={damagePreview} alt="Damage preview" className="mini-thumb" />
-                        <button type="button" className="thumb-remove" onClick={() => { setDamagePhoto(null); setDamagePreview(null); }}>×</button>
-                      </div>
+                      {damagePreviews.map((url, idx) => (
+                        <div key={idx} className="thumb-container">
+                          <img src={url} alt={`Damage ${idx}`} className="mini-thumb" />
+                          <button
+                            type="button"
+                            className="thumb-remove"
+                            onClick={() => {
+                              setDamagePhotos(p => p.filter((_, i) => i !== idx));
+                              setDamagePreviews(p => p.filter((_, i) => i !== idx));
+                            }}
+                            title="Remove Photo"
+                          >
+                            ×
+                          </button>
+                          <div className="thumb-verified-check">
+                            <Check size={6} />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -852,72 +1345,146 @@ export default function InwardMonitor() {
           </h3>
         </div>
 
-        {loadingLogs ? (
-          <div className="loading-logs">
-            <Loader2 size={24} className="spinner-icon" color="#00a2e8" />
-            <span>Loading inward logs...</span>
-          </div>
-        ) : logs.length === 0 ? (
-          <div className="no-logs">
-            <p>No Inward temperature inspection logs found for today.</p>
-          </div>
-        ) : (
-          <div className="table-responsive">
-            <table className="logs-table inward-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Vehicle No</th>
-                  <th className="wrap-text">Client</th>
-                  <th>Vehicle Temp</th>
-                  <th>Material Temp</th>
-                  <th>Pallets</th>
-                  <th className="wrap-text">Supervisor</th>
-                  <th>POD</th>
-                  <th>Seal Photo</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.filter(log => log.entry_date === todayStr).map((log) => {
-                  const podImg = log.pod_photo ? `http://localhost:5000/${log.pod_photo}` : null;
-                  const sealImg = log.vehicle_seal_photo ? `http://localhost:5000/${log.vehicle_seal_photo}` : null;
-                  
-                  return (
-                    <tr key={log.id}>
-                      <td>{log.entry_date}</td>
-                      <td><strong>{log.vehicle_no}</strong></td>
-                      <td className="wrap-text">{log.client_name}</td>
-                      <td className="temp-cell">{log.vehicle_temp !== null ? `${log.vehicle_temp}°C` : '-'}</td>
-                      <td className="temp-cell">{log.material_temp !== null ? `${log.material_temp}°C` : '-'}</td>
-                      <td>{log.pallets_in_qty}</td>
-                      <td className="wrap-text">{log.unloading_supervisor_name || '-'}</td>
-                      <td>
-                        {podImg ? (
-                          <img src={podImg} alt="POD" className="table-photo-thumb" onClick={() => setLightboxImage(podImg)} />
-                        ) : '-'}
-                      </td>
-                      <td>
-                        {sealImg ? (
-                          <img src={sealImg} alt="Seal" className="table-photo-thumb" onClick={() => setLightboxImage(sealImg)} />
-                        ) : '-'}
-                      </td>
-                      <td>
-                        <button
-                          onClick={() => handleDeleteRecord(log.id)}
-                          className="delete-log-action-btn"
-                          title="Delete Inward Record"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {(() => {
+          const todayLogs = logs.filter(log => {
+            const logDate = log.inward_entry_date ? log.inward_entry_date.split('T')[0] : '';
+            return logDate === todayStr;
+          });
+
+          if (loadingLogs) {
+            return (
+              <div className="loading-logs">
+                <Loader2 size={24} className="spinner-icon" color="#00a2e8" />
+                <span>Loading inward logs...</span>
+              </div>
+            );
+          }
+
+          if (todayLogs.length === 0) {
+            return (
+              <div className="no-logs">
+                <p>No Inward temperature inspection logs found for today.</p>
+              </div>
+            );
+          }
+
+          return (
+            <div className="table-responsive">
+              <table className="logs-table inward-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Vehicle No</th>
+                    <th className="wrap-text">Client</th>
+                    <th>Inward Vehicle Temp</th>
+                    <th>Inward Material Temp</th>
+                    <th>Pallets</th>
+                    <th>Unloading Start / End</th>
+                    <th className="wrap-text">Supervisor</th>
+                    <th>Invoice Photo</th>
+                    <th>POD</th>
+                    <th>Seal Photo</th>
+                    <th>Vehicle Back Side</th>
+                    <th>Vehicle Back Side with Material</th>
+                    <th>Count Sheet</th>
+                    <th>Damage Photos</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todayLogs.map((log) => {
+                    const serverUrl = window.location.origin === 'http://localhost:3000' ? 'http://localhost:5000' : '';
+                    const podImg = log.inward_pod_photo ? `${serverUrl}/${log.inward_pod_photo}` : null;
+                    const sealImg = log.inward_vehicle_seal_photo ? `${serverUrl}/${log.inward_vehicle_seal_photo}` : null;
+                    const backSideImg = log.inward_vehicle_back_side_photo ? `${serverUrl}/${log.inward_vehicle_back_side_photo}` : null;
+                    const backSideWithMaterialImg = log.inward_vehicle_back_side_photo_with_material ? `${serverUrl}/${log.inward_vehicle_back_side_photo_with_material}` : null;
+                    const countSheetImg = log.inward_count_sheet_photo ? `${serverUrl}/${log.inward_count_sheet_photo}` : null;
+
+                    return (
+                      <tr key={log.inward_id}>
+                        <td>{log.inward_entry_date}</td>
+                        <td><strong>{log.inward_vehicle_no}</strong></td>
+                        <td className="wrap-text">{log.inward_client_name}</td>
+                        <td className="temp-cell">{log.inward_vehicle_temp !== null ? `${log.inward_vehicle_temp}°C` : '-'}</td>
+                        <td className="temp-cell">{log.inward_material_temp !== null ? `${log.inward_material_temp}°C` : '-'}</td>
+                        <td>{log.inward_pallets_in_qty}</td>
+                        <td>
+                          <div style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                            <div>S: {log.inward_unloading_start_time || '-'}</div>
+                            <div>E: {log.inward_unloading_end_time || '-'}</div>
+                          </div>
+                        </td>
+                        <td className="wrap-text">{log.inward_unloading_supervisor_name || '-'}</td>
+                        <td>
+                          {log.inward_invoice_photos ? (
+                            <img
+                              src={`${serverUrl}/${log.inward_invoice_photos}`}
+                              alt="Invoice"
+                              className="table-photo-thumb"
+                              onClick={() => setLightboxImage(`${serverUrl}/${log.inward_invoice_photos}`)}
+                            />
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {podImg ? (
+                            <img src={podImg} alt="POD" className="table-photo-thumb" onClick={() => setLightboxImage(podImg)} />
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {sealImg ? (
+                            <img src={sealImg} alt="Seal" className="table-photo-thumb" onClick={() => setLightboxImage(sealImg)} />
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {backSideImg ? (
+                            <img src={backSideImg} alt="Vehicle Back Side" className="table-photo-thumb" onClick={() => setLightboxImage(backSideImg)} />
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {backSideWithMaterialImg ? (
+                            <img src={backSideWithMaterialImg} alt="Vehicle Back Side with Material" className="table-photo-thumb" onClick={() => setLightboxImage(backSideWithMaterialImg)} />
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {countSheetImg ? (
+                            <img src={countSheetImg} alt="Count Sheet" className="table-photo-thumb" onClick={() => setLightboxImage(countSheetImg)} />
+                          ) : '-'}
+                        </td>
+                        <td>
+                          {log.inward_damage_boxes_photo ? (
+                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', maxWidth: '100px' }}>
+                              {log.inward_damage_boxes_photo.split(',').map((p, idx) => {
+                                const imgUrl = `${serverUrl}/${p}`;
+                                return (
+                                  <img
+                                    key={idx}
+                                    src={imgUrl}
+                                    alt="Damage"
+                                    className="table-photo-thumb"
+                                    onClick={() => setLightboxImage(imgUrl)}
+                                  />
+                                );
+                              })}
+                            </div>
+                          ) : '-'}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => handleDeleteRecord(log.inward_id)}
+                            className="delete-log-action-btn"
+                            title="Delete Inward Record"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Lightbox Modal */}
@@ -940,25 +1507,25 @@ export default function InwardMonitor() {
                 <span>Verify Inward Time Audit</span>
               </h3>
             </div>
-            
+
             <div className="verification-content-wrapper-modal">
               <div className="verify-time-comparison-box">
                 <h4>Inward Punctuality Audit</h4>
 
                 <div className="comparison-row">
                   <div className="comp-item">
-                    <span className="comp-label">Reported Reporting Time</span>
+                    <span className="comp-label">Calculated End Time</span>
                     <div className="comp-val-dt">
-                      <span className="comp-date">{formData.entry_date}</span>
-                      <span className="comp-time">{formData.vehicle_reporting_time}</span>
+                      <span className="comp-date">{formData.inward_unloading_end_time.split(' ')[0]}</span>
+                      <span className="comp-time">{formData.inward_unloading_end_time.split(' ')[1]}</span>
                     </div>
                   </div>
                   <div className="comp-divider">⚡</div>
                   <div className="comp-item">
-                    <span className="comp-label">Temp Photo Time</span>
+                    <span className="comp-label">Inspection Photo Time</span>
                     <div className="comp-val-dt">
                       <span className="comp-date">{verificationData.photo_date_str}</span>
-                      <span className="comp-time">{verificationData.photo_capture_time_str.split(' ')[1]}</span>
+                      <span className="comp-time">{verificationData.photo_time_str}</span>
                     </div>
                   </div>
                 </div>
@@ -973,18 +1540,18 @@ export default function InwardMonitor() {
 
                 {verificationData.time_variance_minutes <= 120 ? (
                   <div className="variance-success-banner">
-                    ✅ Audit Verified: Vehicle temperature check recorded within the scheduled window.
+                    ✅ Audit Verified: Inspection photos recorded within the expected unloading window.
                   </div>
                 ) : (
                   <div className="variance-alert-banner">
-                    ⚠️ Audit Alert: Vehicle temperature check recorded outside the scheduled reporting window.
+                    ⚠️ Audit Alert: Inspection photos recorded outside the expected unloading window.
                   </div>
                 )}
 
                 {/* Show Date Discrepancy Alert */}
-                {verificationData.photo_date_str !== formData.entry_date && (
+                {verificationData.photo_date_str !== formData.inward_unloading_end_time.split(' ')[0] && (
                   <div className="variance-alert-banner" style={{ marginTop: '8px', border: '1.5px solid #ef4444', color: '#b91c1c', backgroundColor: '#fef2f2' }}>
-                    ⚠️ Date Alert: Inspection Photo captured on {verificationData.photo_date_str}, but you are submitting for {formData.entry_date}!
+                    ⚠️ Date Alert: Inspection Photo captured on {verificationData.photo_date_str}, but unloading end date is calculated as {formData.inward_unloading_end_time.split(' ')[0]}!
                   </div>
                 )}
               </div>

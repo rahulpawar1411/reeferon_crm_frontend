@@ -3,7 +3,9 @@
 // Supports FormData Image Uploads for Daily Chamber Temp Logs.
 // ====================================================================
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = window.location.origin === 'http://localhost:3000'
+  ? 'http://localhost:5000/api'
+  : '/api';
 
 // In-memory fallback for Chamber Logs
 let fallbackChamberLogs = [];
@@ -120,8 +122,8 @@ export const fetchInwardLogs = async (search = '') => {
   if (search) {
     const q = search.toLowerCase();
     list = list.filter(l => 
-      (l.vehicle_no && l.vehicle_no.toLowerCase().includes(q)) ||
-      (l.client_name && l.client_name.toLowerCase().includes(q))
+      (l.inward_vehicle_no && l.inward_vehicle_no.toLowerCase().includes(q)) ||
+      (l.inward_client_name && l.inward_client_name.toLowerCase().includes(q))
     );
   }
   return list;
@@ -138,33 +140,38 @@ export const addInwardLog = async (formData) => {
   
   // Local fallback entry mapping
   const newLog = {
-    id: Date.now(),
-    entry_date: formData.get('entry_date'),
-    vehicle_no: formData.get('vehicle_no'),
-    client_name: formData.get('client_name'),
-    seal_no: formData.get('seal_no'),
-    vehicle_temp: formData.get('vehicle_temp'),
-    material_temp: formData.get('material_temp'),
-    transporter_name: formData.get('transporter_name'),
-    driver_name: formData.get('driver_name'),
-    driver_no: formData.get('driver_no'),
-    dock_no: formData.get('dock_no'),
-    vehicle_reporting_time: formData.get('vehicle_reporting_time'),
-    unloading_start_time: formData.get('unloading_start_time'),
-    unloading_end_time: formData.get('unloading_end_time'),
-    pallets_in_qty: formData.get('pallets_in_qty') || 0,
-    invoice_qty: formData.get('invoice_qty') || 0,
-    received_qty: formData.get('received_qty') || 0,
-    received_boxes_qty: formData.get('received_boxes_qty') || 0,
-    short_received_boxes_qty: formData.get('short_received_boxes_qty') || 0,
-    excess_received_boxes_qty: formData.get('excess_received_boxes_qty') || 0,
-    damage_received_boxes_qty: formData.get('damage_received_boxes_qty') || 0,
-    material_type: formData.get('material_type'),
-    unloading_supervisor_name: formData.get('unloading_supervisor_name'),
-    remarks: formData.get('remarks')
+    inward_id: Date.now(),
+    inward_entry_date: formData.get('inward_entry_date'),
+    inward_vehicle_no: formData.get('inward_vehicle_no'),
+    inward_client_name: formData.get('inward_client_name'),
+    inward_seal_no: formData.get('inward_seal_no'),
+    inward_vehicle_temp: formData.get('inward_vehicle_temp'),
+    inward_material_temp: formData.get('inward_material_temp'),
+    inward_transporter_name: formData.get('inward_transporter_name'),
+    inward_driver_name: formData.get('inward_driver_name'),
+    inward_driver_no: formData.get('inward_driver_no'),
+    inward_dock_no: formData.get('inward_dock_no'),
+    inward_vehicle_reporting_time: formData.get('inward_vehicle_reporting_time'),
+    inward_unloading_start_time: formData.get('inward_unloading_start_time'),
+    inward_unloading_duration_hours: formData.get('inward_unloading_duration_hours'),
+    inward_unloading_duration_mins: formData.get('inward_unloading_duration_mins'),
+    inward_unloading_end_time: formData.get('inward_unloading_end_time'),
+    inward_pallets_in_qty: formData.get('inward_pallets_in_qty') || 0,
+    inward_invoice_qty: formData.get('inward_invoice_qty') || 0,
+    inward_received_qty: formData.get('inward_received_qty') || 0,
+    inward_received_boxes_qty: formData.get('inward_received_boxes_qty') || 0,
+    inward_short_received_boxes_qty: formData.get('inward_short_received_boxes_qty') || 0,
+    inward_excess_received_boxes_qty: formData.get('inward_excess_received_boxes_qty') || 0,
+    inward_damage_received_boxes_qty: formData.get('inward_damage_received_boxes_qty') || 0,
+    inward_material_type: formData.get('inward_material_type'),
+    inward_unloading_supervisor_name: formData.get('inward_unloading_supervisor_name'),
+    inward_remarks: formData.get('inward_remarks'),
+    inward_vehicle_back_side_photo: formData.get('inward_vehicle_back_side_photo'),
+    inward_vehicle_back_side_photo_with_material: formData.get('inward_vehicle_back_side_photo_with_material'),
+    inward_count_sheet_photo: formData.get('inward_count_sheet_photo')
   };
   fallbackInwardLogs.unshift(newLog);
-  return { id: newLog.id, message: 'Saved (local)' };
+  return { id: newLog.inward_id, message: 'Saved (local)' };
 };
 
 export const deleteInwardLog = async (id) => {
@@ -172,7 +179,7 @@ export const deleteInwardLog = async (id) => {
     const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, { method: 'DELETE' });
     if (res.ok) return await res.json();
   } catch (err) {}
-  fallbackInwardLogs = fallbackInwardLogs.filter(l => l.id != id);
+  fallbackInwardLogs = fallbackInwardLogs.filter(l => l.inward_id != id);
   return { message: 'Deleted (local)' };
 };
 

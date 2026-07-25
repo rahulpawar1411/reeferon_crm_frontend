@@ -17,7 +17,14 @@ export default function LeadCard({ lead, onSelect }) {
   }).format(lead.value || 0);
 
   // Clean phone number for WhatsApp link
-  const cleanPhone = (lead.phone || '').replace(/\D/g, '');
+  const getCleanPhoneForWhatsApp = (phoneStr) => {
+    if (!phoneStr) return '';
+    const cleaned = phoneStr.replace(/[\s\-\(\)\+]/g, '');
+    if (cleaned.length === 10) return '91' + cleaned;
+    if (cleaned.length === 11 && cleaned.startsWith('0')) return '91' + cleaned.slice(1);
+    return cleaned;
+  };
+  const cleanPhone = getCleanPhoneForWhatsApp(lead.phone);
 
   return (
     <div className="lead-card">
@@ -58,7 +65,7 @@ export default function LeadCard({ lead, onSelect }) {
         {/* WhatsApp Button */}
         {lead.phone && (
           <a 
-            href={`https://wa.me/91${cleanPhone}?text=Hi%20${encodeURIComponent(lead.name)},%20following%20up%20from%20Reeferon.`} 
+            href={`https://wa.me/${cleanPhone}?text=Hi%20${encodeURIComponent(lead.name)},%20following%20up%20from%20Reeferon.`} 
             target="_blank" 
             rel="noreferrer"
             className="action-btn whatsapp"

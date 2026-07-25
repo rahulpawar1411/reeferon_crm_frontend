@@ -23,10 +23,27 @@ export default function AddLead({ setActiveTab }) {
 
   const [submitting, setSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [leadPhoneCountryCode, setLeadPhoneCountryCode] = useState('+91');
 
   // Handle input change
   const handleChange = (e) => {
-    const { name, value } = e.target;
+    let { name, value } = e.target;
+
+    // 1. Phone number (Allow only digits, restrict length dynamically)
+    if (name === 'phone') {
+      const digits = value.replace(/\D/g, '');
+      const maxDigits = (leadPhoneCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(leadPhoneCountryCode) ? 9 : (leadPhoneCountryCode === '+65' ? 8 : 10));
+      value = digits.slice(0, maxDigits);
+    }
+    // 2. Integer/Numeric fields (Value)
+    else if (name === 'value') {
+      value = value.replace(/\D/g, '');
+    }
+    // 3. Text-only Name fields (letters, spaces, dots, dashes)
+    else if (name.toLowerCase().includes('name')) {
+      value = value.replace(/[^a-zA-Z\s\.\-]/g, '');
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -38,8 +55,21 @@ export default function AddLead({ setActiveTab }) {
       return;
     }
 
+    if (formData.phone) {
+      const digits = formData.phone.replace(/\D/g, '');
+      const expectedDigits = (leadPhoneCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(leadPhoneCountryCode) ? 9 : (leadPhoneCountryCode === '+65' ? 8 : 10));
+      if (digits.length < expectedDigits) {
+        alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${leadPhoneCountryCode}.`);
+        return;
+      }
+    }
+
     setSubmitting(true);
-    const res = await createLead(formData);
+    const finalPhone = formData.phone ? `${leadPhoneCountryCode} ${formData.phone}` : '';
+    const res = await createLead({
+      ...formData,
+      phone: finalPhone
+    });
     setSubmitting(false);
 
     if (res.success) {
@@ -103,15 +133,42 @@ export default function AddLead({ setActiveTab }) {
         <div className="form-row-2">
           <div className="form-group">
             <label>Phone Number *</label>
-            <input 
-              type="tel" 
-              name="phone"
-              className="form-input" 
-              placeholder="9876543210" 
-              value={formData.phone}
-              onChange={handleChange}
-              required 
-            />
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <select
+                value={leadPhoneCountryCode}
+                onChange={(e) => {
+                  const newCode = e.target.value;
+                  setLeadPhoneCountryCode(newCode);
+                  const maxDigits = (newCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(newCode) ? 9 : (newCode === '+65' ? 8 : 10));
+                  setFormData(prev => ({
+                    ...prev,
+                    phone: (prev.phone || '').replace(/\D/g, '').slice(0, maxDigits)
+                  }));
+                }}
+                style={{ width: '90px', padding: '8px 4px', fontSize: '0.85rem', border: '1px solid #ccc', borderRadius: '4px', background: 'var(--surface)', color: 'inherit' }}
+              >
+                <option value="+91">+91 (IN)</option>
+                <option value="+1">+1 (US)</option>
+                <option value="+44">+44 (UK)</option>
+                <option value="+971">+971 (AE)</option>
+                <option value="+966">+966 (SA)</option>
+                <option value="+65">+65 (SG)</option>
+                <option value="+61">+61 (AU)</option>
+                <option value="+92">+92 (PK)</option>
+                <option value="+880">+880 (BD)</option>
+                <option value="+977">+977 (NP)</option>
+              </select>
+              <input 
+                type="text" 
+                name="phone"
+                className="form-input" 
+                placeholder="98765 43210" 
+                value={formData.phone}
+                onChange={handleChange}
+                required 
+                style={{ flex: 1 }}
+              />
+            </div>
           </div>
           <div className="form-group">
             <label>Email Address</label>
@@ -154,7 +211,8 @@ export default function AddLead({ setActiveTab }) {
         <div className="form-group">
           <label>Expected Value (INR ₹)</label>
           <input 
-            type="number" 
+            type="text" 
+            inputMode="numeric"
             name="value"
             className="form-input" 
             placeholder="e.g. 50000" 

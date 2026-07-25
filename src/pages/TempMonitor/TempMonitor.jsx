@@ -593,9 +593,10 @@ export default function TempMonitor() {
                     let varianceClass = varMin > 120 ? 'variance-red' : 'variance-green';
                   let varianceLabel = `${varMin} mins`;
 
+                  const serverUrl = window.location.origin === 'http://localhost:3000' ? 'http://localhost:5000' : '';
                   const imageSrc = log.temp_sensor_image && log.temp_sensor_image.startsWith('data:image') 
                     ? log.temp_sensor_image 
-                    : `http://localhost:5000/${log.temp_sensor_image}`;
+                    : `${serverUrl}/${log.temp_sensor_image}`;
 
                   return (
                     <tr key={log.id}>

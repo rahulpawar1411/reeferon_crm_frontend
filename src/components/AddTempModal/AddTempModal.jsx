@@ -38,9 +38,40 @@ export default function AddTempModal({ defaultType = 'Inward', onClose, onLogAdd
   }, [defaultType]);
 
   const [submitting, setSubmitting] = useState(false);
+  const [driverPhoneCountryCode, setDriverPhoneCountryCode] = useState('+91');
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
+    let { name, value } = e.target;
+
+    // 1. Phone number (Allow only digits, restrict length dynamically)
+    if (name === 'driver_phone') {
+      const digits = value.replace(/\D/g, '');
+      const maxDigits = (driverPhoneCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverPhoneCountryCode) ? 9 : (driverPhoneCountryCode === '+65' ? 8 : 10));
+      value = digits.slice(0, maxDigits);
+    }
+    // 2. Float/Decimal fields (Temperatures)
+    else if (['target_temp', 'actual_temp'].includes(name)) {
+      // Allow only digits, dot, and minus sign
+      let clean = value.replace(/[^\d\.\-]/g, '');
+      if (clean.includes('-')) {
+        const parts = clean.split('-');
+        clean = (clean.startsWith('-') ? '-' : '') + parts.join('');
+      }
+      if (clean.includes('.')) {
+        const parts = clean.split('.');
+        clean = parts[0] + '.' + parts.slice(1).join('');
+      }
+      value = clean;
+    }
+    // 3. Text-only Name fields (letters, spaces, dots, dashes)
+    else if (name.toLowerCase().includes('name')) {
+      value = value.replace(/[^a-zA-Z\s\.\-]/g, '');
+    }
+    // 4. Container / Seal number (uppercase)
+    else if (['container_number', 'seal_number'].includes(name)) {
+      value = value.toUpperCase();
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -60,8 +91,21 @@ export default function AddTempModal({ defaultType = 'Inward', onClose, onLogAdd
       return;
     }
 
+    if (formData.driver_phone) {
+      const digits = formData.driver_phone.replace(/\D/g, '');
+      const expectedDigits = (driverPhoneCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverPhoneCountryCode) ? 9 : (driverPhoneCountryCode === '+65' ? 8 : 10));
+      if (digits.length < expectedDigits) {
+        alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${driverPhoneCountryCode}.`);
+        return;
+      }
+    }
+
     setSubmitting(true);
-    const res = await createTempLog(formData);
+    const finalPhone = formData.driver_phone ? `${driverPhoneCountryCode} ${formData.driver_phone}` : '';
+    const res = await createTempLog({
+      ...formData,
+      driver_phone: finalPhone
+    });
     setSubmitting(false);
 
     if (res.success) {
@@ -144,8 +188,8 @@ export default function AddTempModal({ defaultType = 'Inward', onClose, onLogAdd
             <div className="form-group">
               <label><Thermometer size={14} /> Target Set Point Temp (°C) *</label>
               <input 
-                type="number" 
-                step="0.1"
+                type="text" 
+                inputMode="decimal"
                 name="target_temp"
                 className="form-input" 
                 placeholder="-18.0" 
@@ -165,8 +209,8 @@ export default function AddTempModal({ defaultType = 'Inward', onClose, onLogAdd
             <div className="form-group">
               <label><Thermometer size={14} /> Actual Measured Temp (°C) *</label>
               <input 
-                type="number" 
-                step="0.1"
+                type="text" 
+                inputMode="decimal"
                 name="actual_temp"
                 className="form-input" 
                 placeholder="-17.5" 
@@ -220,17 +264,43 @@ export default function AddTempModal({ defaultType = 'Inward', onClose, onLogAdd
               />
             </div>
 
-            {/* Driver Phone Number */}
             <div className="form-group">
               <label>Driver Phone Number</label>
-              <input 
-                type="tel" 
-                name="driver_phone"
-                className="form-input" 
-                placeholder="9876543210" 
-                value={formData.driver_phone}
-                onChange={handleChange}
-              />
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <select
+                  value={driverPhoneCountryCode}
+                  onChange={(e) => {
+                    const newCode = e.target.value;
+                    setDriverPhoneCountryCode(newCode);
+                    const maxDigits = (newCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(newCode) ? 9 : (newCode === '+65' ? 8 : 10));
+                    setFormData(prev => ({
+                      ...prev,
+                      driver_phone: (prev.driver_phone || '').replace(/\D/g, '').slice(0, maxDigits)
+                    }));
+                  }}
+                  style={{ width: '90px', padding: '8px 4px', fontSize: '0.85rem', border: '1px solid #ccc', borderRadius: '4px', background: 'var(--surface)', color: 'inherit' }}
+                >
+                  <option value="+91">+91 (IN)</option>
+                  <option value="+1">+1 (US)</option>
+                  <option value="+44">+44 (UK)</option>
+                  <option value="+971">+971 (AE)</option>
+                  <option value="+966">+966 (SA)</option>
+                  <option value="+65">+65 (SG)</option>
+                  <option value="+61">+61 (AU)</option>
+                  <option value="+92">+92 (PK)</option>
+                  <option value="+880">+880 (BD)</option>
+                  <option value="+977">+977 (NP)</option>
+                </select>
+                <input 
+                  type="text" 
+                  name="driver_phone"
+                  className="form-input" 
+                  placeholder="98765 43210" 
+                  value={formData.driver_phone}
+                  onChange={handleChange}
+                  style={{ flex: 1 }}
+                />
+              </div>
             </div>
 
             {/* Genset / Compressor Status */}

@@ -38,7 +38,14 @@ export default function LeadDetails({ lead, onBack, onLeadUpdated }) {
     maximumFractionDigits: 0
   }).format(lead.value || 0);
 
-  const cleanPhone = (lead.phone || '').replace(/\D/g, '');
+  const getCleanPhoneForWhatsApp = (phoneStr) => {
+    if (!phoneStr) return '';
+    const cleaned = phoneStr.replace(/[\s\-\(\)\+]/g, '');
+    if (cleaned.length === 10) return '91' + cleaned;
+    if (cleaned.length === 11 && cleaned.startsWith('0')) return '91' + cleaned.slice(1);
+    return cleaned;
+  };
+  const cleanPhone = getCleanPhoneForWhatsApp(lead.phone);
 
   return (
     <div className="lead-details-page">
@@ -85,7 +92,7 @@ export default function LeadDetails({ lead, onBack, onLeadUpdated }) {
           )}
           {lead.phone && (
             <a 
-              href={`https://wa.me/91${cleanPhone}`} 
+              href={`https://wa.me/${cleanPhone}`} 
               target="_blank" 
               rel="noreferrer" 
               className="action-btn whatsapp"

@@ -15,7 +15,14 @@ export default function TempDetailModal({ log, onClose }) {
     window.print();
   };
 
-  const cleanDriverPhone = (log.driver_phone || '').replace(/\D/g, '');
+  const getCleanPhoneForWhatsApp = (phoneStr) => {
+    if (!phoneStr) return '';
+    const cleaned = phoneStr.replace(/[\s\-\(\)\+]/g, '');
+    if (cleaned.length === 10) return '91' + cleaned;
+    if (cleaned.length === 11 && cleaned.startsWith('0')) return '91' + cleaned.slice(1);
+    return cleaned;
+  };
+  const cleanDriverPhone = getCleanPhoneForWhatsApp(log.driver_phone);
 
   return (
     <div className="detail-modal-overlay">
@@ -123,7 +130,7 @@ export default function TempDetailModal({ log, onClose }) {
 
           {log.driver_phone && (
             <a 
-              href={`https://wa.me/91${cleanDriverPhone}?text=ReeferON%20DO%20Alert%20for%20Vehicle%20${encodeURIComponent(log.container_number)}`} 
+              href={`https://wa.me/${cleanDriverPhone}?text=ReeferON%20DO%20Alert%20for%20Vehicle%20${encodeURIComponent(log.container_number)}`} 
               target="_blank" 
               rel="noreferrer" 
               className="report-btn whatsapp"
