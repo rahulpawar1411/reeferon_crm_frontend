@@ -5,11 +5,11 @@
 // ====================================================================
 
 import React from 'react';
-import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus, LogOut, History } from 'lucide-react';
+import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus, LogOut, History, Bell } from 'lucide-react';
 import Logo from '../Logo/Logo';
 import './DOSidebar.css'; // Paired CSS file
 
-export default function DOSidebar({ activeDOMenu, setActiveDOMenu, onLogout }) {
+export default function DOSidebar({ user, activeDOMenu, setActiveDOMenu, onLogout }) {
   return (
     <aside className="do-sidebar desktop-only">
       <div className="do-sidebar-top">
@@ -57,16 +57,47 @@ export default function DOSidebar({ activeDOMenu, setActiveDOMenu, onLogout }) {
               <span>History Logs</span>
             </button>
           </li>
+
+          <li>
+            <button 
+              className={`do-sidebar-link ${activeDOMenu === 'Notifications' ? 'active' : ''}`}
+              onClick={() => setActiveDOMenu('Notifications')}
+            >
+              <Bell size={19} />
+              <span>Notifications</span>
+            </button>
+          </li>
         </ul>
       </div>
 
       {/* DO Profile Badge */}
-      <div className="do-sidebar-bottom">
-        <div className="do-user-badge">
-          <div className="do-avatar">DO</div>
-          <div className="do-user-info">
-            <strong>Rakesh (DO)</strong>
-            <span>Data Operator</span>
+      <div className="do-sidebar-bottom" style={{ borderTop: '1px solid var(--border)', paddingTop: '15px' }}>
+        <div className="do-user-badge" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div className="do-avatar" style={{ 
+            width: '36px', 
+            height: '36px', 
+            borderRadius: '50%', 
+            backgroundColor: '#ea580c', 
+            color: '#ffffff', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            fontWeight: 'bold',
+            fontSize: '0.85rem',
+            flexShrink: 0
+          }}>
+            {(user?.full_name || 'DO').substring(0, 2).toUpperCase()}
+          </div>
+          <div className="do-user-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden' }}>
+            <strong style={{ fontSize: '0.85rem', color: 'var(--text-dark)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {user?.full_name || 'Data Operator'}
+            </strong>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={user?.email || ''}>
+              {user?.email || ''}
+            </span>
+            <span style={{ fontSize: '0.68rem', color: '#ea580c', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={user?.warehouse_name || 'Data Operator'}>
+              {user?.warehouse_name || 'ReeferON CRM'}
+            </span>
           </div>
           <button 
             type="button"

@@ -6,11 +6,11 @@
 // ====================================================================
 
 import React, { useState, useEffect } from 'react';
-import { Clock, Menu, X, Thermometer, ArrowDownLeft, ArrowUpRight, ChevronRight, User } from 'lucide-react';
+import { Clock, Menu, X, Thermometer, ArrowDownLeft, ArrowUpRight, ChevronRight, User, LogOut, Bell } from 'lucide-react';
 import Logo from '../Logo/Logo';
 import './DOHeader.css'; // Paired CSS file
 
-export default function DOHeader({ activeTitle, activeDOMenu, setActiveDOMenu }) {
+export default function DOHeader({ user, activeTitle, activeDOMenu, setActiveDOMenu, onLogout }) {
   const [timeState, setTimeState] = useState(new Date());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -104,17 +104,30 @@ export default function DOHeader({ activeTitle, activeDOMenu, setActiveDOMenu })
       {isMobileMenuOpen && (
         <div className="mobile-right-drawer mobile-only">
           {/* Drawer Header */}
-          <div className="right-drawer-header">
-            <div className="drawer-user-info">
-              <div className="user-avatar-circle">
-                <User size={16} color="#00a2e8" />
+          <div className="right-drawer-header" style={{ paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
+            <div className="drawer-user-info" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div className="user-avatar-circle" style={{ 
+                width: '36px', 
+                height: '36px', 
+                borderRadius: '50%', 
+                backgroundColor: '#00a2e8', 
+                color: '#ffffff', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                fontWeight: 'bold',
+                fontSize: '0.85rem',
+                flexShrink: 0
+              }}>
+                {(user?.full_name || 'DO').substring(0, 2).toUpperCase()}
               </div>
-              <div className="user-text">
-                <strong>Rakesh (DO)</strong>
-                <span>Data Operator</span>
+              <div className="user-text" style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                <strong style={{ fontSize: '0.85rem', color: 'var(--text-dark)' }}>{user?.full_name || 'Data Operator'}</strong>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{user?.email || ''}</span>
+                <span style={{ fontSize: '0.68rem', color: '#ea580c', fontWeight: 'bold' }}>{user?.warehouse_name || 'ReeferON CRM'}</span>
               </div>
             </div>
-            <button className="right-drawer-close" onClick={() => setIsMobileMenuOpen(false)}>
+            <button className="right-drawer-close" onClick={() => setIsMobileMenuOpen(false)} style={{ marginLeft: 'auto' }}>
               <X size={20} />
             </button>
           </div>
@@ -153,6 +166,45 @@ export default function DOHeader({ activeTitle, activeDOMenu, setActiveDOMenu })
                 <span>Outward Temp Monitor</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeDOMenu === 'History' ? 'active' : ''}`}
+              onClick={() => handleMenuSelect('History')}
+            >
+              <div className="item-left">
+                <Clock size={18} className="item-icon" />
+                <span>History Logs</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeDOMenu === 'Notifications' ? 'active' : ''}`}
+              onClick={() => handleMenuSelect('Notifications')}
+              style={{ borderBottom: '1px solid var(--border)' }}
+            >
+              <div className="item-left">
+                <Bell size={18} className="item-icon" />
+                <span>Notifications</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            {/* Logout button in Mobile Drawer */}
+            <button 
+              className="clean-menu-item"
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                if (onLogout) onLogout();
+              }}
+              style={{ marginTop: '20px', color: '#ef4444' }}
+            >
+              <div className="item-left">
+                <LogOut size={18} className="item-icon" style={{ color: '#ef4444' }} />
+                <span style={{ fontWeight: '700' }}>Log Out</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" style={{ color: '#ef4444' }} />
             </button>
           </div>
         </div>

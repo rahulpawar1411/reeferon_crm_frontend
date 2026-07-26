@@ -13,6 +13,7 @@ import {
   fetchChamberLogs, deleteChamberLog, 
   fetchInwardLogs, deleteInwardLog, 
   fetchOutwardLogs, deleteOutwardLog,
+  checkEditPermission, requestEditPermission,
   API_BASE_URL
 } from '../../services/api';
 import './DOHistoryView.css';
@@ -20,6 +21,76 @@ import './DOHistoryView.css';
 export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setEditOutwardData, setEditDailyData }) {
   const [activeTab, setActiveTab] = useState('daily'); // 'daily' | 'inward' | 'outward'
   const [loading, setLoading] = useState(false);
+  
+  // Permission Request States & Handlers
+  const [permissionModalData, setPermissionModalData] = useState({
+    isOpen: false,
+    recordType: '',
+    recordId: null,
+    log: null,
+    action: 'Edit',
+    status: 'None',
+    proceedWithEdit: null
+  });
+
+  const handleEditAttempt = async (recordType, log, proceedWithEdit) => {
+    const recordId = recordType === 'Chamber' ? log.id : (recordType === 'Inward' ? log.inward_id : log.outward_id);
+    try {
+      const res = await checkEditPermission(recordType, recordId, 'Edit');
+      if (res.approved) {
+        proceedWithEdit();
+      } else {
+        setPermissionModalData({
+          isOpen: true,
+          recordType,
+          recordId,
+          log,
+          action: 'Edit',
+          status: res.status || 'None',
+          proceedWithEdit
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error verifying edit permissions. Please try again.');
+    }
+  };
+
+  const handleRequestPermission = async () => {
+    try {
+      const { recordType, recordId, action, log } = permissionModalData;
+      const actionLabel = action === 'Delete' ? 'delete' : 'edit';
+      
+      let extraDetails = '';
+      if (log) {
+        if (recordType === 'Chamber') {
+          const client = log.client_name || 'N/A';
+          extraDetails = ` | Client: ${client} | Chamber: ${log.chamber_name || 'N/A'} | Temp: ${log.chamber_temp || 'N/A'}°C`;
+        } else if (recordType === 'Inward') {
+          const client = log.inward_client_name || 'N/A';
+          extraDetails = ` | Client: ${client} | Vehicle: ${log.inward_vehicle_no || 'N/A'} | Temp: ${log.inward_material_temp || 'N/A'}°C`;
+        } else if (recordType === 'Outward') {
+          const client = log.outward_client_name || 'N/A';
+          extraDetails = ` | Client: ${client} | Vehicle: ${log.outward_vehicle_no || 'N/A'} | Temp: ${log.outward_material_temp || 'N/A'}°C`;
+        }
+      }
+
+      const descText = `Requested permission to ${actionLabel} ${recordType} log (ID: ${recordId})${extraDetails}`;
+      const res = await requestEditPermission(
+        recordType,
+        recordId,
+        descText,
+        action || 'Edit'
+      );
+      setPermissionModalData(prev => ({
+        ...prev,
+        status: 'Pending'
+      }));
+      alert(res.message || 'Permission request sent successfully.');
+    } catch (err) {
+      alert(err.message || 'Failed to request permission.');
+    }
+  };
   
   // Data lists
   const [dailyLogs, setDailyLogs] = useState([]);
@@ -216,19 +287,44 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
   }, [activeTab]);
 
   // Handle Log Deletion
-  const handleDeleteLog = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this log entry?")) return;
+  const handleDeleteLog = async (log) => {
+    const id = activeTab === 'daily' ? log.id : (activeTab === 'inward' ? log.inward_id : log.outward_id);
+    const recordType = activeTab === 'daily' ? 'Chamber' : (activeTab === 'inward' ? 'Inward' : 'Outward');
     try {
-      if (activeTab === 'daily') {
-        await deleteChamberLog(id);
-      } else if (activeTab === 'inward') {
-        await deleteInwardLog(id);
-      } else if (activeTab === 'outward') {
-        await deleteOutwardLog(id);
+      const res = await checkEditPermission(recordType, id, 'Delete');
+      if (res.approved) {
+        if (!window.confirm("Are you sure you want to delete this log entry?")) return;
+        if (activeTab === 'daily') {
+          await deleteChamberLog(id);
+        } else if (activeTab === 'inward') {
+          await deleteInwardLog(id);
+        } else if (activeTab === 'outward') {
+          await deleteOutwardLog(id);
+        }
+        loadLogs();
+      } else {
+        setPermissionModalData({
+          isOpen: true,
+          recordType,
+          recordId: id,
+          log,
+          action: 'Delete',
+          status: res.status || 'None',
+          proceedWithEdit: async () => {
+            if (activeTab === 'daily') {
+              await deleteChamberLog(id);
+            } else if (activeTab === 'inward') {
+              await deleteInwardLog(id);
+            } else if (activeTab === 'outward') {
+              await deleteOutwardLog(id);
+            }
+            loadLogs();
+          }
+        });
       }
-      loadLogs();
     } catch (err) {
-      console.error("Failed to delete log:", err);
+      console.error(err);
+      alert('Error verifying delete permissions. Please try again.');
     }
   };
 
@@ -678,10 +774,10 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 
                           className="btn-edit-log"
-                          onClick={() => {
+                          onClick={() => handleEditAttempt('Chamber', log, () => {
                             setEditDailyData(log);
                             setActiveDOMenu('All');
-                          }}
+                          })}
                           title="Edit Entry"
                           style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         >
@@ -689,7 +785,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         </button>
                         <button 
                           className="btn-delete-log"
-                          onClick={() => handleDeleteLog(log.id)}
+                          onClick={() => handleDeleteLog(log)}
                           title="Delete Entry"
                         >
                           <Trash2 size={15} />
@@ -728,10 +824,10 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 
                           className="btn-edit-log"
-                          onClick={() => {
+                          onClick={() => handleEditAttempt('Inward', log, () => {
                             setEditInwardData(log);
                             setActiveDOMenu('Inward');
-                          }}
+                          })}
                           title="Edit Entry"
                           style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         >
@@ -739,7 +835,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         </button>
                         <button 
                           className="btn-delete-log"
-                          onClick={() => handleDeleteLog(log.inward_id)}
+                          onClick={() => handleDeleteLog(log)}
                           title="Delete Entry"
                         >
                           <Trash2 size={15} />
@@ -778,10 +874,10 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 
                           className="btn-edit-log"
-                          onClick={() => {
+                          onClick={() => handleEditAttempt('Outward', log, () => {
                             setEditOutwardData(log);
                             setActiveDOMenu('Outward');
-                          }}
+                          })}
                           title="Edit Entry"
                           style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         >
@@ -789,7 +885,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         </button>
                         <button 
                           className="btn-delete-log"
-                          onClick={() => handleDeleteLog(log.outward_id)}
+                          onClick={() => handleDeleteLog(log)}
                           title="Delete Entry"
                         >
                           <Trash2 size={15} />
@@ -812,6 +908,96 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
               <X size={24} />
             </button>
             <img src={lightboxImg} alt="Enlarged Audit Attachment" />
+          </div>
+        </div>
+      )}
+
+      {/* 5. Permission Verification & Request Modal */}
+      {permissionModalData.isOpen && (
+        <div className="lightbox-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100 }}>
+          <div className="modal-card" style={{ maxWidth: '450px', width: '90%', padding: '24px', position: 'relative', display: 'flex', flexDirection: 'column', gap: '16px', backgroundColor: '#ffffff', borderRadius: 'var(--radius-lg)', boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 800, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertCircle size={18} color="#eab308" />
+                <span>Permission Required</span>
+              </h3>
+              <button 
+                onClick={() => setPermissionModalData(prev => ({ ...prev, isOpen: false }))} 
+                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+              <p style={{ fontWeight: '700', color: '#b45309', backgroundColor: '#fffbeb', border: '1px solid #fef3c7', padding: '12px', borderRadius: 'var(--radius-sm)', margin: '0 0 14px 0' }}>
+                If you want to {permissionModalData.action === 'Delete' ? 'delete' : 'edit'} this data, first get permission from admin.
+              </p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: 'var(--bg-main)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', marginBottom: '14px' }}>
+                <div><strong>Record Type:</strong> {permissionModalData.recordType} DO Log</div>
+                <div><strong>Record ID:</strong> #{permissionModalData.recordId}</div>
+                <div><strong>Action Attempted:</strong> {permissionModalData.action || 'Edit'}</div>
+                <div><strong>Current Request Status:</strong> 
+                  <span style={{ 
+                    marginLeft: '6px', 
+                    fontWeight: 800, 
+                    color: permissionModalData.status === 'Pending' ? '#ca8a04' : (permissionModalData.status === 'Denied' ? '#dc2626' : '#16a34a') 
+                  }}>
+                    {permissionModalData.status === 'None' ? 'Not Requested' : permissionModalData.status}
+                  </span>
+                </div>
+              </div>
+
+              {permissionModalData.status === 'Pending' ? (
+                <p style={{ fontWeight: '600', color: '#ca8a04', margin: 0 }}>
+                  Your request is already pending admin approval. Please wait for the admin to grant access.
+                </p>
+              ) : (
+                <p style={{ fontWeight: '600', color: 'var(--text-dark)', margin: 0 }}>
+                  Do you want to send a {permissionModalData.action === 'Delete' ? 'delete' : 'edit'} request to the admin?
+                </p>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button 
+                type="button" 
+                onClick={() => setPermissionModalData(prev => ({ ...prev, isOpen: false }))} 
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border)',
+                  backgroundColor: '#ffffff',
+                  color: 'var(--text-dark)',
+                  fontSize: '0.8rem',
+                  fontWeight: '700',
+                  cursor: 'pointer'
+                }}
+              >
+                Back
+              </button>
+
+              {(permissionModalData.status === 'None' || permissionModalData.status === 'Denied') && (
+                <button 
+                  type="button" 
+                  onClick={handleRequestPermission}
+                  style={{
+                    padding: '8px 18px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: '#ea580c',
+                    color: '#ffffff',
+                    fontSize: '0.8rem',
+                    fontWeight: '800',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 10px rgba(234, 88, 12, 0.25)'
+                  }}
+                >
+                  Continue
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

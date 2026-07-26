@@ -539,3 +539,69 @@ export const fetchOperatorActivities = async () => {
   }
   return await res.json();
 };
+
+// ====================================================================
+// 6. Permission Requests APIs
+// ====================================================================
+export const checkEditPermission = async (recordType, recordId, action = 'Edit') => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests/check?record_type=${encodeURIComponent(recordType)}&record_id=${encodeURIComponent(recordId)}&action=${encodeURIComponent(action)}`);
+  if (!res.ok) {
+    throw new Error('Failed to check permission.');
+  }
+  return await res.json();
+};
+
+export const requestEditPermission = async (recordType, recordId, description, action = 'Edit') => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ record_type: recordType, record_id: recordId, description, action })
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to request permission.');
+  }
+  return await res.json();
+};
+
+export const fetchPermissionRequests = async () => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch permission requests.');
+  }
+  return await res.json();
+};
+
+export const updatePermissionRequest = async (id, status) => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to update permission request.');
+  }
+  return await res.json();
+};
+
+export const fetchSystemConfig = async () => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests/config`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch permission config.');
+  }
+  return await res.json();
+};
+
+export const updateSystemConfig = async (configKey, configValue) => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config_key: configKey, config_value: configValue })
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to update permission config.');
+  }
+  return await res.json();
+};

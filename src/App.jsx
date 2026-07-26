@@ -15,6 +15,7 @@ import TempMonitor from './pages/TempMonitor/TempMonitor';
 import InwardMonitor from './pages/InwardMonitor/InwardMonitor';
 import OutwardMonitor from './pages/OutwardMonitor/OutwardMonitor';
 import DOHistoryView from './pages/DOHistoryView/DOHistoryView';
+import DONotificationsView from './pages/DONotificationsView/DONotificationsView';
 import AddTempModal from './components/AddTempModal/AddTempModal';
 import Login from './pages/Login/Login';
 import SuperAdminSecureWindow from './pages/SuperAdminSecureWindow/SuperAdminSecureWindow';
@@ -95,6 +96,7 @@ export default function App() {
       case 'Inward': return 'DO Inward Temp Monitor';
       case 'Outward': return 'DO Outward Temp Monitor';
       case 'History': return 'DO Temp Monitoring History';
+      case 'Notifications': return 'DO Notifications';
       default: return 'DO Daily Temp Monitor';
     }
   };
@@ -136,15 +138,18 @@ export default function App() {
       {selectedWindow === 'do_window' ? (
         <>
           <DOSidebar 
+            user={user}
             activeDOMenu={activeDOMenu}
             setActiveDOMenu={setActiveDOMenu}
             onLogout={handleLogout}
           />
 
           <DOHeader 
+            user={user}
             activeTitle={getDOTitle()}
             activeDOMenu={activeDOMenu}
             setActiveDOMenu={setActiveDOMenu}
+            onLogout={handleLogout}
           />
 
           <main className="app-viewport">
@@ -158,6 +163,10 @@ export default function App() {
                 setEditInwardData={setEditInwardData}
                 setEditOutwardData={setEditOutwardData}
                 setEditDailyData={setEditDailyData}
+              />
+            ) : activeDOMenu === 'Notifications' ? (
+              <DONotificationsView 
+                setActiveDOMenu={setActiveDOMenu}
               />
             ) : (
               <TempMonitor 
