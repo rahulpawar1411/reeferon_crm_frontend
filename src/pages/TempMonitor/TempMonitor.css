@@ -14,12 +14,7 @@
   box-sizing: border-box;
 }
 
-@media (min-width: 1024px) {
-  .temp-monitor-page {
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-}
+
 
 /* 1. Header Banner */
 .do-header-banner {
@@ -108,27 +103,17 @@
 /* Multi-column Form Grid */
 .direct-form-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px 12px;
   width: 100%;
-}
-
-@media (max-width: 1150px) {
-  .direct-form-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 480px) {
-  .direct-form-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .direct-form-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .direct-form-group label {
@@ -344,14 +329,13 @@
   margin-top: 8px;
 }
 
-/* ====================================================================
-   3. Log History Table & Lightbox Styles
-   ==================================================================== */
 .logs-history-card {
   margin-top: 10px;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .loading-logs, .no-logs {
@@ -369,6 +353,7 @@
   display: block;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border-radius: var(--radius-sm);

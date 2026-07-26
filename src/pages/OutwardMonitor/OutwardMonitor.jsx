@@ -1,18 +1,18 @@
 // ====================================================================
-// DO Inward Temp Monitor Component (src/pages/InwardMonitor/InwardMonitor.jsx)
-// Paired with: src/pages/InwardMonitor/InwardMonitor.css
-// Handles comprehensive Inward vehicle inspections in a single card with rounded boxes.
+// DO Outward Temp Monitor Component (src/pages/OutwardMonitor/OutwardMonitor.jsx)
+// Paired with: src/pages/OutwardMonitor/OutwardMonitor.css
+// Handles comprehensive Outward vehicle inspections in a single card with rounded boxes.
 // ====================================================================
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  ArrowDownLeft, Plus, CheckCircle, PlusCircle, Camera, Loader2, Trash2, Calendar, FileText, Truck, Thermometer, Check, RefreshCw
+  ArrowUpRight, Plus, CheckCircle, PlusCircle, Camera, Loader2, Trash2, Calendar, FileText, Truck, Thermometer, Check, RefreshCw
 } from 'lucide-react';
-import { addInwardLog, fetchInwardLogs, deleteInwardLog, updateInwardLog } from '../../services/api';
+import { addOutwardLog, fetchOutwardLogs, deleteOutwardLog, updateOutwardLog } from '../../services/api';
 import exifr from 'exifr';
-import './InwardMonitor.css';
+import '../InwardMonitor/InwardMonitor.css';
 
-export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }) {
+export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu }) {
   const getLocalTodayStr = () => {
     const today = new Date();
     const yyyy = today.getFullYear();
@@ -32,31 +32,31 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
   // Form State
   const [formData, setFormData] = useState({
-    inward_entry_date: todayStr,
-    inward_vehicle_no: '',
-    inward_seal_no: '',
-    inward_vehicle_temp: '',
-    inward_material_temp: '',
-    inward_transporter_name: '',
-    inward_driver_name: '',
-    inward_driver_no: '',
-    inward_client_name: '',
-    inward_dock_no: '',
-    inward_vehicle_reporting_time: '11:00',
-    inward_unloading_start_time: '11:30',
-    inward_unloading_duration_hours: '1',
-    inward_unloading_duration_mins: '0',
-    inward_unloading_end_time: '12:30',
-    inward_pallets_in_qty: '',
-    inward_invoice_qty: '',
-    inward_received_qty: '',
-    inward_received_boxes_qty: '',
-    inward_short_received_boxes_qty: 0,
-    inward_excess_received_boxes_qty: 0,
-    inward_damage_received_boxes_qty: '',
-    inward_material_type: 'Frozen',
-    inward_unloading_supervisor_name: '',
-    inward_remarks: ''
+    outward_entry_date: todayStr,
+    outward_vehicle_no: '',
+    outward_seal_no: '',
+    outward_vehicle_temp: '',
+    outward_material_temp: '',
+    outward_transporter_name: '',
+    outward_driver_name: '',
+    outward_driver_no: '',
+    outward_client_name: '',
+    outward_dock_no: '',
+    outward_vehicle_reporting_time: '11:00',
+    outward_loading_start_time: '11:30',
+    outward_loading_duration_hours: '1',
+    outward_loading_duration_mins: '0',
+    outward_loading_end_time: '12:30',
+    outward_pallets_in_qty: '',
+    outward_invoice_qty: '',
+    outward_received_qty: '',
+    outward_received_boxes_qty: '',
+    outward_short_received_boxes_qty: 0,
+    outward_excess_received_boxes_qty: 0,
+    outward_damage_received_boxes_qty: '',
+    outward_material_type: 'Frozen',
+    outward_loading_supervisor_name: '',
+    outward_remarks: ''
   });
 
   // Custom text triggers for dropdown inputs
@@ -89,7 +89,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   // Load Logs
   const loadLogs = async () => {
     setLoadingLogs(true);
-    const data = await fetchInwardLogs();
+    const data = await fetchOutwardLogs();
     setLogs(data || []);
     setLoadingLogs(false);
   };
@@ -101,38 +101,38 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   useEffect(() => {
     if (editData) {
       setFormData({
-        inward_entry_date: editData.inward_entry_date ? editData.inward_entry_date.split('T')[0] : todayStr,
-        inward_vehicle_no: editData.inward_vehicle_no || '',
-        inward_seal_no: editData.inward_seal_no || '',
-        inward_vehicle_temp: editData.inward_vehicle_temp || '',
-        inward_material_temp: editData.inward_material_temp || '',
-        inward_transporter_name: editData.inward_transporter_name || '',
-        inward_driver_name: editData.inward_driver_name || '',
-        inward_driver_no: editData.inward_driver_no ? editData.inward_driver_no.replace(/^\+\d+\s*/, '') : '',
-        inward_client_name: editData.inward_client_name || '',
-        inward_dock_no: editData.inward_dock_no || '',
-        inward_vehicle_reporting_time: editData.inward_vehicle_reporting_time || '11:00',
-        inward_unloading_start_time: editData.inward_unloading_start_time 
-          ? (editData.inward_unloading_start_time.includes(' ') 
-              ? editData.inward_unloading_start_time.split(' ')[1] 
-              : editData.inward_unloading_start_time)
+        outward_entry_date: editData.outward_entry_date ? editData.outward_entry_date.split('T')[0] : todayStr,
+        outward_vehicle_no: editData.outward_vehicle_no || '',
+        outward_seal_no: editData.outward_seal_no || '',
+        outward_vehicle_temp: editData.outward_vehicle_temp || '',
+        outward_material_temp: editData.outward_material_temp || '',
+        outward_transporter_name: editData.outward_transporter_name || '',
+        outward_driver_name: editData.outward_driver_name || '',
+        outward_driver_no: editData.outward_driver_no ? editData.outward_driver_no.replace(/^\+\d+\s*/, '') : '',
+        outward_client_name: editData.outward_client_name || '',
+        outward_dock_no: editData.outward_dock_no || '',
+        outward_vehicle_reporting_time: editData.outward_vehicle_reporting_time || '11:00',
+        outward_loading_start_time: editData.outward_loading_start_time 
+          ? (editData.outward_loading_start_time.includes(' ') 
+              ? editData.outward_loading_start_time.split(' ')[1] 
+              : editData.outward_loading_start_time)
           : '11:30',
-        inward_unloading_duration_hours: editData.inward_unloading_duration_hours || '1',
-        inward_unloading_duration_mins: editData.inward_unloading_duration_mins || '0',
-        inward_unloading_end_time: editData.inward_unloading_end_time || '12:30',
-        inward_pallets_in_qty: editData.inward_pallets_in_qty || '',
-        inward_invoice_qty: editData.inward_invoice_qty || '',
-        inward_received_qty: editData.inward_received_qty || '',
-        inward_received_boxes_qty: editData.inward_received_boxes_qty || '',
-        inward_short_received_boxes_qty: editData.inward_short_received_boxes_qty || 0,
-        inward_excess_received_boxes_qty: editData.inward_excess_received_boxes_qty || 0,
-        inward_damage_received_boxes_qty: editData.inward_damage_received_boxes_qty || '',
-        inward_material_type: editData.inward_material_type || 'Frozen',
-        inward_unloading_supervisor_name: editData.inward_unloading_supervisor_name || '',
-        inward_remarks: editData.inward_remarks || ''
+        outward_loading_duration_hours: editData.outward_loading_duration_hours || '1',
+        outward_loading_duration_mins: editData.outward_loading_duration_mins || '0',
+        outward_loading_end_time: editData.outward_loading_end_time || '12:30',
+        outward_pallets_in_qty: editData.outward_pallets_in_qty || '',
+        outward_invoice_qty: editData.outward_invoice_qty || '',
+        outward_received_qty: editData.outward_received_qty || '',
+        outward_received_boxes_qty: editData.outward_received_boxes_qty || '',
+        outward_short_received_boxes_qty: editData.outward_short_received_boxes_qty || 0,
+        outward_excess_received_boxes_qty: editData.outward_excess_received_boxes_qty || 0,
+        outward_damage_received_boxes_qty: editData.outward_damage_received_boxes_qty || '',
+        outward_material_type: editData.outward_material_type || 'Frozen',
+        outward_loading_supervisor_name: editData.outward_loading_supervisor_name || '',
+        outward_remarks: editData.outward_remarks || ''
       });
-      if (editData.inward_driver_no) {
-        const parts = editData.inward_driver_no.split(' ');
+      if (editData.outward_driver_no) {
+        const parts = editData.outward_driver_no.split(' ');
         if (parts.length > 1) {
           setDriverCountryCode(parts[0]);
         }
@@ -141,16 +141,16 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         if (!path) return null;
         return path.startsWith('data:image') ? path : `/${path}`;
       };
-      setInvoicePreview(getImgUrl(editData.inward_invoice_photos));
-      setPodPreview(getImgUrl(editData.inward_pod_photo));
-      setSealPreview(getImgUrl(editData.inward_vehicle_seal_photo));
-      setVehicleTempPreview(getImgUrl(editData.inward_vehicle_temp_photo));
-      setMaterialTempPreview(getImgUrl(editData.inward_material_temp_photo));
-      setVehicleBackPreview(getImgUrl(editData.inward_vehicle_back_side_photo));
-      setVehicleBackWithMaterialPreview(getImgUrl(editData.inward_vehicle_back_side_photo_with_material));
-      setCountSheetPreview(getImgUrl(editData.inward_count_sheet_photo));
-      if (editData.inward_damage_boxes_photo) {
-        setDamagePreviews(editData.inward_damage_boxes_photo.split(',').map(getImgUrl));
+      setInvoicePreview(getImgUrl(editData.outward_invoice_photos));
+      setPodPreview(getImgUrl(editData.outward_pod_photo));
+      setSealPreview(getImgUrl(editData.outward_vehicle_seal_photo));
+      setVehicleTempPreview(getImgUrl(editData.outward_vehicle_temp_photo));
+      setMaterialTempPreview(getImgUrl(editData.outward_material_temp_photo));
+      setVehicleBackPreview(getImgUrl(editData.outward_vehicle_back_side_photo));
+      setVehicleBackWithMaterialPreview(getImgUrl(editData.outward_vehicle_back_side_photo_with_material));
+      setCountSheetPreview(getImgUrl(editData.outward_count_sheet_photo));
+      if (editData.outward_damage_boxes_photo) {
+        setDamagePreviews(editData.outward_damage_boxes_photo.split(',').map(getImgUrl));
       } else {
         setDamagePreviews([]);
       }
@@ -159,24 +159,24 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
   // Update auto-calculated boxes quantity
   useEffect(() => {
-    const inv = parseInt(formData.inward_invoice_qty) || 0;
-    const rec = parseInt(formData.inward_received_qty) || 0;
+    const inv = parseInt(formData.outward_invoice_qty) || 0;
+    const rec = parseInt(formData.outward_received_qty) || 0;
 
     setFormData(prev => ({
       ...prev,
-      inward_short_received_boxes_qty: inv > rec ? inv - rec : 0,
-      inward_excess_received_boxes_qty: rec > inv ? rec - inv : 0
+      outward_short_received_boxes_qty: inv > rec ? inv - rec : 0,
+      outward_excess_received_boxes_qty: rec > inv ? rec - inv : 0
     }));
-  }, [formData.inward_invoice_qty, formData.inward_received_qty]);
+  }, [formData.outward_invoice_qty, formData.outward_received_qty]);
 
   // Reset damage photo files if damage quantity is reset to 0
   useEffect(() => {
-    const damageQty = parseInt(formData.inward_damage_received_boxes_qty) || 0;
+    const damageQty = parseInt(formData.outward_damage_received_boxes_qty) || 0;
     if (damageQty === 0) {
       setDamagePhotos([]);
       setDamagePreviews([]);
     }
-  }, [formData.inward_damage_received_boxes_qty]);
+  }, [formData.outward_damage_received_boxes_qty]);
 
   const calculateEndDateTime = (dateStr, timeStr, durationMinutes) => {
     if (!dateStr || !timeStr || isNaN(durationMinutes)) return '';
@@ -200,22 +200,22 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     return `${endDate}-${endMonth}-${endYear} ${endHours}:${endMinutes}`;
   };
 
-  // Update unloading end times dynamically based on unloading start time and duration
+  // Update loading end times dynamically based on loading start time and duration
   useEffect(() => {
-    const hours = parseInt(formData.inward_unloading_duration_hours) || 0;
-    const mins = parseInt(formData.inward_unloading_duration_mins) || 0;
+    const hours = parseInt(formData.outward_loading_duration_hours) || 0;
+    const mins = parseInt(formData.outward_loading_duration_mins) || 0;
     const totalMinutes = hours * 60 + mins;
 
-    const unloadingStartTime = formData.inward_unloading_start_time || '11:30';
-    const entryDate = formData.inward_entry_date || todayStr;
+    const loadingStartTime = formData.outward_loading_start_time || '11:30';
+    const entryDate = formData.outward_entry_date || todayStr;
 
-    const endDateTimeStr = calculateEndDateTime(entryDate, unloadingStartTime, totalMinutes);
+    const endDateTimeStr = calculateEndDateTime(entryDate, loadingStartTime, totalMinutes);
 
     setFormData(prev => ({
       ...prev,
-      inward_unloading_end_time: endDateTimeStr
+      outward_loading_end_time: endDateTimeStr
     }));
-  }, [formData.inward_entry_date, formData.inward_unloading_start_time, formData.inward_unloading_duration_hours, formData.inward_unloading_duration_mins]);
+  }, [formData.outward_entry_date, formData.outward_loading_start_time, formData.outward_loading_duration_hours, formData.outward_loading_duration_mins]);
 
   // Client-Side Canvas Image Compressor
   const compressImageFile = (file) => {
@@ -267,7 +267,6 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   };
 
   // Image Selection Handlers
-
   const handleMultipleDamageChange = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
@@ -303,7 +302,6 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     setDamagePreviews(prev => [...prev, ...previewList]);
     setCompressing(false);
 
-    // Clear input value so selecting files repeatedly triggers onChange
     e.target.value = '';
   };
 
@@ -313,7 +311,6 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
     setCompressing(true);
 
-    // Parse EXIF DateTimeOriginal before compression strips it
     let originalCaptureDate = null;
     try {
       const exif = await exifr.parse(file);
@@ -336,15 +333,13 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     setPreview(res.previewUrl);
     setCompressing(false);
 
-    // Clear input value so selecting files repeatedly triggers onChange
     e.target.value = '';
   };
 
-  // Variance calculator (Unloading End Time vs Vehicle Temp Photo capture)
+  // Variance calculator (Loading End Time vs Vehicle Temp Photo capture)
   const calculateVariance = (endDateTimeStr, captureDate) => {
     try {
       if (!endDateTimeStr || !captureDate) return 0;
-      // endDateTimeStr is "DD-MM-YYYY HH:MM"
       const [datePart, timePart] = endDateTimeStr.split(' ');
       const [day, month, year] = datePart.split('-').map(Number);
       const [hours, minutes] = timePart.split(':').map(Number);
@@ -361,7 +356,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   const handleFormSubmit = async (e) => {
     e.preventDefault();
 
-    const required = ['inward_entry_date', 'inward_vehicle_no', 'inward_client_name'];
+    const required = ['outward_entry_date', 'outward_vehicle_no', 'outward_client_name'];
     const missing = required.filter(f => !formData[f] || !formData[f].toString().trim());
 
     if (missing.length > 0) {
@@ -369,8 +364,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       return;
     }
 
-    if (formData.inward_driver_no) {
-      const digits = formData.inward_driver_no.replace(/\D/g, '');
+    if (formData.outward_driver_no) {
+      const digits = formData.outward_driver_no.replace(/\D/g, '');
       const expectedDigits = (driverCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverCountryCode) ? 9 : (driverCountryCode === '+65' ? 8 : 10));
       if (digits.length < expectedDigits) {
         alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${driverCountryCode}.`);
@@ -381,7 +376,6 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     let captureDate = new Date();
     let photoDateStr = todayStr;
 
-    // Choose the first available uploaded photo as the inspection reference
     const refPhoto = vehicleTempPhoto || materialTempPhoto || podPhoto || sealPhoto || vehicleBackPhoto || vehicleBackWithMaterialPhoto || countSheetPhoto || invoicePhoto || damagePhotos[0];
 
     if (refPhoto) {
@@ -399,7 +393,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     const formattedCapture = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
     const photoTimeStr = `${hh}:${min}`;
 
-    const variance = calculateVariance(formData.inward_unloading_end_time, captureDate);
+    const variance = calculateVariance(formData.outward_loading_end_time, captureDate);
 
     setVerificationData({
       photo_capture_time_str: formattedCapture,
@@ -415,38 +409,38 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
     const submissionData = new FormData();
     Object.keys(formData).forEach(key => {
-      if (key === 'inward_driver_no') {
-        const fullPhone = formData.inward_driver_no ? `${driverCountryCode} ${formData.inward_driver_no}` : '';
-        submissionData.append('inward_driver_no', fullPhone);
+      if (key === 'outward_driver_no') {
+        const fullPhone = formData.outward_driver_no ? `${driverCountryCode} ${formData.outward_driver_no}` : '';
+        submissionData.append('outward_driver_no', fullPhone);
       } else {
         submissionData.append(key, formData[key]);
       }
     });
 
-    if (invoicePhoto) submissionData.append('inward_invoice_photos', invoicePhoto);
-    if (podPhoto) submissionData.append('inward_pod_photo', podPhoto);
-    if (sealPhoto) submissionData.append('inward_vehicle_seal_photo', sealPhoto);
-    if (vehicleTempPhoto) submissionData.append('inward_vehicle_temp_photo', vehicleTempPhoto);
-    if (materialTempPhoto) submissionData.append('inward_material_temp_photo', materialTempPhoto);
-    if (vehicleBackPhoto) submissionData.append('inward_vehicle_back_side_photo', vehicleBackPhoto);
-    if (vehicleBackWithMaterialPhoto) submissionData.append('inward_vehicle_back_side_photo_with_material', vehicleBackWithMaterialPhoto);
-    if (countSheetPhoto) submissionData.append('inward_count_sheet_photo', countSheetPhoto);
+    if (invoicePhoto) submissionData.append('outward_invoice_photos', invoicePhoto);
+    if (podPhoto) submissionData.append('outward_pod_photo', podPhoto);
+    if (sealPhoto) submissionData.append('outward_vehicle_seal_photo', sealPhoto);
+    if (vehicleTempPhoto) submissionData.append('outward_vehicle_temp_photo', vehicleTempPhoto);
+    if (materialTempPhoto) submissionData.append('outward_material_temp_photo', materialTempPhoto);
+    if (vehicleBackPhoto) submissionData.append('outward_vehicle_back_side_photo', vehicleBackPhoto);
+    if (vehicleBackWithMaterialPhoto) submissionData.append('outward_vehicle_back_side_photo_with_material', vehicleBackWithMaterialPhoto);
+    if (countSheetPhoto) submissionData.append('outward_count_sheet_photo', countSheetPhoto);
 
     damagePhotos.forEach(file => {
-      submissionData.append('inward_damage_boxes_photo', file);
+      submissionData.append('outward_damage_boxes_photo', file);
     });
 
     let res;
     if (editData) {
-      res = await updateInwardLog(editData.inward_id, submissionData);
+      res = await updateOutwardLog(editData.outward_id, submissionData);
     } else {
-      res = await addInwardLog(submissionData);
+      res = await addOutwardLog(submissionData);
     }
     setSubmitting(false);
     setVerificationData(null);
 
-     if (res) {
-      setSuccessMsg(editData ? 'Inward record updated successfully' : 'Inward temperature saved successfully');
+    if (res) {
+      setSuccessMsg(editData ? 'Outward record updated successfully' : 'Outward temperature saved successfully');
       if (editData && setEditData) setEditData(null);
       loadLogs();
       if (editData && setActiveDOMenu) {
@@ -456,31 +450,31 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       // Reset State
       setDriverCountryCode('+91');
       setFormData({
-        inward_entry_date: todayStr,
-        inward_vehicle_no: '',
-        inward_seal_no: '',
-        inward_vehicle_temp: '',
-        inward_material_temp: '',
-        inward_transporter_name: '',
-        inward_driver_name: '',
-        inward_driver_no: '',
-        inward_client_name: '',
-        inward_dock_no: '',
-        inward_vehicle_reporting_time: '11:00',
-        inward_unloading_start_time: '11:30',
-        inward_unloading_duration_hours: '1',
-        inward_unloading_duration_mins: '0',
-        inward_unloading_end_time: '12:30',
-        inward_pallets_in_qty: '',
-        inward_invoice_qty: '',
-        inward_received_qty: '',
-        inward_received_boxes_qty: '',
-        inward_short_received_boxes_qty: 0,
-        inward_excess_received_boxes_qty: 0,
-        inward_damage_received_boxes_qty: '',
-        inward_material_type: 'Frozen',
-        inward_unloading_supervisor_name: '',
-        inward_remarks: ''
+        outward_entry_date: todayStr,
+        outward_vehicle_no: '',
+        outward_seal_no: '',
+        outward_vehicle_temp: '',
+        outward_material_temp: '',
+        outward_transporter_name: '',
+        outward_driver_name: '',
+        outward_driver_no: '',
+        outward_client_name: '',
+        outward_dock_no: '',
+        outward_vehicle_reporting_time: '11:00',
+        outward_loading_start_time: '11:30',
+        outward_loading_duration_hours: '1',
+        outward_loading_duration_mins: '0',
+        outward_loading_end_time: '12:30',
+        outward_pallets_in_qty: '',
+        outward_invoice_qty: '',
+        outward_received_qty: '',
+        outward_received_boxes_qty: '',
+        outward_short_received_boxes_qty: 0,
+        outward_excess_received_boxes_qty: 0,
+        outward_damage_received_boxes_qty: '',
+        outward_material_type: 'Frozen',
+        outward_loading_supervisor_name: '',
+        outward_remarks: ''
       });
       setInvoicePhoto(null);
       setInvoicePreview(null);
@@ -506,8 +500,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   };
 
   const handleDeleteRecord = async (id) => {
-    if (window.confirm('Are you sure you want to delete this Inward record?')) {
-      await deleteInwardLog(id);
+    if (window.confirm('Are you sure you want to delete this Outward record?')) {
+      await deleteOutwardLog(id);
       loadLogs();
     }
   };
@@ -515,8 +509,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   const handleInputChange = (e) => {
     let { name, value } = e.target;
 
-    // 1. Vehicle Number (uppercase and auto hyphen formatting like MP-04-ZD-1990)
-    if (name === 'inward_vehicle_no') {
+    // 1. Vehicle Number
+    if (name === 'outward_vehicle_no') {
       const raw = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10);
       let formatted = '';
       if (raw.length <= 2) {
@@ -530,26 +524,26 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       }
       value = formatted;
     }
-    // 2. Seal Number (uppercase only)
-    else if (name === 'inward_seal_no') {
+    // 2. Seal Number
+    else if (name === 'outward_seal_no') {
       value = value.toUpperCase();
     }
-    // 3. Phone number (Allow only digits, restrict length dynamically)
-    else if (name === 'inward_driver_no') {
+    // 3. Phone number
+    else if (name === 'outward_driver_no') {
       const digits = value.replace(/\D/g, '');
       const maxDigits = (driverCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverCountryCode) ? 9 : (driverCountryCode === '+65' ? 8 : 10));
       value = digits.slice(0, maxDigits);
     }
-    // 4. Integer fields (Pallets, Boxes, Quantities)
-    else if (['inward_pallets_in_qty', 'inward_invoice_qty', 'inward_received_qty', 'inward_damage_received_boxes_qty'].includes(name)) {
+    // 4. Integer fields
+    else if (['outward_pallets_in_qty', 'outward_invoice_qty', 'outward_received_qty', 'outward_damage_received_boxes_qty'].includes(name)) {
       value = value.replace(/\D/g, '');
     }
-    // 4b. Duration fields (with 60-mins rollover validation)
-    else if (name === 'inward_unloading_duration_hours') {
+    // 4b. Duration fields
+    else if (name === 'outward_loading_duration_hours') {
       value = value.replace(/\D/g, '');
       if (parseInt(value) > 24) value = '24';
     }
-    else if (name === 'inward_unloading_duration_mins') {
+    else if (name === 'outward_loading_duration_mins') {
       value = value.replace(/\D/g, '');
       const minsNum = parseInt(value) || 0;
       if (minsNum >= 60) {
@@ -557,34 +551,31 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         const remMins = minsNum % 60;
 
         setFormData(prev => {
-          const currentHours = parseInt(prev.inward_unloading_duration_hours) || 0;
+          const currentHours = parseInt(prev.outward_loading_duration_hours) || 0;
           const newHours = Math.min(currentHours + extraHours, 24);
           return {
             ...prev,
-            inward_unloading_duration_hours: newHours.toString(),
-            inward_unloading_duration_mins: remMins.toString()
+            outward_loading_duration_hours: newHours.toString(),
+            outward_loading_duration_mins: remMins.toString()
           };
         });
         return;
       }
     }
-    // 5. Float/Decimal fields (Temperatures)
-    else if (['inward_vehicle_temp', 'inward_material_temp'].includes(name)) {
-      // Allow only digits, dot, and minus sign
+    // 5. Float/Decimal fields
+    else if (['outward_vehicle_temp', 'outward_material_temp'].includes(name)) {
       let clean = value.replace(/[^\d\.\-]/g, '');
-      // Ensure minus sign only at start
       if (clean.includes('-')) {
         const parts = clean.split('-');
         clean = (clean.startsWith('-') ? '-' : '') + parts.join('');
       }
-      // Ensure only single dot
       if (clean.includes('.')) {
         const parts = clean.split('.');
         clean = parts[0] + '.' + parts.slice(1).join('');
       }
       value = clean;
     }
-    // 6. Text-only Name fields (no numbers or punctuation except dot and dash)
+    // 6. Text-only Name fields
     else if (name.toLowerCase().includes('name')) {
       value = value.replace(/[^a-zA-Z\s\.\-]/g, '');
     }
@@ -598,11 +589,11 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       <div className="do-header-banner">
         <div className="do-header-left">
           <h2>
-            <ArrowDownLeft size={26} color="#00a2e8" />
-            <span>DO Inward Temperature Monitor</span>
+            <ArrowUpRight size={26} color="#00a2e8" />
+            <span>DO Outward Temperature Monitor</span>
           </h2>
           <p>
-            Verify and record vehicle arrivals, pallet counts, cargo temperature checks, and multiple invoice documents.
+            Verify and record vehicle departures, loaded pallet counts, cargo temperature checks, and multiple invoice documents.
           </p>
         </div>
       </div>
@@ -614,42 +605,42 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         </div>
       )}
 
-      {/* Main Single Card Form exactly like DO Daily Temp Monitor */}
+      {/* Main Single Card Form */}
       <div className="inward-form-card direct-form-card">
         {editData && (
           <div className="editing-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fffbeb', border: '1px solid #fef3c7', padding: '10px 16px', borderRadius: 'var(--radius-sm)', marginBottom: '12px' }}>
-            <span style={{ color: '#b45309', fontWeight: 700 }}>⚠️ Editing Inward Record: {editData.inward_vehicle_no} ({editData.inward_entry_date ? editData.inward_entry_date.split('T')[0] : ''})</span>
+            <span style={{ color: '#b45309', fontWeight: 700 }}>⚠️ Editing Outward Record: {editData.outward_vehicle_no} ({editData.outward_entry_date ? editData.outward_entry_date.split('T')[0] : ''})</span>
             <button 
               type="button" 
               className="btn-cancel-edit" 
               onClick={() => {
                 setEditData(null);
                 setFormData({
-                  inward_entry_date: todayStr,
-                  inward_vehicle_no: '',
-                  inward_seal_no: '',
-                  inward_vehicle_temp: '',
-                  inward_material_temp: '',
-                  inward_transporter_name: '',
-                  inward_driver_name: '',
-                  inward_driver_no: '',
-                  inward_client_name: '',
-                  inward_dock_no: '',
-                  inward_vehicle_reporting_time: '11:00',
-                  inward_unloading_start_time: '11:30',
-                  inward_unloading_duration_hours: '1',
-                  inward_unloading_duration_mins: '0',
-                  inward_unloading_end_time: '12:30',
-                  inward_pallets_in_qty: '',
-                  inward_invoice_qty: '',
-                  inward_received_qty: '',
-                  inward_received_boxes_qty: '',
-                  inward_short_received_boxes_qty: 0,
-                  inward_excess_received_boxes_qty: 0,
-                  inward_damage_received_boxes_qty: '',
-                  inward_material_type: 'Frozen',
-                  inward_unloading_supervisor_name: '',
-                  inward_remarks: ''
+                  outward_entry_date: todayStr,
+                  outward_vehicle_no: '',
+                  outward_seal_no: '',
+                  outward_vehicle_temp: '',
+                  outward_material_temp: '',
+                  outward_transporter_name: '',
+                  outward_driver_name: '',
+                  outward_driver_no: '',
+                  outward_client_name: '',
+                  outward_dock_no: '',
+                  outward_vehicle_reporting_time: '11:00',
+                  outward_loading_start_time: '11:30',
+                  outward_loading_duration_hours: '1',
+                  outward_loading_duration_mins: '0',
+                  outward_loading_end_time: '12:30',
+                  outward_pallets_in_qty: '',
+                  outward_invoice_qty: '',
+                  outward_received_qty: '',
+                  outward_received_boxes_qty: '',
+                  outward_short_received_boxes_qty: 0,
+                  outward_excess_received_boxes_qty: 0,
+                  outward_damage_received_boxes_qty: '',
+                  outward_material_type: 'Frozen',
+                  outward_loading_supervisor_name: '',
+                  outward_remarks: ''
                 });
                 setDriverCountryCode('+91');
                 setInvoicePhoto(null);
@@ -680,25 +671,25 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         <div className="direct-form-header">
           <h3>
             <PlusCircle size={18} color="#00a2e8" />
-            <span>{editData ? 'Edit Inward Record' : 'Add New Inward Record'}</span>
+            <span>{editData ? 'Edit Outward Record' : 'Add New Outward Record'}</span>
           </h3>
         </div>
 
         <form className="inward-entry-form" onSubmit={handleFormSubmit}>
           <div className="form-cards-grid">
 
-            {/* Section 1: Basic Inward Info */}
+            {/* Section 1: Basic Outward Info */}
             <div className="form-section-box">
               <h5 className="section-box-title">
-                <Calendar size={15} /> 1. Basic Inward Info
+                <Calendar size={15} /> 1. Basic Outward Info
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
                   <label>Entry Date *</label>
                   <input
                     type="date"
-                    name="inward_entry_date"
-                    value={formData.inward_entry_date}
+                    name="outward_entry_date"
+                    value={formData.outward_entry_date}
                     onChange={handleInputChange}
                     required
                   />
@@ -708,8 +699,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Client Name *</label>
                   <input
                     type="text"
-                    name="inward_client_name"
-                    value={formData.inward_client_name}
+                    name="outward_client_name"
+                    value={formData.outward_client_name}
                     onChange={handleInputChange}
                     placeholder="e.g. ColdStore Logistics"
                     required
@@ -720,8 +711,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Dock No.</label>
                   <input
                     type="text"
-                    name="inward_dock_no"
-                    value={formData.inward_dock_no}
+                    name="outward_dock_no"
+                    value={formData.outward_dock_no}
                     onChange={handleInputChange}
                     placeholder="e.g. Dock-1"
                   />
@@ -733,21 +724,21 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                     <div className="input-with-reset">
                       <input
                         type="text"
-                        name="inward_material_type"
-                        value={formData.inward_material_type}
+                        name="outward_material_type"
+                        value={formData.outward_material_type}
                         onChange={handleInputChange}
                         placeholder="Enter Material Type"
                       />
-                      <button type="button" className="field-reset-btn" onClick={() => { setIsMaterialCustom(false); setFormData(p => ({ ...p, inward_material_type: 'Frozen' })); }}>Select</button>
+                      <button type="button" className="field-reset-btn" onClick={() => { setIsMaterialCustom(false); setFormData(p => ({ ...p, outward_material_type: 'Frozen' })); }}>Select</button>
                     </div>
                   ) : (
                     <select
-                      name="inward_material_type"
-                      value={formData.inward_material_type}
+                      name="outward_material_type"
+                      value={formData.outward_material_type}
                       onChange={(e) => {
                         if (e.target.value === 'other') {
                           setIsMaterialCustom(true);
-                          setFormData(p => ({ ...p, inward_material_type: '' }));
+                          setFormData(p => ({ ...p, outward_material_type: '' }));
                         } else {
                           handleInputChange(e);
                         }
@@ -773,8 +764,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Vehicle No. *</label>
                   <input
                     type="text"
-                    name="inward_vehicle_no"
-                    value={formData.inward_vehicle_no}
+                    name="outward_vehicle_no"
+                    value={formData.outward_vehicle_no}
                     onChange={handleInputChange}
                     placeholder="e.g. MH-12-QW-1234"
                     required
@@ -785,8 +776,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Seal No.</label>
                   <input
                     type="text"
-                    name="inward_seal_no"
-                    value={formData.inward_seal_no}
+                    name="outward_seal_no"
+                    value={formData.outward_seal_no}
                     onChange={handleInputChange}
                     placeholder="e.g. SL-998822"
                   />
@@ -796,8 +787,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Transporter Name</label>
                   <input
                     type="text"
-                    name="inward_transporter_name"
-                    value={formData.inward_transporter_name}
+                    name="outward_transporter_name"
+                    value={formData.outward_transporter_name}
                     onChange={handleInputChange}
                     placeholder="e.g. BlueDart Express"
                   />
@@ -815,8 +806,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Driver Name</label>
                   <input
                     type="text"
-                    name="inward_driver_name"
-                    value={formData.inward_driver_name}
+                    name="outward_driver_name"
+                    value={formData.outward_driver_name}
                     onChange={handleInputChange}
                     placeholder="e.g. Rajesh kumar"
                   />
@@ -832,7 +823,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                         const maxDigits = (newCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(newCode) ? 9 : (newCode === '+65' ? 8 : 10));
                         setFormData(prev => ({
                           ...prev,
-                          inward_driver_no: (prev.inward_driver_no || '').replace(/\D/g, '').slice(0, maxDigits)
+                          outward_driver_no: (prev.outward_driver_no || '').replace(/\D/g, '').slice(0, maxDigits)
                         }));
                       }}
                       style={{ width: '90px', padding: '8px 4px', fontSize: '0.85rem', border: '1px solid #ccc', borderRadius: '4px', background: 'var(--surface)' }}
@@ -850,8 +841,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                     </select>
                     <input
                       type="text"
-                      name="inward_driver_no"
-                      value={formData.inward_driver_no}
+                      name="outward_driver_no"
+                      value={formData.outward_driver_no}
                       onChange={handleInputChange}
                       placeholder="98765 43210"
                       style={{ flex: 1 }}
@@ -862,28 +853,28 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Vehicle Reporting Time</label>
                   <input
                     type="time"
-                    name="inward_vehicle_reporting_time"
-                    value={formData.inward_vehicle_reporting_time}
+                    name="outward_vehicle_reporting_time"
+                    value={formData.outward_vehicle_reporting_time}
                     onChange={handleInputChange}
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Unloading Start Time</label>
+                  <label>Loading Start Time</label>
                   <input
                     type="time"
-                    name="inward_unloading_start_time"
-                    value={formData.inward_unloading_start_time}
+                    name="outward_loading_start_time"
+                    value={formData.outward_loading_start_time}
                     onChange={handleInputChange}
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Unloading Duration</label>
+                  <label>Loading Duration</label>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     <input
                       type="text"
                       inputMode="numeric"
-                      name="inward_unloading_duration_hours"
-                      value={formData.inward_unloading_duration_hours}
+                      name="outward_loading_duration_hours"
+                      value={formData.outward_loading_duration_hours}
                       onChange={handleInputChange}
                       placeholder="Hrs"
                       style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
@@ -892,8 +883,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                     <input
                       type="text"
                       inputMode="numeric"
-                      name="inward_unloading_duration_mins"
-                      value={formData.inward_unloading_duration_mins}
+                      name="outward_loading_duration_mins"
+                      value={formData.outward_loading_duration_mins}
                       onChange={handleInputChange}
                       placeholder="Mins"
                       style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
@@ -902,11 +893,11 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   </div>
                 </div>
                 <div className="inward-form-group">
-                  <label>Unloading End Time (Auto)</label>
+                  <label>Loading End Time (Auto)</label>
                   <input
                     type="text"
-                    name="inward_unloading_end_time"
-                    value={formData.inward_unloading_end_time}
+                    name="outward_loading_end_time"
+                    value={formData.outward_loading_end_time}
                     readOnly
                     className="readonly-field"
                     style={{ background: 'var(--surface-overlay, #f5f5f5)', cursor: 'not-allowed' }}
@@ -922,23 +913,23 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Inward Vehicle Temp. (°C)</label>
+                  <label>Outward Vehicle Temp. (°C)</label>
                   <input
                     type="text"
                     inputMode="decimal"
-                    name="inward_vehicle_temp"
-                    value={formData.inward_vehicle_temp}
+                    name="outward_vehicle_temp"
+                    value={formData.outward_vehicle_temp}
                     onChange={handleInputChange}
                     placeholder="-18.5"
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Inward Material Temp. (°C)</label>
+                  <label>Outward Material Temp. (°C)</label>
                   <input
                     type="text"
                     inputMode="decimal"
-                    name="inward_material_temp"
-                    value={formData.inward_material_temp}
+                    name="outward_material_temp"
+                    value={formData.outward_material_temp}
                     onChange={handleInputChange}
                     placeholder="-20.2"
                   />
@@ -953,12 +944,12 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Pallets In Qty</label>
+                  <label>Pallets Out Qty</label>
                   <input
                     type="text"
                     inputMode="numeric"
-                    name="inward_pallets_in_qty"
-                    value={formData.inward_pallets_in_qty}
+                    name="outward_pallets_in_qty"
+                    value={formData.outward_pallets_in_qty}
                     onChange={handleInputChange}
                     placeholder="0"
                   />
@@ -968,19 +959,19 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <input
                     type="text"
                     inputMode="numeric"
-                    name="inward_invoice_qty"
-                    value={formData.inward_invoice_qty}
+                    name="outward_invoice_qty"
+                    value={formData.outward_invoice_qty}
                     onChange={handleInputChange}
                     placeholder="0"
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Actual Received Qty</label>
+                  <label>Actual Loaded Qty</label>
                   <input
                     type="text"
                     inputMode="numeric"
-                    name="inward_received_qty"
-                    value={formData.inward_received_qty}
+                    name="outward_received_qty"
+                    value={formData.outward_received_qty}
                     onChange={handleInputChange}
                     placeholder="0"
                   />
@@ -990,8 +981,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <input
                     type="text"
                     inputMode="numeric"
-                    name="inward_damage_received_boxes_qty"
-                    value={formData.inward_damage_received_boxes_qty}
+                    name="outward_damage_received_boxes_qty"
+                    value={formData.outward_damage_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
                   />
@@ -1000,8 +991,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Short Qty (Auto)</label>
                   <input
                     type="text"
-                    name="inward_short_received_boxes_qty"
-                    value={formData.inward_short_received_boxes_qty}
+                    name="outward_short_received_boxes_qty"
+                    value={formData.outward_short_received_boxes_qty}
                     readOnly
                     className="readonly-field short"
                   />
@@ -1010,8 +1001,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   <label>Excess Qty (Auto)</label>
                   <input
                     type="text"
-                    name="inward_excess_received_boxes_qty"
-                    value={formData.inward_excess_received_boxes_qty}
+                    name="outward_excess_received_boxes_qty"
+                    value={formData.outward_excess_received_boxes_qty}
                     readOnly
                     className="readonly-field excess"
                   />
@@ -1026,11 +1017,11 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Unloading Supervisor Name</label>
+                  <label>Loading Supervisor Name</label>
                   <input
                     type="text"
-                    name="inward_unloading_supervisor_name"
-                    value={formData.inward_unloading_supervisor_name}
+                    name="outward_loading_supervisor_name"
+                    value={formData.outward_loading_supervisor_name}
                     onChange={handleInputChange}
                     placeholder="e.g. Sandeep V."
                   />
@@ -1038,10 +1029,10 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                 <div className="inward-form-group span-3">
                   <label>Remarks</label>
                   <textarea
-                    name="inward_remarks"
-                    value={formData.inward_remarks}
+                    name="outward_remarks"
+                    value={formData.outward_remarks}
                     onChange={handleInputChange}
-                    placeholder="Write inward monitoring notes..."
+                    placeholder="Write outward monitoring notes..."
                     rows="2"
                   />
                 </div>
@@ -1277,11 +1268,11 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
                 {/* Vehicle Temp Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Inward Vehicle Temp Photo</label>
+                  <label>Outward Vehicle Temp Photo</label>
                   {!vehicleTempPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
-                      <span>Choose Inward Vehicle Temp Photo</span>
+                      <span>Choose Outward Vehicle Temp Photo</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -1321,11 +1312,11 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
                 {/* Material Temp Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Inward Material Temp Photo</label>
+                  <label>Outward Material Temp Photo</label>
                   {!materialTempPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
-                      <span>Choose Inward Material Temp Photo</span>
+                      <span>Choose Outward Material Temp Photo</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -1363,13 +1354,13 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   )}
                 </div>
 
-                {/* Inward Count Sheet Photo Upload */}
+                {/* Count Sheet Photo Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Inward Count Sheet Photo</label>
+                  <label>Outward Count Sheet Photo</label>
                   {!countSheetPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
-                      <span>Choose Inward Count Sheet Photo</span>
+                      <span>Choose Outward Count Sheet Photo</span>
                       <input
                         type="file"
                         accept="image/*"
@@ -1411,8 +1402,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                 <div className="inward-form-group file-field">
                   <label>Damage Boxes Photos (Multiple allowed)</label>
                   <div
-                    className={`image-uploader-btn ${((parseInt(formData.inward_damage_received_boxes_qty) || 0) <= 0) ? 'disabled' : ''}`}
-                    style={((parseInt(formData.inward_damage_received_boxes_qty) || 0) <= 0) ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : {}}
+                    className={`image-uploader-btn ${((parseInt(formData.outward_damage_received_boxes_qty) || 0) <= 0) ? 'disabled' : ''}`}
+                    style={((parseInt(formData.outward_damage_received_boxes_qty) || 0) <= 0) ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : {}}
                   >
                     <Camera size={18} />
                     <span>Choose Damage Photos</span>
@@ -1421,7 +1412,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                       multiple
                       accept="image/*"
                       onChange={handleMultipleDamageChange}
-                      disabled={((parseInt(formData.inward_damage_received_boxes_qty) || 0) <= 0)}
+                      disabled={((parseInt(formData.outward_damage_received_boxes_qty) || 0) <= 0)}
                     />
                   </div>
                   {damagePreviews.length > 0 && (
@@ -1463,7 +1454,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
               style={editData ? { background: 'linear-gradient(135deg, #f97316, #ea580c)', borderColor: '#ea580c', boxShadow: '0 4px 14px rgba(249, 115, 22, 0.35)' } : {}}
             >
               {submitting ? <Loader2 size={18} className="spinner-icon" /> : <Plus size={18} />}
-              <span>{submitting ? 'Saving...' : (editData ? 'Update Inward Record' : 'Add Inward Record')}</span>
+              <span>{submitting ? 'Saving...' : (editData ? 'Update Outward Record' : 'Add Outward Record')}</span>
             </button>
           </div>
 
@@ -1489,20 +1480,20 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
             <div className="direct-form-header">
               <h3 className="verify-title">
                 <CheckCircle size={20} color="#10b981" />
-                <span>Verify Inward Time Audit</span>
+                <span>Verify Outward Time Audit</span>
               </h3>
             </div>
 
             <div className="verification-content-wrapper-modal">
               <div className="verify-time-comparison-box">
-                <h4>Inward Punctuality Audit</h4>
+                <h4>Outward Punctuality Audit</h4>
 
                 <div className="comparison-row">
                   <div className="comp-item">
                     <span className="comp-label">Calculated End Time</span>
                     <div className="comp-val-dt">
-                      <span className="comp-date">{formData.inward_unloading_end_time.split(' ')[0]}</span>
-                      <span className="comp-time">{formData.inward_unloading_end_time.split(' ')[1]}</span>
+                      <span className="comp-date">{formData.outward_loading_end_time.split(' ')[0]}</span>
+                      <span className="comp-time">{formData.outward_loading_end_time.split(' ')[1]}</span>
                     </div>
                   </div>
                   <div className="comp-divider">⚡</div>
@@ -1525,18 +1516,18 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
                 {verificationData.time_variance_minutes <= 120 ? (
                   <div className="variance-success-banner">
-                    ✅ Audit Verified: Inspection photos recorded within the expected unloading window.
+                    ✅ Audit Verified: Inspection photos recorded within the expected loading window.
                   </div>
                 ) : (
                   <div className="variance-alert-banner">
-                    ⚠️ Audit Alert: Inspection photos recorded outside the expected unloading window.
+                    ⚠️ Audit Alert: Inspection photos recorded outside the expected loading window.
                   </div>
                 )}
 
                 {/* Show Date Discrepancy Alert */}
-                {verificationData.photo_date_str !== formData.inward_unloading_end_time.split(' ')[0] && (
+                {verificationData.photo_date_str !== formData.outward_loading_end_time.split(' ')[0] && (
                   <div className="variance-alert-banner" style={{ marginTop: '8px', border: '1.5px solid #ef4444', color: '#b91c1c', backgroundColor: '#fef2f2' }}>
-                    ⚠️ Date Alert: Inspection Photo captured on {verificationData.photo_date_str}, but unloading end date is calculated as {formData.inward_unloading_end_time.split(' ')[0]}!
+                    ⚠️ Date Alert: Inspection Photo captured on {verificationData.photo_date_str}, but loading end date is calculated as {formData.outward_loading_end_time.split(' ')[0]}!
                   </div>
                 )}
               </div>

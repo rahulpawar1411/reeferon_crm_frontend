@@ -6,10 +6,6 @@
 // ====================================================================
 
 import React, { useState, useEffect } from 'react';
-import Header from './components/Header/Header';
-import Sidebar from './components/Sidebar/Sidebar';
-
-// Landing Portal Entry
 import PortalEntry from './pages/PortalEntry/PortalEntry';
 
 // DO Window Components
@@ -17,41 +13,72 @@ import DOHeader from './components/DOHeader/DOHeader';
 import DOSidebar from './components/DOSidebar/DOSidebar';
 import TempMonitor from './pages/TempMonitor/TempMonitor';
 import InwardMonitor from './pages/InwardMonitor/InwardMonitor';
-
-// Admin Pages
-import Dashboard from './pages/Dashboard/Dashboard';
-import Leads from './pages/Leads/Leads';
-import AddLead from './pages/AddLead/AddLead';
-import LeadDetails from './pages/LeadDetails/LeadDetails';
-import Settings from './pages/Settings/Settings';
+import OutwardMonitor from './pages/OutwardMonitor/OutwardMonitor';
+import DOHistoryView from './pages/DOHistoryView/DOHistoryView';
+import AddTempModal from './components/AddTempModal/AddTempModal';
+import Login from './pages/Login/Login';
+import SuperAdminSecureWindow from './pages/SuperAdminSecureWindow/SuperAdminSecureWindow';
+import SubAdminWindow from './pages/SubAdminWindow/SubAdminWindow';
 
 import './App.css'; // Paired CSS file
 
 export default function App() {
+  const [user, setUser] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('user')) || null;
+    } catch (e) {
+      return null;
+    }
+  });
+
   const getWindowFromURL = () => {
+    if (user && user.role === 'do_operator') return 'do_window';
     const path = window.location.pathname.toLowerCase();
     if (path.includes('do-operator') || path.includes('do')) return 'do_window';
     if (path.includes('admin')) return 'super_admin';
-    return 'do_window'; // Defaults to DO Operator Window!
+    return 'portal_entry'; // Defaults to Portal Selection Entry!
   };
 
   const [selectedWindow, setSelectedWindow] = useState(getWindowFromURL());
   const [activeDOMenu, setActiveDOMenu] = useState(() => {
     return localStorage.getItem('activeDOMenu') || 'All';
   });
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [selectedLead, setSelectedLead] = useState(null);
+
+  const [editInwardData, setEditInwardData] = useState(null);
+  const [editOutwardData, setEditOutwardData] = useState(null);
+  const [editDailyData, setEditDailyData] = useState(null);
+
+  // Sync role constraints dynamically
+  useEffect(() => {
+    if (user && user.role === 'do_operator' && selectedWindow !== 'do_window') {
+      setSelectedWindow('do_window');
+      window.history.pushState({}, '', '/do-operator');
+    }
+  }, [user, selectedWindow]);
 
   useEffect(() => {
     localStorage.setItem('activeDOMenu', activeDOMenu);
   }, [activeDOMenu]);
 
   const navigateToWindow = (win) => {
+    if (user && user.role === 'do_operator' && win !== 'do_window') return;
     setSelectedWindow(win);
     let targetPath = '/';
     if (win === 'do_window') targetPath = '/do-operator';
     if (win === 'super_admin') targetPath = '/admin';
     window.history.pushState({}, '', targetPath);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST' });
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+    localStorage.removeItem('user');
+    setUser(null);
+    setSelectedWindow('portal_entry');
+    window.history.pushState({}, '', '/');
   };
 
   useEffect(() => {
@@ -60,13 +87,14 @@ export default function App() {
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [user]);
 
   // Dynamic Titles for DO Window
   const getDOTitle = () => {
     switch (activeDOMenu) {
       case 'Inward': return 'DO Inward Temp Monitor';
       case 'Outward': return 'DO Outward Temp Monitor';
+      case 'History': return 'DO Temp Monitoring History';
       default: return 'DO Daily Temp Monitor';
     }
   };
@@ -83,8 +111,23 @@ export default function App() {
     }
   };
 
-  if (selectedWindow === 'portal') {
-    return <PortalEntry onSelectWindow={(win) => navigateToWindow(win)} />;
+  // Authentication Route Guard
+  if (!user) {
+    return <Login onLoginSuccess={(u) => setUser(u)} />;
+  }
+
+  // Super Admin Secure Area (Restricted to role: 'super_admin' only)
+  if (user.role === 'super_admin') {
+    return <SuperAdminSecureWindow user={user} onLogout={handleLogout} />;
+  }
+
+  if (selectedWindow === 'portal_entry') {
+    if (user.role === 'do_operator') {
+      setSelectedWindow('do_window');
+      window.history.pushState({}, '', '/do-operator');
+    } else {
+      return <PortalEntry onSelectWindow={(win) => navigateToWindow(win)} />;
+    }
   }
 
   return (
@@ -95,6 +138,7 @@ export default function App() {
           <DOSidebar 
             activeDOMenu={activeDOMenu}
             setActiveDOMenu={setActiveDOMenu}
+            onLogout={handleLogout}
           />
 
           <DOHeader 
@@ -105,74 +149,29 @@ export default function App() {
 
           <main className="app-viewport">
             {activeDOMenu === 'Inward' ? (
-              <InwardMonitor />
+              <InwardMonitor editData={editInwardData} setEditData={setEditInwardData} setActiveDOMenu={setActiveDOMenu} />
+            ) : activeDOMenu === 'Outward' ? (
+              <OutwardMonitor editData={editOutwardData} setEditData={setEditOutwardData} setActiveDOMenu={setActiveDOMenu} />
+            ) : activeDOMenu === 'History' ? (
+              <DOHistoryView 
+                setActiveDOMenu={setActiveDOMenu}
+                setEditInwardData={setEditInwardData}
+                setEditOutwardData={setEditOutwardData}
+                setEditDailyData={setEditDailyData}
+              />
             ) : (
               <TempMonitor 
                 forcedMenu={activeDOMenu}
                 onMenuChange={setActiveDOMenu}
+                editData={editDailyData}
+                setEditData={setEditDailyData}
               />
             )}
           </main>
         </>
       ) : (
-        /* URL: /admin -> DEDICATED SUPER ADMIN WINDOW */
-        <>
-          <Sidebar 
-            activeTab={activeTab} 
-            setActiveTab={(tab) => {
-              setSelectedLead(null);
-              setActiveTab(tab);
-            }} 
-          />
-
-          <Header 
-            title={getAdminTitle()} 
-            activeTab={activeTab}
-            setActiveTab={(tab) => {
-              setSelectedLead(null);
-              setActiveTab(tab);
-            }}
-          />
-
-          <main className="app-viewport">
-            {selectedLead ? (
-              <LeadDetails 
-                lead={selectedLead} 
-                onBack={() => setSelectedLead(null)} 
-                onLeadUpdated={() => setSelectedLead(null)}
-              />
-            ) : (
-              <>
-                {activeTab === 'dashboard' && (
-                  <Dashboard 
-                    setActiveTab={setActiveTab} 
-                    setSelectedLead={(lead) => setSelectedLead(lead)} 
-                  />
-                )}
-
-                {activeTab === 'leads' && (
-                  <Leads 
-                    setSelectedLead={(lead) => setSelectedLead(lead)} 
-                  />
-                )}
-
-                {activeTab === 'add-lead' && (
-                  <AddLead 
-                    setActiveTab={setActiveTab} 
-                  />
-                )}
-
-                {activeTab === 'temp-monitor' && (
-                  <TempMonitor />
-                )}
-
-                {activeTab === 'settings' && (
-                  <Settings />
-                )}
-              </>
-            )}
-          </main>
-        </>
+        /* URL: /admin -> DEDICATED SUB ADMIN WINDOW */
+        <SubAdminWindow user={user} onLogout={handleLogout} />
       )}
     </div>
   );

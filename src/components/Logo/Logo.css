@@ -1,110 +1,44 @@
 /* ====================================================================
    ReeferON Logo Component Styles (src/components/Logo/Logo.css)
-   Official ReeferON Cold Chain Branding
+   Official ReeferON Cold Chain Branding Image Layout
    ==================================================================== */
 
 .reeferon-logo-wrapper {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
   text-decoration: none;
   user-select: none;
+  width: 100%;
 }
 
-/* Logo Circular Power Icon */
-.logo-icon-dial {
-  position: relative;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  border: 3px solid #00a2e8; /* ReeferON Cyan Blue */
-  background: radial-gradient(circle, #ffffff 40%, #f0f9ff 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 10px rgba(0, 162, 232, 0.25);
-  flex-shrink: 0;
+.brand-logo-img {
+  height: 85px;
+  width: auto;
+  max-width: 100%;
+  display: block;
+  object-fit: contain;
+  transition: height 0.2s ease;
 }
 
-.logo-icon-dial::before {
-  content: '';
-  position: absolute;
-  top: -4px;
-  width: 8px;
-  height: 12px;
-  background-color: #84c225; /* ReeferON Fresh Green */
-  border-radius: 3px;
+/* Compact variant for headers */
+.reeferon-logo-wrapper.compact {
+  justify-content: flex-start;
+  width: auto;
 }
 
-.logo-r-badge {
-  width: 22px;
-  height: 22px;
-  background-color: #84c225;
-  color: #ffffff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 900;
-  font-size: 0.85rem;
-  letter-spacing: -0.5px;
+.reeferon-logo-wrapper.compact .brand-logo-img {
+  height: 38px;
 }
 
-.logo-text-block {
-  display: flex;
-  flex-direction: column;
+@media (max-width: 768px) {
+  .reeferon-logo-wrapper.compact .brand-logo-img {
+    height: 48px;
+  }
 }
 
-.brand-main-title {
-  display: flex;
-  align-items: baseline;
-  font-weight: 800;
-  font-size: 1.35rem;
-  line-height: 1;
-  letter-spacing: -0.5px;
-}
-
-.brand-reefer {
-  color: #00a2e8; /* Cyan */
-}
-
-.brand-on {
-  color: #0081ba;
-  font-weight: 900;
-}
-
-.brand-tagline {
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #84c225; /* Lime Green */
-  letter-spacing: 0.2px;
-  margin-top: 3px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.brand-tagline::after {
-  content: '😊';
-  font-size: 0.65rem;
-}
-
-/* Compact variant for smaller headers */
-.reeferon-logo-wrapper.compact .logo-icon-dial {
-  width: 34px;
-  height: 34px;
-}
-
-.reeferon-logo-wrapper.compact .logo-r-badge {
-  width: 18px;
-  height: 18px;
-  font-size: 0.72rem;
-}
-
-.reeferon-logo-wrapper.compact .brand-main-title {
-  font-size: 1.1rem;
-}
-
-.reeferon-logo-wrapper.compact .brand-tagline {
-  font-size: 0.6rem;
+@media (min-width: 768px) and (max-width: 1023px) {
+  .brand-logo-img {
+    height: 38px !important;
+  }
 }

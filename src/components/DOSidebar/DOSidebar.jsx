@@ -5,11 +5,11 @@
 // ====================================================================
 
 import React from 'react';
-import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus } from 'lucide-react';
+import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus, LogOut, History } from 'lucide-react';
 import Logo from '../Logo/Logo';
 import './DOSidebar.css'; // Paired CSS file
 
-export default function DOSidebar({ activeDOMenu, setActiveDOMenu, onOpenAddModal }) {
+export default function DOSidebar({ activeDOMenu, setActiveDOMenu, onLogout }) {
   return (
     <aside className="do-sidebar desktop-only">
       <div className="do-sidebar-top">
@@ -47,13 +47,17 @@ export default function DOSidebar({ activeDOMenu, setActiveDOMenu, onOpenAddModa
               <span>Outward Temp Monitor</span>
             </button>
           </li>
-        </ul>
 
-        {/* Quick Action Button for DO Window */}
-        <button className="do-add-btn" onClick={onOpenAddModal}>
-          <Plus size={18} />
-          <span>Log Thermal Entry</span>
-        </button>
+          <li>
+            <button 
+              className={`do-sidebar-link ${activeDOMenu === 'History' ? 'active' : ''}`}
+              onClick={() => setActiveDOMenu('History')}
+            >
+              <History size={19} />
+              <span>History Logs</span>
+            </button>
+          </li>
+        </ul>
       </div>
 
       {/* DO Profile Badge */}
@@ -64,6 +68,15 @@ export default function DOSidebar({ activeDOMenu, setActiveDOMenu, onOpenAddModa
             <strong>Rakesh (DO)</strong>
             <span>Data Operator</span>
           </div>
+          <button 
+            type="button"
+            className="sidebar-logout-btn" 
+            onClick={onLogout}
+            title="Log Out"
+            style={{ background: 'none', border: 'none', color: '#ef4444', padding: '6px', cursor: 'pointer', marginLeft: 'auto', display: 'flex', alignItems: 'center' }}
+          >
+            <LogOut size={16} />
+          </button>
         </div>
       </div>
     </aside>

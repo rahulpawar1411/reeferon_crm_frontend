@@ -26,7 +26,10 @@
 }
 
 .sidebar-logo-container {
-  padding-left: 8px;
+  padding-left: 0;
+  display: flex;
+  justify-content: center;
+  width: 100%;
 }
 
 .sidebar-nav-list {

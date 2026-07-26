@@ -3,7 +3,7 @@
    Clean 100% responsive layout matching the CRM design system theme.
    ==================================================================== */
 
-.inward-monitor-page {
+.temp-monitor-page.inward-monitor-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -14,12 +14,7 @@
   overflow-x: hidden; /* Prevent horizontal stretching content cut */
 }
 
-@media (min-width: 1024px) {
-  .inward-monitor-page {
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-}
+
 
 /* Header Banner Styling */
 .do-header-banner,
@@ -126,29 +121,17 @@
   margin: 0;
 }
 
-/* Horizontal 4-Column Grid */
 .inward-form-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px 12px;
   width: 100%;
   box-sizing: border-box;
-}
-
-@media (max-width: 1150px) {
-  .inward-form-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 480px) {
-  .inward-form-grid {
-    grid-template-columns: 1fr;
-  }
+  overflow: hidden;
 }
 
 .grid-divider {
-  grid-column: span 4;
+  grid-column: 1 / -1;
   font-size: 0.84rem;
   font-weight: 800;
   color: var(--primary);
@@ -158,18 +141,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-@media (max-width: 1150px) {
-  .grid-divider {
-    grid-column: span 2;
-  }
-}
-
-@media (max-width: 480px) {
-  .grid-divider {
-    grid-column: span 1;
-  }
 }
 
 .spacer-block {
@@ -189,22 +160,11 @@
   width: 100%;
   box-sizing: border-box;
   min-width: 0; /* Prevent flex/grid container layout expansion */
+  overflow: hidden;
 }
 
 .inward-form-group.span-3 {
-  grid-column: span 3;
-}
-
-@media (max-width: 1150px) {
-  .inward-form-group.span-3 {
-    grid-column: span 2;
-  }
-}
-
-@media (max-width: 480px) {
-  .inward-form-group.span-3 {
-    grid-column: span 1;
-  }
+  grid-column: 1 / -1;
 }
 
 .inward-form-group label {
@@ -425,13 +385,16 @@
   margin-top: 10px;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .table-responsive {
   display: block;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border-radius: var(--radius-sm);

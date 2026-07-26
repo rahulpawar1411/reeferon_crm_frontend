@@ -1,0 +1,295 @@
+/* ====================================================================
+   DO History View Styles (src/pages/DOHistoryView/DOHistoryView.css)
+   Paired with: src/pages/DOHistoryView/DOHistoryView.jsx
+   Vanilla CSS with unified desktop, tablet, and mobile styles.
+   ==================================================================== */
+
+.do-history-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 0;
+  box-sizing: border-box;
+}
+
+/* History Control & Tabs Card */
+.history-control-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Navigation Tabs */
+.history-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1.5px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.history-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  background-color: #f8fafc;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 0.84rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.history-tab-btn:hover {
+  background-color: #cbd5e1;
+  color: var(--text-dark);
+}
+
+.history-tab-btn.active {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 162, 232, 0.25);
+}
+
+/* Search and Filters Layout */
+.history-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+
+.filter-input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background-color: var(--surface);
+  border: 1px solid #cbd5e1;
+  border-radius: var(--radius-sm);
+  height: 40px;
+  padding: 0 10px;
+  box-sizing: border-box;
+}
+
+.filter-input-group:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(0, 162, 232, 0.15);
+}
+
+.filter-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.filter-input-group input {
+  border: none;
+  background: none;
+  outline: none;
+  font-size: 0.85rem;
+  color: var(--text-dark);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding-left: 8px;
+  font-family: inherit;
+}
+
+/* Hide native Webkit calendar indicators and spinners to maintain design style */
+.filter-input-group input[type="date"] {
+  padding: 0 0 0 8px;
+  line-height: normal;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.filter-input-group input[type="date"]::-webkit-calendar-picker-indicator {
+  display: none !important;
+  -webkit-appearance: none;
+}
+
+.filter-input-group input[type="date"]::-webkit-clear-button,
+.filter-input-group input[type="date"]::-webkit-inner-spin-button {
+  display: none !important;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* Placeholder styling when the date field has no value */
+.filter-input-group input[type="date"].empty-date::-webkit-datetime-edit-text,
+.filter-input-group input[type="date"].empty-date::-webkit-datetime-edit-month-field,
+.filter-input-group input[type="date"].empty-date::-webkit-datetime-edit-day-field,
+.filter-input-group input[type="date"].empty-date::-webkit-datetime-edit-year-field {
+  color: #94a3b8 !important; /* Muted gray placeholder color */
+  font-weight: 500;
+}
+
+/* Styled text when a date is selected */
+.filter-input-group input[type="date"].has-value::-webkit-datetime-edit-text,
+.filter-input-group input[type="date"].has-value::-webkit-datetime-edit-month-field,
+.filter-input-group input[type="date"].has-value::-webkit-datetime-edit-day-field,
+.filter-input-group input[type="date"].has-value::-webkit-datetime-edit-year-field {
+  color: var(--text-dark) !important;
+  font-weight: 600;
+}
+
+.search-group {
+  flex: 2;
+  min-width: 250px;
+}
+
+.date-group {
+  flex: 1;
+  min-width: 180px;
+}
+
+.clear-date-btn {
+  background: none;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 50%;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.clear-date-btn:hover {
+  background-color: #fef2f2;
+}
+
+/* Delete Log Button */
+.btn-delete-log {
+  background-color: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.btn-delete-log:hover {
+  background-color: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(185, 28, 28, 0.2);
+}
+
+/* Image Thumbnail Click View hover effect */
+.table-thumb {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.table-thumb:hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Mobile Media Queries Fluid Layout */
+@media (max-width: 768px) {
+  .history-tabs {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .history-tab-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .history-filters-bar {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .search-group, .date-group, .btn-find, .btn-export {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+}
+
+.btn-export:hover {
+  background-color: #16a34a !important;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.25);
+}
+
+/* Lightbox overlay container */
+.lightbox-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(15, 23, 42, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease-out;
+}
+
+.lightbox-content {
+  position: relative;
+  max-width: 90%;
+  max-height: 90%;
+  background: white;
+  padding: 8px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox-content img {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: -16px;
+  right: -16px;
+  width: 32px;
+  height: 32px;
+  background-color: #ffffff;
+  border: 1.5px solid #000000;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  font-weight: bold;
+  line-height: 28px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+  transition: all 0.2s ease;
+}
+
+.lightbox-close:hover {
+  background-color: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}

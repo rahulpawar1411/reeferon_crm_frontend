@@ -3,9 +3,14 @@
 // Supports FormData Image Uploads for Daily Chamber Temp Logs.
 // ====================================================================
 
-const API_BASE_URL = window.location.origin === 'http://localhost:3000'
-  ? 'http://localhost:5000/api'
-  : '/api';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+
+// Globally override fetch to enforce HttpOnly Cookies credentials passing in development & production
+const originalFetch = window.fetch;
+window.fetch = function (url, options = {}) {
+  options.credentials = 'include';
+  return originalFetch(url, options);
+};
 
 // In-memory fallback for Chamber Logs
 let fallbackChamberLogs = [];
@@ -183,6 +188,172 @@ export const deleteInwardLog = async (id) => {
   return { message: 'Deleted (local)' };
 };
 
+export const updateInwardLog = async (id, formData) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, {
+      method: 'PUT',
+      body: formData
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  
+  // Local fallback entry mapping
+  const idx = fallbackInwardLogs.findIndex(l => l.inward_id == id);
+  if (idx !== -1) {
+    const updated = {
+      inward_id: id,
+      inward_entry_date: formData.get('inward_entry_date'),
+      inward_vehicle_no: formData.get('inward_vehicle_no'),
+      inward_client_name: formData.get('inward_client_name'),
+      inward_seal_no: formData.get('inward_seal_no'),
+      inward_vehicle_temp: formData.get('inward_vehicle_temp'),
+      inward_material_temp: formData.get('inward_material_temp'),
+      inward_transporter_name: formData.get('inward_transporter_name'),
+      inward_driver_name: formData.get('inward_driver_name'),
+      inward_driver_no: formData.get('inward_driver_no'),
+      inward_dock_no: formData.get('inward_dock_no'),
+      inward_vehicle_reporting_time: formData.get('inward_vehicle_reporting_time'),
+      inward_unloading_start_time: formData.get('inward_unloading_start_time'),
+      inward_unloading_duration_hours: formData.get('inward_unloading_duration_hours'),
+      inward_unloading_duration_mins: formData.get('inward_unloading_duration_mins'),
+      inward_unloading_end_time: formData.get('inward_unloading_end_time'),
+      inward_pallets_in_qty: formData.get('inward_pallets_in_qty') || 0,
+      inward_invoice_qty: formData.get('inward_invoice_qty') || 0,
+      inward_received_qty: formData.get('inward_received_qty') || 0,
+      inward_received_boxes_qty: formData.get('inward_received_boxes_qty') || 0,
+      inward_short_received_boxes_qty: formData.get('inward_short_received_boxes_qty') || 0,
+      inward_excess_received_boxes_qty: formData.get('inward_excess_received_boxes_qty') || 0,
+      inward_damage_received_boxes_qty: formData.get('inward_damage_received_boxes_qty') || 0,
+      inward_material_type: formData.get('inward_material_type'),
+      inward_unloading_supervisor_name: formData.get('inward_unloading_supervisor_name'),
+      inward_remarks: formData.get('inward_remarks')
+    };
+    fallbackInwardLogs[idx] = updated;
+  }
+  return { message: 'Updated (local)' };
+};
+
+// ====================================================================
+// Outward DO Logs APIs
+// ====================================================================
+let fallbackOutwardLogs = [];
+
+export const fetchOutwardLogs = async (search = '') => {
+  try {
+    const query = search ? `?search=${encodeURIComponent(search)}` : '';
+    const res = await fetch(`${API_BASE_URL}/outward-logs${query}`);
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  let list = [...fallbackOutwardLogs];
+  if (search) {
+    const q = search.toLowerCase();
+    list = list.filter(l => 
+      (l.outward_vehicle_no && l.outward_vehicle_no.toLowerCase().includes(q)) ||
+      (l.outward_client_name && l.outward_client_name.toLowerCase().includes(q))
+    );
+  }
+  return list;
+};
+
+export const addOutwardLog = async (formData) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/outward-logs`, {
+      method: 'POST',
+      body: formData
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  
+  // Local fallback entry mapping
+  const newLog = {
+    outward_id: Date.now(),
+    outward_entry_date: formData.get('outward_entry_date'),
+    outward_vehicle_no: formData.get('outward_vehicle_no'),
+    outward_client_name: formData.get('outward_client_name'),
+    outward_seal_no: formData.get('outward_seal_no'),
+    outward_vehicle_temp: formData.get('outward_vehicle_temp'),
+    outward_material_temp: formData.get('outward_material_temp'),
+    outward_transporter_name: formData.get('outward_transporter_name'),
+    outward_driver_name: formData.get('outward_driver_name'),
+    outward_driver_no: formData.get('outward_driver_no'),
+    outward_dock_no: formData.get('outward_dock_no'),
+    outward_vehicle_reporting_time: formData.get('outward_vehicle_reporting_time'),
+    outward_loading_start_time: formData.get('outward_loading_start_time'),
+    outward_loading_duration_hours: formData.get('outward_loading_duration_hours'),
+    outward_loading_duration_mins: formData.get('outward_loading_duration_mins'),
+    outward_loading_end_time: formData.get('outward_loading_end_time'),
+    outward_pallets_in_qty: formData.get('outward_pallets_in_qty') || 0,
+    outward_invoice_qty: formData.get('outward_invoice_qty') || 0,
+    outward_received_qty: formData.get('outward_received_qty') || 0,
+    outward_received_boxes_qty: formData.get('outward_received_boxes_qty') || 0,
+    outward_short_received_boxes_qty: formData.get('outward_short_received_boxes_qty') || 0,
+    outward_excess_received_boxes_qty: formData.get('outward_excess_received_boxes_qty') || 0,
+    outward_damage_received_boxes_qty: formData.get('outward_damage_received_boxes_qty') || 0,
+    outward_material_type: formData.get('outward_material_type'),
+    outward_loading_supervisor_name: formData.get('outward_loading_supervisor_name'),
+    outward_remarks: formData.get('outward_remarks'),
+    outward_vehicle_back_side_photo: formData.get('outward_vehicle_back_side_photo'),
+    outward_vehicle_back_side_photo_with_material: formData.get('outward_vehicle_back_side_photo_with_material'),
+    outward_count_sheet_photo: formData.get('outward_count_sheet_photo')
+  };
+  fallbackOutwardLogs.unshift(newLog);
+  return { id: newLog.outward_id, message: 'Saved (local)' };
+};
+
+export const deleteOutwardLog = async (id) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/outward-logs/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  fallbackOutwardLogs = fallbackOutwardLogs.filter(l => l.outward_id != id);
+  return { message: 'Deleted (local)' };
+};
+
+export const updateOutwardLog = async (id, formData) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/outward-logs/${id}`, {
+      method: 'PUT',
+      body: formData
+    });
+    if (res.ok) return await res.json();
+  } catch (err) {}
+  
+  // Local fallback entry mapping
+  const idx = fallbackOutwardLogs.findIndex(l => l.outward_id == id);
+  if (idx !== -1) {
+    const updated = {
+      outward_id: id,
+      outward_entry_date: formData.get('outward_entry_date'),
+      outward_vehicle_no: formData.get('outward_vehicle_no'),
+      outward_client_name: formData.get('outward_client_name'),
+      outward_seal_no: formData.get('outward_seal_no'),
+      outward_vehicle_temp: formData.get('outward_vehicle_temp'),
+      outward_material_temp: formData.get('outward_material_temp'),
+      outward_transporter_name: formData.get('outward_transporter_name'),
+      outward_driver_name: formData.get('outward_driver_name'),
+      outward_driver_no: formData.get('outward_driver_no'),
+      outward_dock_no: formData.get('outward_dock_no'),
+      outward_vehicle_reporting_time: formData.get('outward_vehicle_reporting_time'),
+      outward_loading_start_time: formData.get('outward_loading_start_time'),
+      outward_loading_duration_hours: formData.get('outward_loading_duration_hours'),
+      outward_loading_duration_mins: formData.get('outward_loading_duration_mins'),
+      outward_loading_end_time: formData.get('outward_loading_end_time'),
+      outward_pallets_in_qty: formData.get('outward_pallets_in_qty') || 0,
+      outward_invoice_qty: formData.get('outward_invoice_qty') || 0,
+      outward_received_qty: formData.get('outward_received_qty') || 0,
+      outward_received_boxes_qty: formData.get('outward_received_boxes_qty') || 0,
+      outward_short_received_boxes_qty: formData.get('outward_short_received_boxes_qty') || 0,
+      outward_excess_received_boxes_qty: formData.get('outward_excess_received_boxes_qty') || 0,
+      outward_damage_received_boxes_qty: formData.get('outward_damage_received_boxes_qty') || 0,
+      outward_material_type: formData.get('outward_material_type'),
+      outward_loading_supervisor_name: formData.get('outward_loading_supervisor_name'),
+      outward_remarks: formData.get('outward_remarks')
+    };
+    fallbackOutwardLogs[idx] = updated;
+  }
+  return { message: 'Updated (local)' };
+};
+
 // ====================================================================
 // 2. Legacy Inward & Outward DO Logs APIs
 // ====================================================================
@@ -219,8 +390,10 @@ export const addTempLog = async (logData) => {
   } catch (err) {}
   const newLog = { id: Date.now(), ...logData, created_at: new Date().toISOString() };
   fallbackTempLogs.unshift(newLog);
-  return { id: newLog.id, message: 'Saved (local)' };
+  return { id: newLog.id, message: 'Saved (local)', success: true };
 };
+
+export const createTempLog = addTempLog;
 
 export const deleteTempLog = async (id) => {
   try {
@@ -307,4 +480,62 @@ export const fetchDashboardStats = async () => {
     wonLeads: fallbackLeads.filter(l => l.status === 'Won').length,
     recentLeads: fallbackLeads.slice(0, 5)
   };
+};
+
+// ====================================================================
+// 5. Data Operator CRUD APIs (Super Admin only)
+// ====================================================================
+export const fetchOperators = async () => {
+  const res = await fetch(`${API_BASE_URL}/do-operators`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch data operators.');
+  }
+  return await res.json();
+};
+
+export const createOperator = async (data) => {
+  const res = await fetch(`${API_BASE_URL}/do-operators`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to create data operator.');
+  }
+  return await res.json();
+};
+
+export const updateOperator = async (id, data) => {
+  const res = await fetch(`${API_BASE_URL}/do-operators/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to update data operator.');
+  }
+  return await res.json();
+};
+
+export const deleteOperator = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/do-operators/${id}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to delete data operator.');
+  }
+  return await res.json();
+};
+
+export const fetchOperatorActivities = async () => {
+  const res = await fetch(`${API_BASE_URL}/operator-activities`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch operator activity logs.');
+  }
+  return await res.json();
 };

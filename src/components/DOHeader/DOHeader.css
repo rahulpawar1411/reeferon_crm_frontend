@@ -280,14 +280,14 @@
   }
 
   .do-header-brand-group {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 5px;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
     width: auto;
   }
 
   .header-logo-clock {
-    margin-top: 2px;
+    margin-top: 0;
     padding: 3px 8px;
     font-size: 0.7rem;
     border-radius: 8px;

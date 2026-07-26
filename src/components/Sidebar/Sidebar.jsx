@@ -1,15 +1,9 @@
-// ====================================================================
-// Sidebar Component (src/components/Sidebar/Sidebar.jsx)
-// Paired with: src/components/Sidebar/Sidebar.css
-// Desktop & Tablet Navigation Sidebar with official ReeferON logo.
-// ====================================================================
-
 import React from 'react';
-import { Home, Users, Plus, Thermometer, ArrowDownLeft, ArrowUpRight, Settings } from 'lucide-react';
+import { Home, Users, Plus, Thermometer, ArrowDownLeft, ArrowUpRight, Settings, LogOut } from 'lucide-react';
 import Logo from '../Logo/Logo';
 import './Sidebar.css'; // Paired CSS file
 
-export default function Sidebar({ activeTab, setActiveTab }) {
+export default function Sidebar({ activeTab, setActiveTab, onLogout }) {
   return (
     <aside className="app-sidebar desktop-only">
       <div className="sidebar-top">
@@ -71,11 +65,20 @@ export default function Sidebar({ activeTab, setActiveTab }) {
       {/* Sidebar Footer User Profile */}
       <div className="sidebar-bottom">
         <div className="user-profile-badge">
-          <div className="avatar-circle">DO</div>
+          <div className="avatar-circle">A</div>
           <div className="user-info">
-            <strong>Data Operator (DO)</strong>
-            <span>Cold Chain Thermal Hub</span>
+            <strong>Super Admin</strong>
+            <span>Active Session</span>
           </div>
+          <button 
+            type="button"
+            className="sidebar-logout-btn" 
+            onClick={onLogout}
+            title="Log Out"
+            style={{ background: 'none', border: 'none', color: '#ef4444', padding: '6px', cursor: 'pointer', marginLeft: 'auto', display: 'flex', alignItems: 'center' }}
+          >
+            <LogOut size={16} />
+          </button>
         </div>
       </div>
     </aside>

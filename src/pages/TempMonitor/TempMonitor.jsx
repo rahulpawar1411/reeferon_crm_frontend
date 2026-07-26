@@ -8,11 +8,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Thermometer, Plus, CheckCircle, PlusCircle, Camera, Loader2, Check, Trash2, RefreshCw
 } from 'lucide-react';
-import { addChamberLog, fetchChamberLogs, deleteChamberLog } from '../../services/api';
+import { addChamberLog, fetchChamberLogs, deleteChamberLog, updateChamberLog } from '../../services/api';
 import exifr from 'exifr';
 import './TempMonitor.css'; // Paired CSS file
 
-export default function TempMonitor() {
+export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEditData }) {
   const todayStr = new Date().toISOString().split('T')[0];
   const fileInputRef = useRef(null);
 
@@ -86,6 +86,27 @@ export default function TempMonitor() {
   useEffect(() => {
     loadLogs();
   }, []);
+
+  useEffect(() => {
+    if (editData) {
+      setFormData({
+        entry_date: editData.formatted_date || (editData.entry_date ? editData.entry_date.split('T')[0] : todayStr),
+        client_name: editData.client_name || '',
+        chamber_name: editData.chamber_name || 'BDF-1',
+        inspection_time: editData.inspection_time || '11:00',
+        chamber_temp: editData.chamber_temp !== undefined && editData.chamber_temp !== null ? editData.chamber_temp.toString() : '',
+        monitor_supervisor_name: editData.monitor_supervisor_name || ''
+      });
+      setIsChamberCustom(!['BDF-1', 'BDF-2', 'BDF-3', 'BDF-4', 'BDF-5', 'BDF-6', 'Antechamber'].includes(editData.chamber_name));
+      const imgSrc = editData.temp_sensor_image || editData.chamber_image;
+      if (imgSrc) {
+        const imageSrc = imgSrc.startsWith('data:image') 
+          ? imgSrc 
+          : `/${imgSrc}`;
+        setImagePreview(imageSrc);
+      }
+    }
+  }, [editData]);
 
   const handleDeleteLog = async (id) => {
     if (window.confirm('Are you sure you want to delete this log?')) {
@@ -287,13 +308,22 @@ export default function TempMonitor() {
       submissionData.append('temp_sensor_image', imageFile);
     }
 
-    await addChamberLog(submissionData);
+    let res;
+    if (editData) {
+      res = await updateChamberLog(editData.id, submissionData);
+    } else {
+      res = await addChamberLog(submissionData);
+    }
     setSubmitting(false);
     setVerificationData(null);
     loadLogs();
 
     // Show Success Alert Notification
-    setSuccessMsg('Chamber temperature saved successfully');
+    setSuccessMsg(editData ? 'Chamber temperature updated successfully' : 'Chamber temperature saved successfully');
+    if (editData && setEditData) setEditData(null);
+    if (editData && onMenuChange) {
+      setTimeout(() => onMenuChange('History'), 1500);
+    }
 
     // Reset Form
     setIsChamberCustom(false);
@@ -345,10 +375,36 @@ export default function TempMonitor() {
 
       {/* 2. DIRECT ON-SCREEN ENTRY FORM CARD */}
       <div className="direct-form-card">
+        {editData && (
+          <div className="editing-banner" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fffbeb', border: '1px solid #fef3c7', padding: '10px 16px', borderRadius: 'var(--radius-sm)', marginBottom: '12px' }}>
+            <span style={{ color: '#b45309', fontWeight: 700 }}>⚠️ Editing Chamber Record: {editData.chamber_name} ({editData.formatted_date || (editData.entry_date ? editData.entry_date.split('T')[0] : '')})</span>
+            <button 
+              type="button" 
+              className="btn-cancel-edit" 
+              onClick={() => {
+                setEditData(null);
+                setFormData({
+                  entry_date: todayStr,
+                  client_name: '',
+                  chamber_name: 'BDF-1',
+                  inspection_time: '11:00',
+                  chamber_temp: '',
+                  monitor_supervisor_name: ''
+                });
+                setImageFile(null);
+                setImagePreview(null);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }}
+              style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              Cancel Edit
+            </button>
+          </div>
+        )}
         <div className="direct-form-header">
           <h3>
             <PlusCircle size={18} color="#00a2e8" />
-            <span>Add New Daily Chamber Temp Record</span>
+            <span>{editData ? 'Edit Daily Chamber Temp Record' : 'Add New Daily Chamber Temp Record'}</span>
           </h3>
         </div>
 
@@ -530,132 +586,20 @@ export default function TempMonitor() {
             </div>
 
             {/* Submit Button */}
-            <button type="submit" className="submit-direct-btn" disabled={submitting || compressing}>
+            <button 
+              type="submit" 
+              className="submit-direct-btn" 
+              disabled={submitting || compressing}
+              style={editData ? { background: 'linear-gradient(135deg, #f97316, #ea580c)', borderColor: '#ea580c', boxShadow: '0 4px 14px rgba(249, 115, 22, 0.35)' } : {}}
+            >
               <Plus size={18} />
-              <span>{submitting ? 'Saving...' : 'Add Record'}</span>
+              <span>{submitting ? 'Saving...' : (editData ? 'Update Record' : 'Add Record')}</span>
             </button>
           </div>
         </form>
       </div>
 
-      {/* 3. Daily Temp Logs History List */}
-      <div className="direct-form-card logs-history-card">
-        <div className="direct-form-header">
-          <h3>
-            <Thermometer size={18} color="#00a2e8" />
-            <span>Inspection Log History</span>
-          </h3>
-        </div>
 
-        {(() => {
-          const todayLogs = logs.filter(log => {
-            const logDate = log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '');
-            return logDate === todayStr;
-          });
-
-          if (loadingLogs) {
-            return (
-              <div className="loading-logs">
-                <Loader2 size={24} className="spinner-icon" color="#00a2e8" />
-                <span>Loading history logs...</span>
-              </div>
-            );
-          }
-
-          if (todayLogs.length === 0) {
-            return (
-              <div className="no-logs">
-                <p>No daily temperature inspection logs found for today.</p>
-              </div>
-            );
-          }
-
-          return (
-            <div className="table-responsive">
-              <table className="logs-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th className="wrap-text">Client</th>
-                    <th>Chamber</th>
-                    <th>Inspection Time</th>
-                    <th>Sensor Temp</th>
-                    <th className="wrap-text">Supervisor</th>
-                    <th>Image</th>
-                    <th className="wrap-text">Capture Time (Actual)</th>
-                    <th>Variance</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {todayLogs.map((log) => {
-                    const varMin = log.time_variance_minutes || 0;
-                    let varianceClass = varMin > 120 ? 'variance-red' : 'variance-green';
-                  let varianceLabel = `${varMin} mins`;
-
-                  const serverUrl = window.location.origin === 'http://localhost:3000' ? 'http://localhost:5000' : '';
-                  const imageSrc = log.temp_sensor_image && log.temp_sensor_image.startsWith('data:image') 
-                    ? log.temp_sensor_image 
-                    : `${serverUrl}/${log.temp_sensor_image}`;
-
-                  return (
-                    <tr key={log.id}>
-                      <td>{log.formatted_date || log.entry_date}</td>
-                      <td className="wrap-text"><strong>{log.client_name}</strong></td>
-                      <td><span className="chamber-badge">{log.chamber_name}</span></td>
-                      <td>{log.inspection_time}</td>
-                      <td className="temp-cell"><strong>{log.chamber_temp}°C</strong></td>
-                      <td className="wrap-text">{log.monitor_supervisor_name}</td>
-                      <td className="photo-cell">
-                        {log.temp_sensor_image ? (
-                          <div 
-                            className="view-photo-link"
-                            onClick={() => setLightboxImage(imageSrc)}
-                          >
-                            <img 
-                              src={imageSrc} 
-                              alt="Sensor" 
-                              className="table-photo-thumb"
-                            />
-                          </div>
-                        ) : (
-                          <span className="no-photo-text">No Photo</span>
-                        )}
-                      </td>
-                      <td className="time-text">
-                        {log.photo_capture_time ? (
-                          <span>{log.photo_capture_time.split(' ')[1] || log.photo_capture_time}</span>
-                        ) : (
-                          <span className="no-photo-text">-</span>
-                        )}
-                      </td>
-                      <td>
-                        {log.photo_capture_time ? (
-                          <span className={`variance-pill ${varianceClass}`}>
-                            {varianceLabel}
-                          </span>
-                        ) : (
-                          <span className="no-photo-text">-</span>
-                        )}
-                      </td>
-                      <td>
-                        <button 
-                          onClick={() => handleDeleteLog(log.id)}
-                          className="delete-log-action-btn"
-                          title="Delete Log"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        );
-      })()}
-    </div>
 
       {/* Lightbox Modal */}
       {lightboxImage && (
