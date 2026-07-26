@@ -531,6 +531,55 @@ export const deleteOperator = async (id) => {
   return await res.json();
 };
 
+// ====================================================================
+// Sub-Admin CRUD APIs (Super Admin only)
+// ====================================================================
+export const fetchSubAdmins = async () => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch sub-admins.');
+  }
+  return await res.json();
+};
+
+export const createSubAdmin = async (data) => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to create sub-admin.');
+  }
+  return await res.json();
+};
+
+export const updateSubAdmin = async (id, data) => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to update sub-admin.');
+  }
+  return await res.json();
+};
+
+export const deleteSubAdmin = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins/${id}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to delete sub-admin.');
+  }
+  return await res.json();
+};
+
 export const fetchOperatorActivities = async () => {
   const res = await fetch(`${API_BASE_URL}/operator-activities`);
   if (!res.ok) {

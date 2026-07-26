@@ -8,19 +8,21 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, Cpu, Database, Server, Clock, LogOut, 
   ArrowRight, Lock, Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
-  Menu, X, ChevronRight, User, Eye, EyeOff, Activity
+  Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
 import { 
   fetchOperators, createOperator, updateOperator, deleteOperator, fetchOperatorActivities,
-  fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig
+  fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
+  fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats,
+  fetchSubAdmins, createSubAdmin, updateSubAdmin, deleteSubAdmin
 } from '../../services/api';
 import './SuperAdminSecureWindow.css';
 
 export default function SuperAdminSecureWindow({ user, onLogout }) {
   const [time, setTime] = useState(new Date());
   const [activeMenu, setActiveMenu] = useState(() => {
-    return localStorage.getItem('super_admin_active_menu') || 'data_operators';
+    return localStorage.getItem('super_admin_active_menu') || 'dashboard';
   });
   const [auditSubTab, setAuditSubTab] = useState(() => {
     return localStorage.getItem('super_admin_audit_sub_tab') || 'activity_log';
@@ -66,6 +68,36 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState('All');
   const [logsError, setLogsError] = useState('');
   const [loadingActivities, setLoadingActivities] = useState(false);
+
+  // Super Admin History Logs States
+  const [historyTab, setHistoryTab] = useState('daily');
+  const [chamberLogs, setChamberLogs] = useState([]);
+  const [inwardLogs, setInwardLogs] = useState([]);
+  const [outwardLogs, setOutwardLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [logsSearch, setLogsSearch] = useState('');
+  const [selectedWarehouse, setSelectedWarehouse] = useState('All');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [appliedFromDate, setAppliedFromDate] = useState('');
+  const [appliedToDate, setAppliedToDate] = useState('');
+  const [dashboardStats, setDashboardStats] = useState({
+    totalLeads: 0,
+    totalSubAdmins: 0,
+    totalOperators: 0
+  });
+
+  // Sub-Admins Management States
+  const [subAdmins, setSubAdmins] = useState([]);
+  const [subAdminSearch, setSubAdminSearch] = useState('');
+  const [loadingSubAdmins, setLoadingSubAdmins] = useState(false);
+  const [subAdminSuccess, setSubAdminSuccess] = useState('');
+  const [subAdminError, setSubAdminError] = useState('');
+  const [subAdminEmail, setSubAdminEmail] = useState('');
+  const [subAdminPassword, setSubAdminPassword] = useState('');
+  const [subAdminFullName, setSubAdminFullName] = useState('');
+  const [subAdminPhoneNo, setSubAdminPhoneNo] = useState('');
+  const [editingSubAdmin, setEditingSubAdmin] = useState(null);
 
   // Real-time ticking clock for header
   useEffect(() => {
@@ -223,16 +255,266 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   });
   const warehousesList = Array.from(new Set(operators.map(op => op.warehouse_name).filter(Boolean)));
 
+  const loadDashboardStatsData = async () => {
+    try {
+      const stats = await fetchDashboardStats();
+      if (stats) {
+        setDashboardStats(stats);
+      }
+    } catch (err) {
+      console.error('Error loading dashboard stats:', err);
+    }
+  };
+
+  const loadHistoryLogs = async () => {
+    setLoadingLogs(true);
+    try {
+      const [chamberData, inwardData, outwardData] = await Promise.all([
+        fetchChamberLogs(),
+        fetchInwardLogs(),
+        fetchOutwardLogs()
+      ]);
+      setChamberLogs(chamberData || []);
+      setInwardLogs(inwardData || []);
+      setOutwardLogs(outwardData || []);
+    } catch (err) {
+      console.error('Error loading history logs:', err);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
   useEffect(() => {
-    if (activeMenu === 'data_operators') {
+    if (activeMenu === 'dashboard') {
       loadOperatorsData();
-    } else if (activeMenu === 'activity_logs') {
+      loadHistoryLogs();
+      loadDashboardStatsData();
+      loadSubAdminsData();
+    } else if (activeMenu === 'sub_admins') {
+      loadSubAdminsData();
+    } else if (activeMenu === 'activity_audit') {
+      loadOperatorsData();
+      loadActivities();
+    } else if (activeMenu === 'role_permission') {
       loadOperatorsData();
       loadActivities();
       loadPermissionRequests();
       loadSystemConfig();
+    } else if (activeMenu === 'history_logs') {
+      loadOperatorsData();
+      loadHistoryLogs();
     }
   }, [activeMenu]);
+
+  const getFilteredHistoryLogs = () => {
+    let logs = [];
+    if (historyTab === 'daily') {
+      logs = chamberLogs;
+    } else if (historyTab === 'inward') {
+      logs = inwardLogs;
+    } else if (historyTab === 'outward') {
+      logs = outwardLogs;
+    }
+
+    // Filter by Warehouse
+    if (selectedWarehouse && selectedWarehouse !== 'All') {
+      logs = logs.filter(l => l.warehouse_name === selectedWarehouse);
+    }
+
+    // Filter by Search Query
+    if (logsSearch) {
+      const q = logsSearch.toLowerCase();
+      logs = logs.filter(l => {
+        const opEmail = l.operator_email ? l.operator_email.toLowerCase() : '';
+        const opProfile = operators.find(o => o.email.toLowerCase() === opEmail);
+        const opName = opProfile && opProfile.full_name ? opProfile.full_name.toLowerCase() : '';
+        const opPhone = opProfile && opProfile.phone_no ? opProfile.phone_no.toLowerCase() : '';
+        
+        const matchesOperator = opEmail.includes(q) || opName.includes(q) || opPhone.includes(q);
+
+        if (historyTab === 'daily') {
+          return matchesOperator ||
+            (l.client_name && l.client_name.toLowerCase().includes(q)) ||
+            (l.chamber_name && l.chamber_name.toLowerCase().includes(q)) ||
+            (l.monitor_supervisor_name && l.monitor_supervisor_name.toLowerCase().includes(q));
+        } else if (historyTab === 'inward') {
+          return matchesOperator ||
+            (l.inward_vehicle_no && l.inward_vehicle_no.toLowerCase().includes(q)) ||
+            (l.inward_client_name && l.inward_client_name.toLowerCase().includes(q)) ||
+            (l.inward_transporter_name && l.inward_transporter_name.toLowerCase().includes(q)) ||
+            (l.inward_driver_name && l.inward_driver_name.toLowerCase().includes(q));
+        } else if (historyTab === 'outward') {
+          return matchesOperator ||
+            (l.outward_vehicle_no && l.outward_vehicle_no.toLowerCase().includes(q)) ||
+            (l.outward_client_name && l.outward_client_name.toLowerCase().includes(q)) ||
+            (l.outward_transporter_name && l.outward_transporter_name.toLowerCase().includes(q)) ||
+            (l.outward_driver_name && l.outward_driver_name.toLowerCase().includes(q));
+        }
+        return false;
+      });
+    }
+
+    // Filter by Date Range (using applied filters)
+    if (appliedFromDate || appliedToDate) {
+      logs = logs.filter(l => {
+        const entryDateStr = historyTab === 'daily' 
+          ? (l.formatted_date || l.entry_date) 
+          : (historyTab === 'inward' ? l.inward_entry_date : l.outward_entry_date);
+        
+        if (!entryDateStr) return false;
+        
+        let logDateObj;
+        if (entryDateStr.includes('-')) {
+          const parts = entryDateStr.split('T')[0].split('-');
+          if (parts[0].length === 4) {
+            logDateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+          } else {
+            logDateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+          }
+        } else {
+          logDateObj = new Date(entryDateStr);
+        }
+        
+        if (isNaN(logDateObj.getTime())) return false;
+
+        if (appliedFromDate) {
+          const [fY, fM, fD] = appliedFromDate.split('-');
+          const fromDateObj = new Date(fY, fM - 1, fD);
+          if (logDateObj < fromDateObj) return false;
+        }
+        if (appliedToDate) {
+          const [tY, tM, tD] = appliedToDate.split('-');
+          const toDateObj = new Date(tY, tM - 1, tD);
+          if (logDateObj > toDateObj) return false;
+        }
+        return true;
+      });
+    }
+
+    return logs;
+  };
+
+  const handleExportLogsExcel = () => {
+    const filteredLogs = getFilteredHistoryLogs();
+    if (filteredLogs.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+
+    let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
+
+    if (historyTab === 'daily') {
+      const headers = ["Date", "Warehouse", "Operator Email", "Chamber", "Client Name", "Inspection Time", "Temperature (°C)", "Supervisor"];
+      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
+
+      filteredLogs.forEach(log => {
+        const row = [
+          log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : ''),
+          log.warehouse_name || 'Generic',
+          log.operator_email || '-',
+          log.chamber_name || '',
+          log.client_name || '',
+          log.inspection_time || '',
+          log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : '',
+          log.monitor_supervisor_name || ''
+        ];
+        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+    } else if (historyTab === 'inward') {
+      const headers = [
+        "Date", "Warehouse", "Operator Email", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
+        "Reporting Time", "Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
+        "Invoice Qty", "Received Pallets", "Received Boxes", "Short Boxes", "Excess Boxes", "Damage Boxes", 
+        "Unloading Start", "Unloading End", "Unloading Duration", "Supervisor", "Remarks"
+      ];
+      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
+
+      filteredLogs.forEach(log => {
+        const row = [
+          log.inward_entry_date ? log.inward_entry_date.split('T')[0] : '',
+          log.warehouse_name || 'Generic',
+          log.operator_email || '-',
+          log.inward_vehicle_no || '',
+          log.inward_seal_no || '',
+          log.inward_client_name || '',
+          log.inward_transporter_name || '',
+          log.inward_driver_name || '',
+          log.inward_driver_no || '',
+          log.inward_dock_no || '',
+          log.inward_vehicle_reporting_time || '',
+          log.inward_vehicle_temp !== undefined ? `${log.inward_vehicle_temp}°C` : '',
+          log.inward_material_temp !== undefined ? `${log.inward_material_temp}°C` : '',
+          log.inward_material_type || '',
+          log.inward_pallets_in_qty || 0,
+          log.inward_invoice_qty || 0,
+          log.inward_received_qty || 0,
+          log.inward_received_boxes_qty || 0,
+          log.inward_short_received_boxes_qty || 0,
+          log.inward_excess_received_boxes_qty || 0,
+          log.inward_damage_received_boxes_qty || 0,
+          log.inward_unloading_start_time || '',
+          log.inward_unloading_end_time || '',
+          `${log.inward_unloading_duration_hours || '0'}h ${log.inward_unloading_duration_mins || '0'}m`,
+          log.inward_unloading_supervisor_name || '',
+          log.inward_remarks || ''
+        ];
+        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+    } else if (historyTab === 'outward') {
+      const headers = [
+        "Date", "Warehouse", "Operator Email", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
+        "Reporting Time", "Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
+        "Invoice Qty", "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Boxes", 
+        "Loading Start", "Loading End", "Loading Duration", "Supervisor", "Remarks"
+      ];
+      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
+
+      filteredLogs.forEach(log => {
+        const row = [
+          log.outward_entry_date ? log.outward_entry_date.split('T')[0] : '',
+          log.warehouse_name || 'Generic',
+          log.operator_email || '-',
+          log.outward_vehicle_no || '',
+          log.outward_seal_no || '',
+          log.outward_client_name || '',
+          log.outward_transporter_name || '',
+          log.outward_driver_name || '',
+          log.outward_driver_no || '',
+          log.outward_dock_no || '',
+          log.outward_vehicle_reporting_time || '',
+          log.outward_vehicle_temp !== undefined ? `${log.outward_vehicle_temp}°C` : '',
+          log.outward_material_temp !== undefined ? `${log.outward_material_temp}°C` : '',
+          log.outward_material_type || '',
+          log.outward_pallets_in_qty || 0,
+          log.outward_invoice_qty || 0,
+          log.outward_received_qty || 0,
+          log.outward_received_boxes_qty || 0,
+          log.outward_short_received_boxes_qty || 0,
+          log.outward_excess_received_boxes_qty || 0,
+          log.outward_damage_received_boxes_qty || 0,
+          log.outward_loading_start_time || '',
+          log.outward_loading_end_time || '',
+          `${log.outward_loading_duration_hours || '0'}h ${log.outward_loading_duration_mins || '0'}m`,
+          log.outward_loading_supervisor_name || '',
+          log.outward_remarks || ''
+        ];
+        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+    }
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    
+    const tabLabel = historyTab === 'daily' ? 'ChamberLogs' : (historyTab === 'inward' ? 'InwardLogs' : 'OutwardLogs');
+    const dateSuffix = new Date().toISOString().split('T')[0];
+    link.setAttribute("download", `ReeferON_${tabLabel}_SuperAdminExport_${dateSuffix}.csv`);
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const handleSaveOperator = async (e) => {
     e.preventDefault();
@@ -318,6 +600,100 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     setOperatorSearch('');
   };
 
+  // Sub-Admins CRUD handlers
+  const loadSubAdminsData = async () => {
+    setLoadingSubAdmins(true);
+    setSubAdminError('');
+    try {
+      const data = await fetchSubAdmins();
+      setSubAdmins(data || []);
+    } catch (err) {
+      setSubAdminError(err.message || 'Failed to fetch sub-admins.');
+    } finally {
+      setLoadingSubAdmins(false);
+    }
+  };
+
+  const handleSaveSubAdmin = async (e) => {
+    e.preventDefault();
+    setSubAdminError('');
+    setSubAdminSuccess('');
+
+    if (!subAdminEmail || !subAdminFullName || !subAdminPhoneNo) {
+      setSubAdminError('All fields (Full Name, Phone No., Email ID) are required.');
+      return;
+    }
+
+    if (!editingSubAdmin && !subAdminPassword) {
+      setSubAdminError('Password is required for registration.');
+      return;
+    }
+
+    try {
+      const payload = {
+        email: subAdminEmail,
+        password: subAdminPassword,
+        full_name: subAdminFullName,
+        phone_no: subAdminPhoneNo
+      };
+
+      if (editingSubAdmin) {
+        await updateSubAdmin(editingSubAdmin.id, payload);
+        setSubAdminSuccess('Sub-Admin profile updated successfully.');
+      } else {
+        await createSubAdmin(payload);
+        setSubAdminSuccess('Sub-Admin registered successfully.');
+      }
+
+      cancelEditSubAdmin();
+      loadSubAdminsData();
+      loadDashboardStatsData();
+    } catch (err) {
+      setSubAdminError(err.message || 'Action failed.');
+    }
+  };
+
+  const handleDeleteSubAdmin = async (id) => {
+    if (!window.confirm('Are you sure you want to revoke workspace access for this sub-admin?')) {
+      return;
+    }
+    setSubAdminError('');
+    setSubAdminSuccess('');
+    try {
+      await deleteSubAdmin(id);
+      setSubAdminSuccess('Sub-Admin credentials deleted successfully.');
+      loadSubAdminsData();
+      loadDashboardStatsData();
+      if (editingSubAdmin && editingSubAdmin.id === id) {
+        cancelEditSubAdmin();
+      }
+    } catch (err) {
+      setSubAdminError(err.message || 'Failed to delete sub-admin.');
+    }
+  };
+
+  const startEditSubAdmin = (sa) => {
+    setEditingSubAdmin(sa);
+    setSubAdminEmail(sa.email);
+    setSubAdminFullName(sa.full_name || '');
+    setSubAdminPhoneNo(sa.phone_no || '');
+    setSubAdminPassword('');
+    setSubAdminError('');
+    setSubAdminSuccess('');
+  };
+
+  const cancelEditSubAdmin = () => {
+    setEditingSubAdmin(null);
+    setSubAdminEmail('');
+    setSubAdminFullName('');
+    setSubAdminPhoneNo('');
+    setSubAdminPassword('');
+    setShowPassword(false);
+    setSubAdminError('');
+    setSubAdminSuccess('');
+    setSubAdminSearch('');
+  };
+
   const formatDate = (date) => {
     return date.toLocaleDateString('en-US', {
       weekday: 'short',
@@ -379,6 +755,31 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
           {/* Super Admin Navigation Items */}
           <div className="secure-sidebar-nav" style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button 
+              className={`clean-menu-item ${activeMenu === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('dashboard')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'dashboard' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'dashboard' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <LayoutDashboard size={18} />
+                <span>Dashboard Overview</span>
+              </div>
+            </button>
+            <button 
               className={`clean-menu-item ${activeMenu === 'data_operators' ? 'active' : ''}`}
               onClick={() => setActiveMenu('data_operators')}
               style={{
@@ -401,6 +802,32 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Thermometer size={18} />
                 <span>Data Operators</span>
+              </div>
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeMenu === 'sub_admins' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('sub_admins')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'sub_admins' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'sub_admins' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ShieldCheck size={18} />
+                <span>Sub-Admins</span>
               </div>
             </button>
 
@@ -430,6 +857,31 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               </div>
               {hasPendingRequests && <span className="pulsing-dot" />}
             </button> 
+            <button 
+              className={`clean-menu-item ${activeMenu === 'history_logs' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('history_logs')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'history_logs' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'history_logs' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <History size={18} />
+                <span>History Logs</span>
+              </div>
+            </button>
             <button 
               className={`clean-menu-item ${activeMenu === 'diagnostics' ? 'active' : ''}`}
               onClick={() => setActiveMenu('diagnostics')}
@@ -491,7 +943,17 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
         {/* Center section: Super Administrator & Time (Centered) */}
         <div className="secure-header-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', textAlign: 'center' }}>
           <span className="secure-role-tag" style={{ margin: 0 }}>
-            {activeMenu === 'data_operators' ? 'Super Admin - Operator Profiles' : 'Super Administrator'}
+            {activeMenu === 'dashboard'
+              ? 'Super Admin - Control Dashboard'
+              : activeMenu === 'sub_admins'
+                ? 'Super Admin - Sub-Admin Profiles'
+                : activeMenu === 'data_operators' 
+                  ? 'Super Admin - Operator Profiles' 
+                  : activeMenu === 'history_logs' 
+                    ? 'Super Admin - History Logs' 
+                    : activeMenu === 'activity_logs'
+                      ? 'Super Admin - Operator Activities'
+                      : 'Super Administrator'}
           </span>
           <div className="secure-clock-subtext" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '700' }}>
             <Clock size={12} />
@@ -543,6 +1005,19 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
           <div className="clean-menu-list">
             <button 
+              className={`clean-menu-item ${activeMenu === 'dashboard' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('dashboard');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <LayoutDashboard size={18} className="item-icon" />
+                <span>Dashboard Overview</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+            <button 
               className={`clean-menu-item ${activeMenu === 'data_operators' ? 'active' : ''}`}
               onClick={() => {
                 setActiveMenu('data_operators');
@@ -552,6 +1027,20 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               <div className="item-left">
                 <Thermometer size={18} className="item-icon" />
                 <span>Data Operators</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeMenu === 'sub_admins' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('sub_admins');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <ShieldCheck size={18} className="item-icon" />
+                <span>Sub-Admins</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -567,6 +1056,19 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                 <Activity size={18} className="item-icon" />
                 <span>Operator Activities</span>
                 {hasPendingRequests && <span className="pulsing-dot" style={{ marginLeft: '8px' }} />}
+              </div>
+             </button>
+
+             <button 
+              className={`clean-menu-item ${activeMenu === 'history_logs' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('history_logs');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <History size={18} className="item-icon" />
+                <span>History Logs</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -605,6 +1107,128 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
       {/* Body Content Viewport */}
       <main className="app-viewport secure-admin-viewport" style={{ display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+        {activeMenu === 'dashboard' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            
+            {/* Top Row: Welcome Banner */}
+            <div className="secure-welcome-dashboard-card">
+              <div className="welcome-info-left">
+                <div style={{ backgroundColor: 'rgba(0,162,232,0.15)', padding: '12px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <ShieldCheck size={36} color="#00a2e8" />
+                </div>
+                <div>
+                  <h1 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800, color: '#ffffff' }}>Control Center Dashboard</h1>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: '#94a3b8' }}>Super Admin overview of cold storage operations, operators activity logs and locations.</p>
+                </div>
+              </div>
+              <div style={{ backgroundColor: 'rgba(255,255,255,0.06)', padding: '8px 16px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem', fontWeight: '700', flexShrink: 0 }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block' }}></span>
+                System Monitoring Online
+              </div>
+            </div>
+
+            {/* Stats Cards Grid (4 columns) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
+              {/* Card 1: Data Operators */}
+              <div className="diagnostic-card" style={{ padding: '20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operators</span>
+                  <div style={{ backgroundColor: 'var(--primary-light)', padding: '6px', borderRadius: 'var(--radius-sm)' }}>
+                    <User size={18} color="var(--primary)" />
+                  </div>
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.8rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{operators.length}</h3>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Registered Data Operators</span>
+                </div>
+              </div>
+
+              {/* Card 2: Warehouses */}
+              <div className="diagnostic-card" style={{ padding: '20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Warehouses</span>
+                  <div style={{ backgroundColor: '#e0f2fe', padding: '6px', borderRadius: 'var(--radius-sm)' }}>
+                    <Database size={18} color="#0284c7" />
+                  </div>
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.8rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{warehousesList.length}</h3>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Locations Managed</span>
+                </div>
+              </div>
+
+              {/* Card 3: Customers (Sub-Admins) */}
+              <div className="diagnostic-card" style={{ padding: '20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customers</span>
+                  <div style={{ backgroundColor: '#fee2e2', padding: '6px', borderRadius: 'var(--radius-sm)' }}>
+                    <ShieldCheck size={18} color="#dc2626" />
+                  </div>
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.8rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{subAdmins.length}</h3>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Registered Customers (Sub-Admins)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Operational Shortcuts */}
+            <div className="diagnostic-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>Operational Shortcuts</h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                <button 
+                  onClick={() => setActiveMenu('data_operators')}
+                  style={{
+                    padding: '16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'all 0.2s ease'
+                  }}
+                  className="dashboard-shortcut-btn"
+                >
+                  <UserPlus size={20} color="var(--primary)" />
+                  Register Operator
+                </button>
+
+                <button 
+                  onClick={() => setActiveMenu('history_logs')}
+                  style={{
+                    padding: '16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    transition: 'all 0.2s ease'
+                  }}
+                  className="dashboard-shortcut-btn"
+                >
+                  <History size={20} color="var(--primary)" />
+                  System Logs
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeMenu === 'diagnostics' && (
           <>
             {/* Welcome Dashboard Template */}
@@ -661,6 +1285,363 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               </button>
             </div>
           </>
+        )}
+
+        {activeMenu === 'history_logs' && (
+          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* Tab Header & Control Bar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
+                  System History Database Logs
+                </h2>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                  Select log category and filter by warehouse, search query or date range.
+                </p>
+              </div>
+
+              {/* Tabs Switcher */}
+              <div style={{ display: 'flex', gap: '8px', backgroundColor: 'var(--bg-main)', padding: '4px', borderRadius: 'var(--radius-sm)' }}>
+                <button
+                  onClick={() => setHistoryTab('daily')}
+                  style={{
+                    padding: '6px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: historyTab === 'daily' ? 'var(--surface)' : 'transparent',
+                    color: historyTab === 'daily' ? 'var(--primary)' : 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    boxShadow: historyTab === 'daily' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                  }}
+                >
+                  Chamber Logs
+                </button>
+                <button
+                  onClick={() => setHistoryTab('inward')}
+                  style={{
+                    padding: '6px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: historyTab === 'inward' ? 'var(--surface)' : 'transparent',
+                    color: historyTab === 'inward' ? 'var(--primary)' : 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    boxShadow: historyTab === 'inward' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                  }}
+                >
+                  Inward Logs
+                </button>
+                <button
+                  onClick={() => setHistoryTab('outward')}
+                  style={{
+                    padding: '6px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: historyTab === 'outward' ? 'var(--surface)' : 'transparent',
+                    color: historyTab === 'outward' ? 'var(--primary)' : 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    boxShadow: historyTab === 'outward' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                  }}
+                >
+                  Outward Logs
+                </button>
+              </div>
+            </div>
+
+            {/* Filters Bar */}
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+              
+              {/* Warehouse filter dropdown */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '160px' }}>
+                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Warehouse Name</label>
+                <select
+                  value={selectedWarehouse}
+                  onChange={(e) => setSelectedWarehouse(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    fontSize: '0.8rem',
+                    outline: 'none',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)',
+                    fontWeight: '600'
+                  }}
+                >
+                  <option value="All">All Warehouses</option>
+                  {warehousesList.map(w => (
+                    <option key={w} value={w}>{w}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Search text box */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '200px' }}>
+                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search Query</label>
+                <input
+                  type="text"
+                  placeholder="Search by client, supervisor, vehicle..."
+                  value={logsSearch}
+                  onChange={(e) => setLogsSearch(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    fontSize: '0.8rem',
+                    outline: 'none',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)'
+                  }}
+                />
+              </div>
+
+              {/* From Date filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '130px' }}>
+                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>From Date</label>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    fontSize: '0.8rem',
+                    outline: 'none',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)'
+                  }}
+                />
+              </div>
+
+              {/* To Date filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '130px' }}>
+                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>To Date</label>
+                <input
+                  type="date"
+                  value={toDate}
+                  min={fromDate || undefined}
+                  onChange={(e) => setToDate(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    fontSize: '0.8rem',
+                    outline: 'none',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)'
+                  }}
+                />
+              </div>
+
+              {/* Filter Buttons */}
+              <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end' }}>
+                <button
+                  onClick={() => {
+                    setAppliedFromDate(fromDate);
+                    setAppliedToDate(toDate);
+                  }}
+                  style={{
+                    padding: '9px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: 'var(--primary)',
+                    color: '#ffffff',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Search size={14} />
+                  Find
+                </button>
+
+                <button
+                  onClick={() => {
+                    setFromDate('');
+                    setToDate('');
+                    setAppliedFromDate('');
+                    setAppliedToDate('');
+                  }}
+                  style={{
+                    padding: '9px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: '#ffffff',
+                    color: 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Reset
+                </button>
+
+                <button
+                  onClick={handleExportLogsExcel}
+                  style={{
+                    padding: '9px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: '#22c55e',
+                    color: '#ffffff',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Download size={14} />
+                  Export
+                </button>
+              </div>
+            </div>
+
+            {/* Logs Table */}
+            {loadingLogs ? (
+              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <span>Loading system database logs...</span>
+              </div>
+            ) : getFilteredHistoryLogs().length === 0 ? (
+              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <span>No logs found matching your filters.</span>
+              </div>
+            ) : (
+              <div className="table-responsive" style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    {historyTab === 'daily' && (
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator Email</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Chamber</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client Name</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Inspection Time</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Temp (°C)</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Supervisor</th>
+                      </tr>
+                    )}
+                    {historyTab === 'inward' && (
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator Email</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle No</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Dock No</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle Temp</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Material Temp</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Pallets</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Unloading Duration</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Supervisor</th>
+                      </tr>
+                    )}
+                    {historyTab === 'outward' && (
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator Email</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle No</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Dock No</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle Temp</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Material Temp</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Pallets</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Loading Duration</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Supervisor</th>
+                      </tr>
+                    )}
+                  </thead>
+                  <tbody>
+                    {historyTab === 'daily' && getFilteredHistoryLogs().map((log) => (
+                      <tr key={log.id}>
+                        <td style={{ padding: '12px 16px', fontWeight: '600' }}>
+                          {log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '')}
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <span className="status-badge" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', fontWeight: 800 }}>
+                            {log.warehouse_name || 'Generic'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{log.operator_email || '-'}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.chamber_name}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.client_name}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.inspection_time}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <span className="status-badge" style={{ 
+                            backgroundColor: log.chamber_temp <= -18 ? '#dcfce7' : '#fee2e2', 
+                            color: log.chamber_temp <= -18 ? '#15803d' : '#b91c1c', 
+                            fontWeight: 800 
+                          }}>
+                            {log.chamber_temp}°C
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>{log.monitor_supervisor_name}</td>
+                      </tr>
+                    ))}
+                    {historyTab === 'inward' && getFilteredHistoryLogs().map((log) => (
+                      <tr key={log.inward_id}>
+                        <td style={{ padding: '12px 16px', fontWeight: '600' }}>
+                          {log.inward_entry_date ? log.inward_entry_date.split('T')[0] : ''}
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <span className="status-badge" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', fontWeight: 800 }}>
+                            {log.warehouse_name || 'Generic'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{log.operator_email || '-'}</td>
+                        <td style={{ padding: '12px 16px', fontWeight: '700' }}>{log.inward_vehicle_no}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.inward_client_name}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.inward_dock_no || '-'}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.inward_vehicle_temp}°C</td>
+                        <td style={{ padding: '12px 16px' }}>{log.inward_material_temp}°C</td>
+                        <td style={{ padding: '12px 16px' }}>{log.inward_pallets_in_qty}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          {log.inward_unloading_duration_hours || '0'}h {log.inward_unloading_duration_mins || '0'}m
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>{log.inward_unloading_supervisor_name}</td>
+                      </tr>
+                    ))}
+                    {historyTab === 'outward' && getFilteredHistoryLogs().map((log) => (
+                      <tr key={log.outward_id}>
+                        <td style={{ padding: '12px 16px', fontWeight: '600' }}>
+                          {log.outward_entry_date ? log.outward_entry_date.split('T')[0] : ''}
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <span className="status-badge" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', fontWeight: 800 }}>
+                            {log.warehouse_name || 'Generic'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{log.operator_email || '-'}</td>
+                        <td style={{ padding: '12px 16px', fontWeight: '700' }}>{log.outward_vehicle_no}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.outward_client_name}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.outward_dock_no || '-'}</td>
+                        <td style={{ padding: '12px 16px' }}>{log.outward_vehicle_temp}°C</td>
+                        <td style={{ padding: '12px 16px' }}>{log.outward_material_temp}°C</td>
+                        <td style={{ padding: '12px 16px' }}>{log.outward_pallets_in_qty || '-'}</td>
+                        <td style={{ padding: '12px 16px' }}>
+                          {log.outward_loading_duration_hours || '0'}h {log.outward_loading_duration_mins || '0'}m
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>{log.outward_loading_supervisor_name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
 
         {activeMenu === 'activity_logs' && (
@@ -833,20 +1814,20 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           <span>No operator activities found for the selected warehouse filter.</span>
                         </div>
                       ) : (
-                        <div style={{ overflowX: 'auto' }}>
+                        <div style={{ maxHeight: '420px', overflowY: 'auto', overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
                           <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                             <thead>
                               <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Operator Email</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Warehouse</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Action</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Module/Log</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Activity Description</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Timestamp</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Operator Email</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Warehouse</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Action</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Module/Log</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Activity Description</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Timestamp</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {filteredActivities.map((act) => {
+                              {filteredActivities.slice(0, 15).map((act) => {
                                 let actionColor = '#3b82f6';
                                 let actionBg = '#dbeafe';
                                 if (act.action === 'CREATE') {
@@ -907,20 +1888,20 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           <span>No permission or security logs found for the selected warehouse filter.</span>
                         </div>
                       ) : (
-                        <div style={{ overflowX: 'auto' }}>
+                        <div style={{ maxHeight: '420px', overflowY: 'auto', overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
                           <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                             <thead>
                               <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>User / Identity</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Warehouse</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Action</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Level</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Security Event Description</th>
-                                <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)' }}>Timestamp</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>User / Identity</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Warehouse</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Action</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Level</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Security Event Description</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Timestamp</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {filteredSecurityLogs.map((act) => {
+                              {filteredSecurityLogs.slice(0, 15).map((act) => {
                                 let actionColor = '#ea580c';
                                 let actionBg = '#ffedd5';
                                 if (act.action === 'LOGIN') {
@@ -1127,6 +2108,279 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                 );
               })()
             )}
+          </div>
+        )}
+
+        {activeMenu === 'sub_admins' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Top: Register New Sub-Admin Horizontal Form */}
+            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {editingSubAdmin ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
+                  <span>{editingSubAdmin ? `Modify Sub-Admin Profile: ${editingSubAdmin.email}` : 'Register New Sub-Admin'}</span>
+                </h2>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                  All fields are mandatory. Registered credentials grant dashboard and inquiry management access to Sub-Admins.
+                </p>
+              </div>
+
+              <form onSubmit={handleSaveSubAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                  {/* Full Name */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Jane Doe"
+                      value={subAdminFullName}
+                      onChange={(e) => setSubAdminFullName(e.target.value)}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        backgroundColor: 'var(--bg-main)'
+                      }}
+                    />
+                  </div>
+
+                  {/* Phone No. */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. +91 9998887776"
+                      value={subAdminPhoneNo}
+                      onChange={(e) => setSubAdminPhoneNo(e.target.value)}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        backgroundColor: 'var(--bg-main)'
+                      }}
+                    />
+                  </div>
+
+                  {/* Email ID */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email Address *</label>
+                    <input 
+                      type="email" 
+                      placeholder="e.g. jane@reeferon.com"
+                      value={subAdminEmail}
+                      onChange={(e) => setSubAdminEmail(e.target.value)}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        backgroundColor: 'var(--bg-main)'
+                      }}
+                    />
+                  </div>
+
+                  {/* Password */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
+                      {editingSubAdmin ? 'New Password (Optional)' : 'Password *'}
+                    </label>
+                    <div style={{ position: 'relative', width: '100%' }}>
+                      <input 
+                        type={showPassword ? 'text' : 'password'} 
+                        placeholder={editingSubAdmin ? 'Leave blank to retain current' : 'Enter account password'}
+                        value={subAdminPassword}
+                        onChange={(e) => setSubAdminPassword(e.target.value)}
+                        required={!editingSubAdmin}
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          paddingRight: '40px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          fontSize: '0.85rem',
+                          outline: 'none',
+                          backgroundColor: 'var(--bg-main)'
+                        }}
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowPassword(p => !p)}
+                        style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}
+                      >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  {editingSubAdmin && (
+                    <button 
+                      type="button" 
+                      onClick={cancelEditSubAdmin}
+                      style={{
+                        padding: '10px 20px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        backgroundColor: '#ffffff',
+                        fontSize: '0.85rem',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                        color: 'var(--text-dark)'
+                      }}
+                    >
+                      Cancel Edit
+                    </button>
+                  )}
+                  <button 
+                    type="submit"
+                    disabled={loadingSubAdmins}
+                    style={{
+                      padding: '10px 24px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      background: editingSubAdmin ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
+                      color: '#ffffff',
+                      fontSize: '0.85rem',
+                      fontWeight: '800',
+                      cursor: 'pointer',
+                      boxShadow: editingSubAdmin ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {loadingSubAdmins ? 'Processing...' : (editingSubAdmin ? 'Update Sub-Admin' : 'Register Sub-Admin')}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Bottom: Sub-Admins Directory List */}
+            {(() => {
+              const filteredSubAdminsList = subAdmins.filter(sa => {
+                const term = subAdminSearch.toLowerCase();
+                return (
+                  (sa.full_name && sa.full_name.toLowerCase().includes(term)) ||
+                  (sa.email && sa.email.toLowerCase().includes(term)) ||
+                  (sa.phone_no && sa.phone_no.toLowerCase().includes(term))
+                );
+              });
+
+              return (
+                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                    <div>
+                      <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Sub-Admins Directory</h2>
+                      <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage customer account credentials and system access permissions.</p>
+                    </div>
+
+                    <div style={{ minWidth: '240px' }}>
+                      <input 
+                        type="text" 
+                        placeholder="Search by name, email..."
+                        value={subAdminSearch}
+                        onChange={(e) => setSubAdminSearch(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          fontSize: '0.8rem',
+                          outline: 'none',
+                          backgroundColor: 'var(--bg-main)'
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {subAdminSuccess && (
+                    <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
+                      {subAdminSuccess}
+                    </div>
+                  )}
+                  {subAdminError && (
+                    <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
+                      {subAdminError}
+                    </div>
+                  )}
+
+                  {loadingSubAdmins ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                      <span>Loading sub-admins directory...</span>
+                    </div>
+                  ) : filteredSubAdminsList.length === 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
+                      <ShieldAlert size={32} color="#94a3b8" />
+                      <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching sub-admins found.</p>
+                    </div>
+                  ) : (
+                    <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
+                      <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Role Level</th>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
+                            <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredSubAdminsList.map((sa) => (
+                            <tr key={sa.id}>
+                              <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.full_name || '-'}</td>
+                              <td style={{ padding: '12px 16px', fontWeight: '500' }}>{sa.phone_no || '-'}</td>
+                              <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.email}</td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <span className="status-badge" style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 800 }}>
+                                  Sub-Admin / Customer
+                                </span>
+                              </td>
+                              <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                {new Date(sa.created_at).toLocaleDateString('en-GB')}
+                              </td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                  <button 
+                                    className="btn-edit-log"
+                                    type="button"
+                                    onClick={() => startEditSubAdmin(sa)}
+                                    title="Edit Sub-Admin Profile"
+                                    style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                  >
+                                    <Edit size={14} />
+                                  </button>
+                                  <button 
+                                    className="btn-delete-log"
+                                    type="button"
+                                    onClick={() => handleDeleteSubAdmin(sa.id)}
+                                    title="Revoke Access (Delete)"
+                                    style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1385,7 +2639,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse Name</th>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse / Data Access</th>
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
                             <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
                           </tr>
@@ -1401,7 +2655,25 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                               <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.full_name || '-'}</td>
                               <td style={{ padding: '12px 16px', fontWeight: '500' }}>{op.phone_no || '-'}</td>
                               <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.email}</td>
-                              <td style={{ padding: '12px 16px', fontWeight: '500' }}>{op.warehouse_name || '-'}</td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <strong style={{ fontWeight: '700', color: op.warehouse_name ? 'var(--text-dark)' : '#ea580c' }}>
+                                    {op.warehouse_name || 'Not Configured'}
+                                  </strong>
+                                  <span className="status-badge" style={{ 
+                                    backgroundColor: op.warehouse_name ? 'var(--primary-light)' : '#ffedd5', 
+                                    color: op.warehouse_name ? 'var(--primary)' : '#ea580c', 
+                                    fontWeight: 800,
+                                    fontSize: '0.64rem',
+                                    display: 'inline-block',
+                                    width: 'max-content',
+                                    padding: '2px 8px',
+                                    borderRadius: '100px'
+                                  }}>
+                                    {op.warehouse_name ? `Access: ${op.warehouse_name} Logs Only` : 'Access: All Warehouses'}
+                                  </span>
+                                </div>
+                              </td>
                               <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                                 {new Date(op.created_at).toLocaleDateString('en-GB')}
                               </td>

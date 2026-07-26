@@ -716,6 +716,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     <th>Inspection Time</th>
                     <th>Temp (°C)</th>
                     <th>Supervisor</th>
+                    <th>Warehouse / Operator</th>
                     <th>Actions</th>
                   </tr>
                 )}
@@ -729,6 +730,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     <th>Pallets</th>
                     <th>Unloading Time</th>
                     <th className="wrap-text">Supervisor</th>
+                    <th>Warehouse / Operator</th>
                     <th>Actions</th>
                   </tr>
                 )}
@@ -742,6 +744,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     <th>Pallets</th>
                     <th>Loading Time</th>
                     <th className="wrap-text">Supervisor</th>
+                    <th>Warehouse / Operator</th>
                     <th>Actions</th>
                   </tr>
                 )}
@@ -770,6 +773,12 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       </span>
                     </td>
                     <td>{log.monitor_supervisor_name || '-'}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <strong>{log.warehouse_name || '-'}</strong>
+                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{log.operator_email || '-'}</span>
+                      </div>
+                    </td>
                     <td>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 
@@ -821,6 +830,12 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     </td>
                     <td className="wrap-text">{log.inward_unloading_supervisor_name}</td>
                     <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <strong>{log.warehouse_name || '-'}</strong>
+                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{log.operator_email || '-'}</span>
+                      </div>
+                    </td>
+                    <td>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 
                           className="btn-edit-log"
@@ -870,6 +885,12 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       </div>
                     </td>
                     <td className="wrap-text">{log.outward_loading_supervisor_name}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <strong>{log.warehouse_name || '-'}</strong>
+                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{log.operator_email || '-'}</span>
+                      </div>
+                    </td>
                     <td>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 

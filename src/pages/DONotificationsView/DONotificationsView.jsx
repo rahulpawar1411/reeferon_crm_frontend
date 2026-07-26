@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Bell, CheckCircle2, XCircle, Clock, RefreshCw, ArrowRight, Lock, Eye, AlertCircle } from 'lucide-react';
 import { fetchPermissionRequests } from '../../services/api';
+import './DONotificationsView.css';
 
 export default function DONotificationsView({ setActiveDOMenu }) {
   const [notifications, setNotifications] = useState([]);
@@ -67,15 +68,15 @@ export default function DONotificationsView({ setActiveDOMenu }) {
   });
 
   return (
-    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Header with Title and Refresh button */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Bell size={22} color="var(--primary)" />
+    <div className="temp-monitor-page do-notifications-page">
+      {/* 1. Header Banner */}
+      <div className="do-header-banner">
+        <div className="do-header-left">
+          <h2>
+            <Bell size={26} color="#00a2e8" />
             <span>Permission & Access Notifications</span>
           </h2>
-          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+          <p>
             Track the status of your edit or delete request submissions.
           </p>
         </div>
@@ -83,28 +84,15 @@ export default function DONotificationsView({ setActiveDOMenu }) {
         <button
           onClick={loadNotifications}
           disabled={loading}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '8px 14px',
-            backgroundColor: '#ffffff',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.78rem',
-            fontWeight: '700',
-            color: 'var(--text-dark)',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
+          className="do-notifications-refresh-btn"
         >
           <RefreshCw size={14} className={loading ? 'spin-animation' : ''} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           <span>Refresh</span>
         </button>
       </div>
 
-      {/* Filter Tabs */}
-      <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
+      {/* 2. Filter Tabs */}
+      <div className="notifications-filter-container">
         {['All', 'Approved', 'Denied', 'Pending'].map((tab) => {
           const count = tab === 'All' ? notifications.length : notifications.filter(n => n.status === tab).length;
           
@@ -161,8 +149,8 @@ export default function DONotificationsView({ setActiveDOMenu }) {
         </div>
       )}
 
-      {/* Notifications Table */}
-      <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+      {/* 3. Notifications Table Card */}
+      <div className="notifications-table-card">
         {filteredNotifications.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 0' }}>
             <Bell size={36} color="var(--text-muted)" style={{ opacity: 0.5, marginBottom: '12px' }} />
@@ -172,18 +160,18 @@ export default function DONotificationsView({ setActiveDOMenu }) {
             </p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+          <div className="notifications-table-responsive">
+            <table className="logs-table">
               <thead>
-                <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Record ID</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Log Module</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Client Name</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Request Type</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Status</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Admin Response / Message</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800' }}>Timestamp</th>
-                  <th style={{ padding: '6px 8px', color: 'var(--text-dark)', fontWeight: '800', textAlign: 'center' }}>Action</th>
+                <tr>
+                  <th>Record ID</th>
+                  <th>Log Module</th>
+                  <th>Client Name</th>
+                  <th>Request Type</th>
+                  <th>Status</th>
+                  <th className="wrap-text">Admin Response / Message</th>
+                  <th>Timestamp</th>
+                  <th style={{ textAlign: 'center' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -203,19 +191,19 @@ export default function DONotificationsView({ setActiveDOMenu }) {
                   }
 
                   return (
-                    <tr key={notif.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '6px 8px', fontWeight: '700', color: '#475569' }}>
+                    <tr key={notif.id}>
+                      <td style={{ fontWeight: '700', color: '#475569' }}>
                         #{notif.record_id}
                       </td>
-                      <td style={{ padding: '6px 8px' }}>
+                      <td>
                         <span className="status-badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', fontWeight: 700, fontSize: '0.66rem' }}>
                           {parsed.module}
                         </span>
                       </td>
-                      <td style={{ padding: '6px 8px', fontWeight: '800', color: '#0f172a' }}>
+                      <td style={{ fontWeight: '800', color: '#0f172a' }}>
                         {parsed.client}
                       </td>
-                      <td style={{ padding: '6px 8px' }}>
+                      <td>
                         <span className="status-badge" style={{ 
                           backgroundColor: isEdit ? '#e0f2fe' : '#fee2e2', 
                           color: isEdit ? '#0369a1' : '#dc2626', 
@@ -225,7 +213,7 @@ export default function DONotificationsView({ setActiveDOMenu }) {
                           {isEdit ? 'EDIT' : 'DELETE'}
                         </span>
                       </td>
-                      <td style={{ padding: '6px 8px' }}>
+                      <td>
                         <span style={{
                           display: 'inline-block',
                           padding: '2px 8px',
@@ -238,15 +226,15 @@ export default function DONotificationsView({ setActiveDOMenu }) {
                           {notif.status}
                         </span>
                       </td>
-                      <td style={{ padding: '6px 8px', color: '#334155' }}>
-                        <div style={{ fontWeight: '500' }}>{notif.description}</div>
+                      <td className="wrap-text" style={{ color: '#334155' }}>
+                        <div style={{ fontWeight: '500', wordBreak: 'break-word', whiteSpace: 'normal' }}>{notif.description}</div>
                         {parsed.extra !== '-' && (
-                          <div style={{ fontSize: '0.66rem', color: '#64748b', fontStyle: 'italic', marginTop: '2px' }}>
+                          <div style={{ fontSize: '0.66rem', color: '#64748b', fontStyle: 'italic', marginTop: '2px', wordBreak: 'break-word', whiteSpace: 'normal' }}>
                             {parsed.extra}
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '6px 8px', color: '#64748b', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                      <td style={{ color: '#64748b', fontSize: '0.72rem' }}>
                         {new Date(notif.created_at).toLocaleString('en-GB', {
                           day: '2-digit',
                           month: 'short',
@@ -256,7 +244,7 @@ export default function DONotificationsView({ setActiveDOMenu }) {
                           hour12: true
                         })}
                       </td>
-                      <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                      <td style={{ textAlign: 'center' }}>
                         {notif.status === 'Approved' ? (
                           <button
                             onClick={() => setActiveDOMenu('History')}
@@ -272,7 +260,7 @@ export default function DONotificationsView({ setActiveDOMenu }) {
                               fontSize: '0.72rem',
                               fontWeight: '800',
                               cursor: 'pointer',
-                              boxShadow: '0 2px 4px rgba(234, 88, 12, 0.15)',
+                              boxShadow: '0 2px 4px rgba(0, 162, 232, 0.15)',
                               transition: 'all 0.2s',
                               whiteSpace: 'nowrap'
                             }}

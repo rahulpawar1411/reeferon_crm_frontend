@@ -581,4 +581,39 @@
   }
 }
 
+/* Dashboard Control welcome banner card styles */
+.secure-welcome-dashboard-card {
+  padding: 28px;
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: #ffffff;
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.secure-welcome-dashboard-card .welcome-info-left {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+@media (max-width: 768px) {
+  .secure-welcome-dashboard-card {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 20px;
+    gap: 16px;
+  }
+  .secure-welcome-dashboard-card .welcome-info-left {
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+}
+
 

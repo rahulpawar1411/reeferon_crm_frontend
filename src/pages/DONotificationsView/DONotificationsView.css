@@ -1,0 +1,116 @@
+/* ====================================================================
+   DO Notifications View CSS (DONotificationsView.css)
+   Clean 100% responsive layout matching the CRM design system theme.
+   ==================================================================== */
+
+.do-notifications-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 0;
+  box-sizing: border-box;
+}
+
+/* Header Banner Actions */
+.do-notifications-refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background-color: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.do-notifications-refresh-btn:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.do-notifications-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Filter Tabs Container */
+.notifications-filter-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+/* Notification Table Card Container */
+.notifications-table-card {
+  background-color: var(--surface);
+  padding: 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Responsive Table Wrapper */
+.notifications-table-responsive {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+/* Self-contained table styling, mirroring dashboard standards */
+.logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.76rem;
+}
+
+.logs-table th {
+  background-color: #f8fafc;
+  color: #475569;
+  font-weight: 800;
+  padding: 8px 10px;
+  border-bottom: 1.5px solid var(--border);
+  white-space: normal;
+  line-height: 1.25;
+  vertical-align: bottom;
+}
+
+.logs-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dark);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.logs-table td.wrap-text,
+.logs-table th.wrap-text {
+  white-space: normal;
+  word-break: break-word;
+  min-width: 100px;
+}
+
+/* Responsive modifications for mobile viewports */
+@media (max-width: 768px) {
+  .notifications-table-card {
+    padding: 12px;
+  }
+}
