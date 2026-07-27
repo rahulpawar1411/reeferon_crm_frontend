@@ -44,24 +44,25 @@ export default function SubAdminWindow({ user, onLogout }) {
       <Header 
         title={getAdminTitle()} 
         activeTab={activeTab}
+        setActiveTab={setActiveTab}
       />
 
       <main className="app-viewport">
         {selectedLead ? (
           <LeadDetails 
-            leadId={selectedLead} 
+            lead={selectedLead} 
             onBack={() => setSelectedLead(null)} 
           />
         ) : activeTab === 'leads' ? (
-          <Leads onSelectLead={(id) => setSelectedLead(id)} />
+          <Leads setSelectedLead={(id) => setSelectedLead(id)} />
         ) : activeTab === 'add-lead' ? (
-          <AddLead />
+          <AddLead setActiveTab={setActiveTab} />
         ) : activeTab === 'temp-monitor' ? (
           <TempMonitor />
         ) : activeTab === 'settings' ? (
           <Settings />
         ) : (
-          <Dashboard onSelectTab={setActiveTab} />
+          <Dashboard setActiveTab={setActiveTab} setSelectedLead={setSelectedLead} />
         )}
       </main>
     </>

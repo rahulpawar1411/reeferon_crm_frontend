@@ -15,12 +15,14 @@ import TempMonitor from './pages/TempMonitor/TempMonitor';
 import InwardMonitor from './pages/InwardMonitor/InwardMonitor';
 import OutwardMonitor from './pages/OutwardMonitor/OutwardMonitor';
 import DOHistoryView from './pages/DOHistoryView/DOHistoryView';
+import DOProfileLookup from './pages/DOProfileLookup/DOProfileLookup';
 import DONotificationsView from './pages/DONotificationsView/DONotificationsView';
 import AddTempModal from './components/AddTempModal/AddTempModal';
 import Login from './pages/Login/Login';
 import SuperAdminSecureWindow from './pages/SuperAdminSecureWindow/SuperAdminSecureWindow';
 import SubAdminWindow from './pages/SubAdminWindow/SubAdminWindow';
 
+import { API_BASE_URL } from './services/api';
 import './App.css'; // Paired CSS file
 
 export default function App() {
@@ -96,22 +98,13 @@ export default function App() {
       case 'Inward': return 'DO Inward Temp Monitor';
       case 'Outward': return 'DO Outward Temp Monitor';
       case 'History': return 'DO Temp Monitoring History';
+      case 'Lookup': return 'DO Profile Lookup Portal';
       case 'Notifications': return 'DO Notifications';
       default: return 'DO Daily Temp Monitor';
     }
   };
 
-  const getAdminTitle = () => {
-    if (selectedLead) return 'Lead Details';
-    switch (activeTab) {
-      case 'dashboard': return 'Sales Dashboard';
-      case 'leads': return 'Lead Manager';
-      case 'add-lead': return 'New Lead';
-      case 'temp-monitor': return 'DO Temp Monitoring';
-      case 'settings': return 'Settings';
-      default: return 'ReeferON CRM';
-    }
-  };
+
 
   // Authentication Route Guard
   if (!user) {
@@ -159,6 +152,13 @@ export default function App() {
               <OutwardMonitor editData={editOutwardData} setEditData={setEditOutwardData} setActiveDOMenu={setActiveDOMenu} />
             ) : activeDOMenu === 'History' ? (
               <DOHistoryView 
+                setActiveDOMenu={setActiveDOMenu}
+                setEditInwardData={setEditInwardData}
+                setEditOutwardData={setEditOutwardData}
+                setEditDailyData={setEditDailyData}
+              />
+            ) : activeDOMenu === 'Lookup' ? (
+              <DOProfileLookup 
                 setActiveDOMenu={setActiveDOMenu}
                 setEditInwardData={setEditInwardData}
                 setEditOutwardData={setEditOutwardData}

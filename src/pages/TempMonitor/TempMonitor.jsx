@@ -502,7 +502,12 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
                 step="0.1" 
                 placeholder="e.g. -18.5"
                 value={formData.chamber_temp}
-                onChange={(e) => setFormData({ ...formData, chamber_temp: e.target.value })}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '' || /^-?\d*\.?\d*$/.test(val)) {
+                    setFormData({ ...formData, chamber_temp: val });
+                  }
+                }}
                 required
                 className={showErrors && !formData.chamber_temp ? 'input-error' : ''}
               />
@@ -515,7 +520,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
                 type="text" 
                 placeholder="e.g. Rajesh Kumar"
                 value={formData.monitor_supervisor_name}
-                onChange={(e) => setFormData({ ...formData, monitor_supervisor_name: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, monitor_supervisor_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
                 required
                 className={showErrors && !formData.monitor_supervisor_name ? 'input-error' : ''}
               />

@@ -5,7 +5,7 @@
 // ====================================================================
 
 import React from 'react';
-import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus, LogOut, History, Bell } from 'lucide-react';
+import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus, LogOut, History, Bell, Search } from 'lucide-react';
 import Logo from '../Logo/Logo';
 import './DOSidebar.css'; // Paired CSS file
 
@@ -55,6 +55,16 @@ export default function DOSidebar({ user, activeDOMenu, setActiveDOMenu, onLogou
             >
               <History size={19} />
               <span>History Logs</span>
+            </button>
+          </li>
+
+          <li>
+            <button 
+              className={`do-sidebar-link ${activeDOMenu === 'Lookup' ? 'active' : ''}`}
+              onClick={() => setActiveDOMenu('Lookup')}
+            >
+              <Search size={19} />
+              <span>Profile Lookup</span>
             </button>
           </li>
 

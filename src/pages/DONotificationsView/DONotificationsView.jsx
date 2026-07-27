@@ -14,7 +14,7 @@ export default function DONotificationsView({ setActiveDOMenu }) {
     setError('');
     try {
       const data = await fetchPermissionRequests();
-      setNotifications(data);
+      setNotifications(data || []);
     } catch (err) {
       console.error('Failed to load notifications:', err);
       setError('Could not retrieve notifications. Please reload.');
@@ -35,6 +35,7 @@ export default function DONotificationsView({ setActiveDOMenu }) {
     const info = {
       module: '-',
       client: '-',
+      refNo: '',
       extra: '-'
     };
     if (!descText) return info;
@@ -47,6 +48,12 @@ export default function DONotificationsView({ setActiveDOMenu }) {
       info.module = 'Inward DO';
     } else if (descText.includes('Outward')) {
       info.module = 'Outward DO';
+    }
+    
+    // Match Ref: RF-XX-26-XXXX or ID: XX
+    const refMatch = descText.match(/\((?:Ref|ID):\s*([^\)]+)\)/i);
+    if (refMatch) {
+      info.refNo = refMatch[1].trim();
     }
     
     const clientPart = parts.find(p => p.startsWith('Client:'));
@@ -192,8 +199,16 @@ export default function DONotificationsView({ setActiveDOMenu }) {
 
                   return (
                     <tr key={notif.id}>
-                      <td style={{ fontWeight: '700', color: '#475569' }}>
-                        #{notif.record_id}
+                      <td 
+                        style={{ fontWeight: '700', color: 'var(--primary)', cursor: 'pointer', textDecoration: 'underline' }}
+                        title="Click to copy Unique Reference ID"
+                        onClick={() => {
+                          const displayRef = parsed.refNo || `#${notif.record_id}`;
+                          navigator.clipboard.writeText(displayRef);
+                          alert(`Copied Reference ID: ${displayRef}`);
+                        }}
+                      >
+                        {parsed.refNo || `#${notif.record_id}`}
                       </td>
                       <td>
                         <span className="status-badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', fontWeight: 700, fontSize: '0.66rem' }}>

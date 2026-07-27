@@ -43,10 +43,12 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     inward_client_name: '',
     inward_dock_no: '',
     inward_vehicle_reporting_time: '11:00',
+    inward_unloading_start_date: todayStr,
     inward_unloading_start_time: '11:30',
+    inward_unloading_end_date: todayStr,
+    inward_unloading_end_time: '12:30',
     inward_unloading_duration_hours: '1',
     inward_unloading_duration_mins: '0',
-    inward_unloading_end_time: '12:30',
     inward_pallets_in_qty: '',
     inward_invoice_qty: '',
     inward_received_qty: '',
@@ -94,14 +96,38 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     setLoadingLogs(false);
   };
 
+  const convertDDMMYYYYToYYYYMMDD = (ddmmyyyy) => {
+    if (!ddmmyyyy || !ddmmyyyy.includes('-')) return '';
+    const parts = ddmmyyyy.split('-');
+    if (parts.length === 3) {
+      const [dd, mm, yyyy] = parts;
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return '';
+  };
+
+  const convertYYYYMMDDToDDMMYYYY = (yyyymmdd) => {
+    if (!yyyymmdd || !yyyymmdd.includes('-')) return '';
+    const parts = yyyymmdd.split('-');
+    if (parts.length === 3) {
+      const [yyyy, mm, dd] = parts;
+      return `${dd}-${mm}-${yyyy}`;
+    }
+    return '';
+  };
+
   useEffect(() => {
     loadLogs();
   }, []);
 
   useEffect(() => {
     if (editData) {
+      const entryDateOnly = editData.inward_entry_date ? editData.inward_entry_date.split('T')[0] : todayStr;
+      const startHasSpace = editData.inward_unloading_start_time && editData.inward_unloading_start_time.includes(' ');
+      const endHasSpace = editData.inward_unloading_end_time && editData.inward_unloading_end_time.includes(' ');
+      
       setFormData({
-        inward_entry_date: editData.inward_entry_date ? editData.inward_entry_date.split('T')[0] : todayStr,
+        inward_entry_date: entryDateOnly,
         inward_vehicle_no: editData.inward_vehicle_no || '',
         inward_seal_no: editData.inward_seal_no || '',
         inward_vehicle_temp: editData.inward_vehicle_temp || '',
@@ -112,18 +138,26 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         inward_client_name: editData.inward_client_name || '',
         inward_dock_no: editData.inward_dock_no || '',
         inward_vehicle_reporting_time: editData.inward_vehicle_reporting_time || '11:00',
-        inward_unloading_start_time: editData.inward_unloading_start_time 
-          ? (editData.inward_unloading_start_time.includes(' ') 
-              ? editData.inward_unloading_start_time.split(' ')[1] 
-              : editData.inward_unloading_start_time)
-          : '11:30',
+        inward_unloading_start_date: startHasSpace 
+          ? convertDDMMYYYYToYYYYMMDD(editData.inward_unloading_start_time.split(' ')[0]) 
+          : entryDateOnly,
+        inward_unloading_start_time: startHasSpace 
+          ? editData.inward_unloading_start_time.split(' ')[1] 
+          : (editData.inward_unloading_start_time || '11:30'),
+        inward_unloading_end_date: endHasSpace 
+          ? convertDDMMYYYYToYYYYMMDD(editData.inward_unloading_end_time.split(' ')[0]) 
+          : entryDateOnly,
+        inward_unloading_end_time: editData.inward_unloading_end_time 
+          ? (endHasSpace 
+              ? editData.inward_unloading_end_time.split(' ')[1] 
+              : editData.inward_unloading_end_time)
+          : '12:30',
         inward_unloading_duration_hours: editData.inward_unloading_duration_hours || '1',
         inward_unloading_duration_mins: editData.inward_unloading_duration_mins || '0',
-        inward_unloading_end_time: editData.inward_unloading_end_time || '12:30',
         inward_pallets_in_qty: editData.inward_pallets_in_qty || '',
         inward_invoice_qty: editData.inward_invoice_qty || '',
-        inward_received_qty: editData.inward_received_qty || '',
-        inward_received_boxes_qty: editData.inward_received_boxes_qty || '',
+        inward_received_qty: editData.inward_received_boxes_qty || editData.inward_received_qty || '',
+        inward_received_boxes_qty: editData.inward_received_boxes_qty || editData.inward_received_qty || '',
         inward_short_received_boxes_qty: editData.inward_short_received_boxes_qty || 0,
         inward_excess_received_boxes_qty: editData.inward_excess_received_boxes_qty || 0,
         inward_damage_received_boxes_qty: editData.inward_damage_received_boxes_qty || '',
@@ -160,14 +194,14 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   // Update auto-calculated boxes quantity
   useEffect(() => {
     const inv = parseInt(formData.inward_invoice_qty) || 0;
-    const rec = parseInt(formData.inward_received_qty) || 0;
+    const rec = parseInt(formData.inward_received_boxes_qty) || 0;
 
     setFormData(prev => ({
       ...prev,
       inward_short_received_boxes_qty: inv > rec ? inv - rec : 0,
       inward_excess_received_boxes_qty: rec > inv ? rec - inv : 0
     }));
-  }, [formData.inward_invoice_qty, formData.inward_received_qty]);
+  }, [formData.inward_invoice_qty, formData.inward_received_boxes_qty]);
 
   // Reset damage photo files if damage quantity is reset to 0
   useEffect(() => {
@@ -200,22 +234,39 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     return `${endDate}-${endMonth}-${endYear} ${endHours}:${endMinutes}`;
   };
 
-  // Update unloading end times dynamically based on unloading start time and duration
+  // Update unloading duration hours and mins dynamically based on start and end times
   useEffect(() => {
-    const hours = parseInt(formData.inward_unloading_duration_hours) || 0;
-    const mins = parseInt(formData.inward_unloading_duration_mins) || 0;
-    const totalMinutes = hours * 60 + mins;
+    const startTime = formData.inward_unloading_start_time;
+    const endTime = formData.inward_unloading_end_time;
+    const startDate = formData.inward_unloading_start_date || formData.inward_entry_date;
+    const endDate = formData.inward_unloading_end_date || formData.inward_entry_date;
 
-    const unloadingStartTime = formData.inward_unloading_start_time || '11:30';
-    const entryDate = formData.inward_entry_date || todayStr;
+    if (startTime && endTime && startDate && endDate) {
+      const startDateTime = new Date(`${startDate}T${startTime}:00`);
+      const endClean = endTime.includes(' ') ? endTime.split(' ')[1] : endTime;
+      const endDateTime = new Date(`${endDate}T${endClean}:00`);
 
-    const endDateTimeStr = calculateEndDateTime(entryDate, unloadingStartTime, totalMinutes);
+      if (!isNaN(startDateTime.getTime()) && !isNaN(endDateTime.getTime())) {
+        const diffMs = endDateTime.getTime() - startDateTime.getTime();
+        const diffMins = diffMs > 0 ? Math.floor(diffMs / 60000) : 0;
 
-    setFormData(prev => ({
-      ...prev,
-      inward_unloading_end_time: endDateTimeStr
-    }));
-  }, [formData.inward_entry_date, formData.inward_unloading_start_time, formData.inward_unloading_duration_hours, formData.inward_unloading_duration_mins]);
+        const hours = Math.floor(diffMins / 60);
+        const mins = diffMins % 60;
+
+        setFormData(prev => ({
+          ...prev,
+          inward_unloading_duration_hours: hours.toString(),
+          inward_unloading_duration_mins: mins.toString()
+        }));
+      }
+    }
+  }, [
+    formData.inward_unloading_start_time, 
+    formData.inward_unloading_end_time,
+    formData.inward_unloading_start_date,
+    formData.inward_unloading_end_date,
+    formData.inward_entry_date
+  ]);
 
   // Client-Side Canvas Image Compressor
   const compressImageFile = (file) => {
@@ -341,15 +392,40 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   };
 
   // Variance calculator (Unloading End Time vs Vehicle Temp Photo capture)
-  const calculateVariance = (endDateTimeStr, captureDate) => {
+  const calculateVariance = (endTimeStr, captureDate) => {
     try {
-      if (!endDateTimeStr || !captureDate) return 0;
-      // endDateTimeStr is "DD-MM-YYYY HH:MM"
-      const [datePart, timePart] = endDateTimeStr.split(' ');
-      const [day, month, year] = datePart.split('-').map(Number);
-      const [hours, minutes] = timePart.split(':').map(Number);
+      if (!endTimeStr || !captureDate) return 0;
+      
+      let endHours, endMinutes;
+      let endYear = captureDate.getFullYear();
+      let endMonth = captureDate.getMonth();
+      let endDate = captureDate.getDate();
 
-      const expectedEndDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      if (endTimeStr.includes(' ')) {
+        // Old format: "DD-MM-YYYY HH:MM"
+        const [datePart, timePart] = endTimeStr.split(' ');
+        const [day, month, year] = datePart.split('-').map(Number);
+        const [hours, minutes] = timePart.split(':').map(Number);
+        endYear = year;
+        endMonth = month - 1;
+        endDate = day;
+        endHours = hours;
+        endMinutes = minutes;
+      } else {
+        // New format: "HH:MM"
+        const [hours, minutes] = endTimeStr.split(':').map(Number);
+        endHours = hours;
+        endMinutes = minutes;
+        
+        if (formData.inward_entry_date) {
+          const [y, m, d] = formData.inward_entry_date.split('-').map(Number);
+          endYear = y;
+          endMonth = m - 1;
+          endDate = d;
+        }
+      }
+
+      const expectedEndDate = new Date(endYear, endMonth, endDate, endHours, endMinutes, 0, 0);
       const diffMs = Math.abs(captureDate.getTime() - expectedEndDate.getTime());
       return Math.round(diffMs / (1000 * 60));
     } catch (e) {
@@ -409,8 +485,31 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     });
   };
 
-  // Confirm Submit to Save in MySQL
   const handleConfirmSubmit = async () => {
+    const cleanTime = (t) => t && t.includes(' ') ? t.split(' ')[1] : (t || '');
+    
+    // Validate same-day unloading start vs reporting time
+    const startDate = formData.inward_unloading_start_date || formData.inward_entry_date;
+    if (startDate === formData.inward_entry_date) {
+      const repT = cleanTime(formData.inward_vehicle_reporting_time);
+      const startT = cleanTime(formData.inward_unloading_start_time);
+      if (startT < repT) {
+        alert(`Unloading Start Time (${startT}) cannot be earlier than Vehicle Reporting Time (${repT}).`);
+        return;
+      }
+    }
+    
+    // Validate same-day unloading end vs start time
+    const endDate = formData.inward_unloading_end_date || formData.inward_entry_date;
+    if (endDate === startDate) {
+      const startT = cleanTime(formData.inward_unloading_start_time);
+      const endT = cleanTime(formData.inward_unloading_end_time);
+      if (endT < startT) {
+        alert(`Unloading End Time (${endT}) cannot be earlier than Unloading Start Time (${startT}).`);
+        return;
+      }
+    }
+
     setSubmitting(true);
 
     const submissionData = new FormData();
@@ -418,6 +517,17 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       if (key === 'inward_driver_no') {
         const fullPhone = formData.inward_driver_no ? `${driverCountryCode} ${formData.inward_driver_no}` : '';
         submissionData.append('inward_driver_no', fullPhone);
+      } else if (key === 'inward_unloading_start_time') {
+        const startDate = formData.inward_unloading_start_date || formData.inward_entry_date;
+        const formatted = `${convertYYYYMMDDToDDMMYYYY(startDate)} ${formData.inward_unloading_start_time}`;
+        submissionData.append('inward_unloading_start_time', formatted);
+      } else if (key === 'inward_unloading_end_time') {
+        const endDate = formData.inward_unloading_end_date || formData.inward_entry_date;
+        const rawTime = formData.inward_unloading_end_time.includes(' ') ? formData.inward_unloading_end_time.split(' ')[1] : formData.inward_unloading_end_time;
+        const formatted = `${convertYYYYMMDDToDDMMYYYY(endDate)} ${rawTime}`;
+        submissionData.append('inward_unloading_end_time', formatted);
+      } else if (key === 'inward_unloading_start_date' || key === 'inward_unloading_end_date') {
+        // Combined into start/end time values, omit separate fields
       } else {
         submissionData.append(key, formData[key]);
       }
@@ -534,6 +644,10 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     else if (name === 'inward_seal_no') {
       value = value.toUpperCase();
     }
+    // 2b. Text fields (names only)
+    else if (['inward_driver_name', 'inward_unloading_supervisor_name', 'inward_transporter_name'].includes(name)) {
+      value = value.replace(/[^a-zA-Z\s]/g, '');
+    }
     // 3. Phone number (Allow only digits, restrict length dynamically)
     else if (name === 'inward_driver_no') {
       const digits = value.replace(/\D/g, '');
@@ -541,7 +655,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       value = digits.slice(0, maxDigits);
     }
     // 4. Integer fields (Pallets, Boxes, Quantities)
-    else if (['inward_pallets_in_qty', 'inward_invoice_qty', 'inward_received_qty', 'inward_damage_received_boxes_qty'].includes(name)) {
+    else if (['inward_pallets_in_qty', 'inward_invoice_qty', 'inward_received_qty', 'inward_received_boxes_qty', 'inward_damage_received_boxes_qty'].includes(name)) {
       value = value.replace(/\D/g, '');
     }
     // 4b. Duration fields (with 60-mins rollover validation)
@@ -589,7 +703,63 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       value = value.replace(/[^a-zA-Z\s\.\-]/g, '');
     }
 
-    setFormData(prev => ({ ...prev, [name]: value }));
+    if (name === 'inward_entry_date') {
+      setFormData(prev => ({
+        ...prev,
+        inward_entry_date: value,
+        inward_unloading_start_date: value,
+        inward_unloading_end_date: value
+      }));
+      return;
+    }
+
+    if (name === 'inward_unloading_start_date') {
+      const minDate = formData.inward_entry_date;
+      let cleanVal = value;
+      if (cleanVal < minDate) {
+        cleanVal = minDate;
+      }
+      setFormData(prev => ({
+        ...prev,
+        inward_unloading_start_date: cleanVal,
+        inward_unloading_end_date: cleanVal
+      }));
+      return;
+    }
+
+    if (name === 'inward_unloading_end_date') {
+      const minDate = formData.inward_unloading_start_date || formData.inward_entry_date;
+      let cleanVal = value;
+      if (cleanVal < minDate) {
+        cleanVal = minDate;
+      }
+      setFormData(prev => ({
+        ...prev,
+        inward_unloading_end_date: cleanVal
+      }));
+      return;
+    }
+
+    if (name === 'inward_vehicle_reporting_time') {
+      setFormData(prev => ({ ...prev, inward_vehicle_reporting_time: value }));
+      return;
+    }
+
+    if (name === 'inward_unloading_start_time') {
+      setFormData(prev => ({ ...prev, inward_unloading_start_time: value }));
+      return;
+    }
+
+    if (name === 'inward_unloading_end_time') {
+      setFormData(prev => ({ ...prev, inward_unloading_end_time: value }));
+      return;
+    }
+
+    if (name === 'inward_received_boxes_qty') {
+      setFormData(prev => ({ ...prev, inward_received_boxes_qty: value, inward_received_qty: value }));
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
   };
 
   return (
@@ -868,6 +1038,16 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   />
                 </div>
                 <div className="inward-form-group">
+                  <label>Unloading Start Date</label>
+                  <input
+                    type="date"
+                    name="inward_unloading_start_date"
+                    min={formData.inward_entry_date}
+                    value={formData.inward_unloading_start_date}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="inward-form-group">
                   <label>Unloading Start Time</label>
                   <input
                     type="time"
@@ -877,36 +1057,39 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Unloading Duration</label>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      name="inward_unloading_duration_hours"
-                      value={formData.inward_unloading_duration_hours}
-                      onChange={handleInputChange}
-                      placeholder="Hrs"
-                      style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: '#666' }}>hrs</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      name="inward_unloading_duration_mins"
-                      value={formData.inward_unloading_duration_mins}
-                      onChange={handleInputChange}
-                      placeholder="Mins"
-                      style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: '#666' }}>mins</span>
-                  </div>
+                  <label>Unloading End Date</label>
+                  <input
+                    type="date"
+                    name="inward_unloading_end_date"
+                    min={formData.inward_unloading_start_date || formData.inward_entry_date}
+                    value={formData.inward_unloading_end_date}
+                    onChange={handleInputChange}
+                  />
                 </div>
                 <div className="inward-form-group">
-                  <label>Unloading End Time (Auto)</label>
+                  <label>Unloading End Time</label>
+                  <input
+                    type="time"
+                    name="inward_unloading_end_time"
+                    value={formData.inward_unloading_end_time ? (formData.inward_unloading_end_time.includes(' ') ? formData.inward_unloading_end_time.split(' ')[1] : formData.inward_unloading_end_time) : '12:30'}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="inward-form-group">
+                  <label>Unloading Duration (Auto)</label>
                   <input
                     type="text"
-                    name="inward_unloading_end_time"
-                    value={formData.inward_unloading_end_time}
+                    name="inward_unloading_duration_combined"
+                    value={(() => {
+                      const h = parseInt(formData.inward_unloading_duration_hours) || 0;
+                      const m = parseInt(formData.inward_unloading_duration_mins) || 0;
+                      if (h >= 24) {
+                        const days = Math.floor(h / 24);
+                        const remH = h % 24;
+                        return `${days}d ${remH}h ${m}m (${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')})`;
+                      }
+                      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                    })()}
                     readOnly
                     className="readonly-field"
                     style={{ background: 'var(--surface-overlay, #f5f5f5)', cursor: 'not-allowed' }}
@@ -975,12 +1158,12 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Actual Received Qty</label>
+                  <label>Boxes Received Qty</label>
                   <input
                     type="text"
                     inputMode="numeric"
-                    name="inward_received_qty"
-                    value={formData.inward_received_qty}
+                    name="inward_received_boxes_qty"
+                    value={formData.inward_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
                   />

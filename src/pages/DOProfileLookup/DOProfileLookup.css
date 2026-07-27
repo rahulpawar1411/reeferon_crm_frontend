@@ -1,0 +1,12 @@
+/* DO Profile Lookup Styles (src/pages/DOProfileLookup/DOProfileLookup.css) */
+
+.lookup-result-card {
+  transition: all 0.22s ease !important;
+}
+
+.lookup-result-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary) !important;
+  box-shadow: var(--shadow-md) !important;
+  background-color: #f8fafc !important;
+}

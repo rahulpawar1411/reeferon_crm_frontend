@@ -36,6 +36,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     outward_vehicle_no: '',
     outward_seal_no: '',
     outward_vehicle_temp: '',
+    outward_pre_vehicle_temp: '',
     outward_material_temp: '',
     outward_transporter_name: '',
     outward_driver_name: '',
@@ -43,10 +44,12 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     outward_client_name: '',
     outward_dock_no: '',
     outward_vehicle_reporting_time: '11:00',
+    outward_loading_start_date: todayStr,
     outward_loading_start_time: '11:30',
+    outward_loading_end_date: todayStr,
+    outward_loading_end_time: '12:30',
     outward_loading_duration_hours: '1',
     outward_loading_duration_mins: '0',
-    outward_loading_end_time: '12:30',
     outward_pallets_in_qty: '',
     outward_invoice_qty: '',
     outward_received_qty: '',
@@ -94,17 +97,42 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     setLoadingLogs(false);
   };
 
+  const convertDDMMYYYYToYYYYMMDD = (ddmmyyyy) => {
+    if (!ddmmyyyy || !ddmmyyyy.includes('-')) return '';
+    const parts = ddmmyyyy.split('-');
+    if (parts.length === 3) {
+      const [dd, mm, yyyy] = parts;
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return '';
+  };
+
+  const convertYYYYMMDDToDDMMYYYY = (yyyymmdd) => {
+    if (!yyyymmdd || !yyyymmdd.includes('-')) return '';
+    const parts = yyyymmdd.split('-');
+    if (parts.length === 3) {
+      const [yyyy, mm, dd] = parts;
+      return `${dd}-${mm}-${yyyy}`;
+    }
+    return '';
+  };
+
   useEffect(() => {
     loadLogs();
   }, []);
 
   useEffect(() => {
     if (editData) {
+      const entryDateOnly = editData.outward_entry_date ? editData.outward_entry_date.split('T')[0] : todayStr;
+      const startHasSpace = editData.outward_loading_start_time && editData.outward_loading_start_time.includes(' ');
+      const endHasSpace = editData.outward_loading_end_time && editData.outward_loading_end_time.includes(' ');
+
       setFormData({
-        outward_entry_date: editData.outward_entry_date ? editData.outward_entry_date.split('T')[0] : todayStr,
+        outward_entry_date: entryDateOnly,
         outward_vehicle_no: editData.outward_vehicle_no || '',
         outward_seal_no: editData.outward_seal_no || '',
-        outward_vehicle_temp: editData.outward_vehicle_temp || '',
+        outward_vehicle_temp: editData.outward_pre_vehicle_temp || editData.outward_vehicle_temp || '',
+        outward_pre_vehicle_temp: editData.outward_pre_vehicle_temp || editData.outward_vehicle_temp || '',
         outward_material_temp: editData.outward_material_temp || '',
         outward_transporter_name: editData.outward_transporter_name || '',
         outward_driver_name: editData.outward_driver_name || '',
@@ -112,18 +140,26 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         outward_client_name: editData.outward_client_name || '',
         outward_dock_no: editData.outward_dock_no || '',
         outward_vehicle_reporting_time: editData.outward_vehicle_reporting_time || '11:00',
-        outward_loading_start_time: editData.outward_loading_start_time 
-          ? (editData.outward_loading_start_time.includes(' ') 
-              ? editData.outward_loading_start_time.split(' ')[1] 
-              : editData.outward_loading_start_time)
-          : '11:30',
+        outward_loading_start_date: startHasSpace 
+          ? convertDDMMYYYYToYYYYMMDD(editData.outward_loading_start_time.split(' ')[0]) 
+          : entryDateOnly,
+        outward_loading_start_time: startHasSpace 
+          ? editData.outward_loading_start_time.split(' ')[1] 
+          : (editData.outward_loading_start_time || '11:30'),
+        outward_loading_end_date: endHasSpace 
+          ? convertDDMMYYYYToYYYYMMDD(editData.outward_loading_end_time.split(' ')[0]) 
+          : entryDateOnly,
+        outward_loading_end_time: editData.outward_loading_end_time 
+          ? (endHasSpace 
+              ? editData.outward_loading_end_time.split(' ')[1] 
+              : editData.outward_loading_end_time)
+          : '12:30',
         outward_loading_duration_hours: editData.outward_loading_duration_hours || '1',
         outward_loading_duration_mins: editData.outward_loading_duration_mins || '0',
-        outward_loading_end_time: editData.outward_loading_end_time || '12:30',
         outward_pallets_in_qty: editData.outward_pallets_in_qty || '',
         outward_invoice_qty: editData.outward_invoice_qty || '',
-        outward_received_qty: editData.outward_received_qty || '',
-        outward_received_boxes_qty: editData.outward_received_boxes_qty || '',
+        outward_received_qty: editData.outward_received_boxes_qty || editData.outward_received_qty || '',
+        outward_received_boxes_qty: editData.outward_received_boxes_qty || editData.outward_received_qty || '',
         outward_short_received_boxes_qty: editData.outward_short_received_boxes_qty || 0,
         outward_excess_received_boxes_qty: editData.outward_excess_received_boxes_qty || 0,
         outward_damage_received_boxes_qty: editData.outward_damage_received_boxes_qty || '',
@@ -144,7 +180,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       setInvoicePreview(getImgUrl(editData.outward_invoice_photos));
       setPodPreview(getImgUrl(editData.outward_pod_photo));
       setSealPreview(getImgUrl(editData.outward_vehicle_seal_photo));
-      setVehicleTempPreview(getImgUrl(editData.outward_vehicle_temp_photo));
+      setVehicleTempPreview(getImgUrl(editData.outward_pre_vehicle_temp_photo || editData.outward_vehicle_temp_photo));
       setMaterialTempPreview(getImgUrl(editData.outward_material_temp_photo));
       setVehicleBackPreview(getImgUrl(editData.outward_vehicle_back_side_photo));
       setVehicleBackWithMaterialPreview(getImgUrl(editData.outward_vehicle_back_side_photo_with_material));
@@ -160,14 +196,14 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   // Update auto-calculated boxes quantity
   useEffect(() => {
     const inv = parseInt(formData.outward_invoice_qty) || 0;
-    const rec = parseInt(formData.outward_received_qty) || 0;
+    const rec = parseInt(formData.outward_received_boxes_qty) || 0;
 
     setFormData(prev => ({
       ...prev,
       outward_short_received_boxes_qty: inv > rec ? inv - rec : 0,
       outward_excess_received_boxes_qty: rec > inv ? rec - inv : 0
     }));
-  }, [formData.outward_invoice_qty, formData.outward_received_qty]);
+  }, [formData.outward_invoice_qty, formData.outward_received_boxes_qty]);
 
   // Reset damage photo files if damage quantity is reset to 0
   useEffect(() => {
@@ -200,22 +236,39 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     return `${endDate}-${endMonth}-${endYear} ${endHours}:${endMinutes}`;
   };
 
-  // Update loading end times dynamically based on loading start time and duration
+  // Update loading duration hours and mins dynamically based on start and end times
   useEffect(() => {
-    const hours = parseInt(formData.outward_loading_duration_hours) || 0;
-    const mins = parseInt(formData.outward_loading_duration_mins) || 0;
-    const totalMinutes = hours * 60 + mins;
+    const startTime = formData.outward_loading_start_time;
+    const endTime = formData.outward_loading_end_time;
+    const startDate = formData.outward_loading_start_date || formData.outward_entry_date;
+    const endDate = formData.outward_loading_end_date || formData.outward_entry_date;
 
-    const loadingStartTime = formData.outward_loading_start_time || '11:30';
-    const entryDate = formData.outward_entry_date || todayStr;
+    if (startTime && endTime && startDate && endDate) {
+      const startDateTime = new Date(`${startDate}T${startTime}:00`);
+      const endClean = endTime.includes(' ') ? endTime.split(' ')[1] : endTime;
+      const endDateTime = new Date(`${endDate}T${endClean}:00`);
 
-    const endDateTimeStr = calculateEndDateTime(entryDate, loadingStartTime, totalMinutes);
+      if (!isNaN(startDateTime.getTime()) && !isNaN(endDateTime.getTime())) {
+        const diffMs = endDateTime.getTime() - startDateTime.getTime();
+        const diffMins = diffMs > 0 ? Math.floor(diffMs / 60000) : 0;
 
-    setFormData(prev => ({
-      ...prev,
-      outward_loading_end_time: endDateTimeStr
-    }));
-  }, [formData.outward_entry_date, formData.outward_loading_start_time, formData.outward_loading_duration_hours, formData.outward_loading_duration_mins]);
+        const hours = Math.floor(diffMins / 60);
+        const mins = diffMins % 60;
+
+        setFormData(prev => ({
+          ...prev,
+          outward_loading_duration_hours: hours.toString(),
+          outward_loading_duration_mins: mins.toString()
+        }));
+      }
+    }
+  }, [
+    formData.outward_loading_start_time, 
+    formData.outward_loading_end_time,
+    formData.outward_loading_start_date,
+    formData.outward_loading_end_date,
+    formData.outward_entry_date
+  ]);
 
   // Client-Side Canvas Image Compressor
   const compressImageFile = (file) => {
@@ -337,14 +390,40 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   };
 
   // Variance calculator (Loading End Time vs Vehicle Temp Photo capture)
-  const calculateVariance = (endDateTimeStr, captureDate) => {
+  const calculateVariance = (endTimeStr, captureDate) => {
     try {
-      if (!endDateTimeStr || !captureDate) return 0;
-      const [datePart, timePart] = endDateTimeStr.split(' ');
-      const [day, month, year] = datePart.split('-').map(Number);
-      const [hours, minutes] = timePart.split(':').map(Number);
+      if (!endTimeStr || !captureDate) return 0;
+      
+      let endHours, endMinutes;
+      let endYear = captureDate.getFullYear();
+      let endMonth = captureDate.getMonth();
+      let endDate = captureDate.getDate();
 
-      const expectedEndDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      if (endTimeStr.includes(' ')) {
+        // Old format: "DD-MM-YYYY HH:MM"
+        const [datePart, timePart] = endTimeStr.split(' ');
+        const [day, month, year] = datePart.split('-').map(Number);
+        const [hours, minutes] = timePart.split(':').map(Number);
+        endYear = year;
+        endMonth = month - 1;
+        endDate = day;
+        endHours = hours;
+        endMinutes = minutes;
+      } else {
+        // New format: "HH:MM"
+        const [hours, minutes] = endTimeStr.split(':').map(Number);
+        endHours = hours;
+        endMinutes = minutes;
+        
+        if (formData.outward_entry_date) {
+          const [y, m, d] = formData.outward_entry_date.split('-').map(Number);
+          endYear = y;
+          endMonth = m - 1;
+          endDate = d;
+        }
+      }
+
+      const expectedEndDate = new Date(endYear, endMonth, endDate, endHours, endMinutes, 0, 0);
       const diffMs = Math.abs(captureDate.getTime() - expectedEndDate.getTime());
       return Math.round(diffMs / (1000 * 60));
     } catch (e) {
@@ -403,8 +482,31 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     });
   };
 
-  // Confirm Submit to Save in MySQL
   const handleConfirmSubmit = async () => {
+    const cleanTime = (t) => t && t.includes(' ') ? t.split(' ')[1] : (t || '');
+    
+    // Validate same-day loading start vs reporting time
+    const startDate = formData.outward_loading_start_date || formData.outward_entry_date;
+    if (startDate === formData.outward_entry_date) {
+      const repT = cleanTime(formData.outward_vehicle_reporting_time);
+      const startT = cleanTime(formData.outward_loading_start_time);
+      if (startT < repT) {
+        alert(`Loading Start Time (${startT}) cannot be earlier than Vehicle Reporting Time (${repT}).`);
+        return;
+      }
+    }
+    
+    // Validate same-day loading end vs start time
+    const endDate = formData.outward_loading_end_date || formData.outward_entry_date;
+    if (endDate === startDate) {
+      const startT = cleanTime(formData.outward_loading_start_time);
+      const endT = cleanTime(formData.outward_loading_end_time);
+      if (endT < startT) {
+        alert(`Loading End Time (${endT}) cannot be earlier than Loading Start Time (${startT}).`);
+        return;
+      }
+    }
+
     setSubmitting(true);
 
     const submissionData = new FormData();
@@ -412,6 +514,17 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       if (key === 'outward_driver_no') {
         const fullPhone = formData.outward_driver_no ? `${driverCountryCode} ${formData.outward_driver_no}` : '';
         submissionData.append('outward_driver_no', fullPhone);
+      } else if (key === 'outward_loading_start_time') {
+        const startDate = formData.outward_loading_start_date || formData.outward_entry_date;
+        const formatted = `${convertYYYYMMDDToDDMMYYYY(startDate)} ${formData.outward_loading_start_time}`;
+        submissionData.append('outward_loading_start_time', formatted);
+      } else if (key === 'outward_loading_end_time') {
+        const endDate = formData.outward_loading_end_date || formData.outward_entry_date;
+        const rawTime = formData.outward_loading_end_time.includes(' ') ? formData.outward_loading_end_time.split(' ')[1] : formData.outward_loading_end_time;
+        const formatted = `${convertYYYYMMDDToDDMMYYYY(endDate)} ${rawTime}`;
+        submissionData.append('outward_loading_end_time', formatted);
+      } else if (key === 'outward_loading_start_date' || key === 'outward_loading_end_date') {
+        // Combined into start/end time values, omit separate fields
       } else {
         submissionData.append(key, formData[key]);
       }
@@ -420,7 +533,10 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     if (invoicePhoto) submissionData.append('outward_invoice_photos', invoicePhoto);
     if (podPhoto) submissionData.append('outward_pod_photo', podPhoto);
     if (sealPhoto) submissionData.append('outward_vehicle_seal_photo', sealPhoto);
-    if (vehicleTempPhoto) submissionData.append('outward_vehicle_temp_photo', vehicleTempPhoto);
+    if (vehicleTempPhoto) {
+      submissionData.append('outward_vehicle_temp_photo', vehicleTempPhoto);
+      submissionData.append('outward_pre_vehicle_temp_photo', vehicleTempPhoto);
+    }
     if (materialTempPhoto) submissionData.append('outward_material_temp_photo', materialTempPhoto);
     if (vehicleBackPhoto) submissionData.append('outward_vehicle_back_side_photo', vehicleBackPhoto);
     if (vehicleBackWithMaterialPhoto) submissionData.append('outward_vehicle_back_side_photo_with_material', vehicleBackWithMaterialPhoto);
@@ -454,6 +570,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         outward_vehicle_no: '',
         outward_seal_no: '',
         outward_vehicle_temp: '',
+        outward_pre_vehicle_temp: '',
         outward_material_temp: '',
         outward_transporter_name: '',
         outward_driver_name: '',
@@ -528,6 +645,10 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     else if (name === 'outward_seal_no') {
       value = value.toUpperCase();
     }
+    // 2b. Text fields (names only)
+    else if (['outward_driver_name', 'outward_loading_supervisor_name', 'outward_transporter_name'].includes(name)) {
+      value = value.replace(/[^a-zA-Z\s]/g, '');
+    }
     // 3. Phone number
     else if (name === 'outward_driver_no') {
       const digits = value.replace(/\D/g, '');
@@ -535,7 +656,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       value = digits.slice(0, maxDigits);
     }
     // 4. Integer fields
-    else if (['outward_pallets_in_qty', 'outward_invoice_qty', 'outward_received_qty', 'outward_damage_received_boxes_qty'].includes(name)) {
+    else if (['outward_pallets_in_qty', 'outward_invoice_qty', 'outward_received_qty', 'outward_received_boxes_qty', 'outward_damage_received_boxes_qty'].includes(name)) {
       value = value.replace(/\D/g, '');
     }
     // 4b. Duration fields
@@ -563,7 +684,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       }
     }
     // 5. Float/Decimal fields
-    else if (['outward_vehicle_temp', 'outward_material_temp'].includes(name)) {
+    else if (['outward_vehicle_temp', 'outward_pre_vehicle_temp', 'outward_material_temp'].includes(name)) {
       let clean = value.replace(/[^\d\.\-]/g, '');
       if (clean.includes('-')) {
         const parts = clean.split('-');
@@ -580,7 +701,65 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       value = value.replace(/[^a-zA-Z\s\.\-]/g, '');
     }
 
-    setFormData(prev => ({ ...prev, [name]: value }));
+    if (name === 'outward_entry_date') {
+      setFormData(prev => ({
+        ...prev,
+        outward_entry_date: value,
+        outward_loading_start_date: value,
+        outward_loading_end_date: value
+      }));
+      return;
+    }
+
+    if (name === 'outward_loading_start_date') {
+      const minDate = formData.outward_entry_date;
+      let cleanVal = value;
+      if (cleanVal < minDate) {
+        cleanVal = minDate;
+      }
+      setFormData(prev => ({
+        ...prev,
+        outward_loading_start_date: cleanVal,
+        outward_loading_end_date: cleanVal
+      }));
+      return;
+    }
+
+    if (name === 'outward_loading_end_date') {
+      const minDate = formData.outward_loading_start_date || formData.outward_entry_date;
+      let cleanVal = value;
+      if (cleanVal < minDate) {
+        cleanVal = minDate;
+      }
+      setFormData(prev => ({
+        ...prev,
+        outward_loading_end_date: cleanVal
+      }));
+      return;
+    }
+
+    if (name === 'outward_vehicle_reporting_time') {
+      setFormData(prev => ({ ...prev, outward_vehicle_reporting_time: value }));
+      return;
+    }
+
+    if (name === 'outward_loading_start_time') {
+      setFormData(prev => ({ ...prev, outward_loading_start_time: value }));
+      return;
+    }
+
+    if (name === 'outward_loading_end_time') {
+      setFormData(prev => ({ ...prev, outward_loading_end_time: value }));
+      return;
+    }
+
+    if (name === 'outward_received_boxes_qty') {
+      setFormData(prev => ({ ...prev, outward_received_boxes_qty: value, outward_received_qty: value }));
+    } else if (name === 'outward_pre_vehicle_temp') {
+      setFormData(prev => ({ ...prev, outward_pre_vehicle_temp: value, outward_vehicle_temp: value }));
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
   };
 
   return (
@@ -859,6 +1038,16 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   />
                 </div>
                 <div className="inward-form-group">
+                  <label>Loading Start Date</label>
+                  <input
+                    type="date"
+                    name="outward_loading_start_date"
+                    min={formData.outward_entry_date}
+                    value={formData.outward_loading_start_date}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="inward-form-group">
                   <label>Loading Start Time</label>
                   <input
                     type="time"
@@ -868,36 +1057,39 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Loading Duration</label>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      name="outward_loading_duration_hours"
-                      value={formData.outward_loading_duration_hours}
-                      onChange={handleInputChange}
-                      placeholder="Hrs"
-                      style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: '#666' }}>hrs</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      name="outward_loading_duration_mins"
-                      value={formData.outward_loading_duration_mins}
-                      onChange={handleInputChange}
-                      placeholder="Mins"
-                      style={{ flex: 1, minWidth: 0, padding: '8px 6px', textAlign: 'center' }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: '#666' }}>mins</span>
-                  </div>
+                  <label>Loading End Date</label>
+                  <input
+                    type="date"
+                    name="outward_loading_end_date"
+                    min={formData.outward_loading_start_date || formData.outward_entry_date}
+                    value={formData.outward_loading_end_date}
+                    onChange={handleInputChange}
+                  />
                 </div>
                 <div className="inward-form-group">
-                  <label>Loading End Time (Auto)</label>
+                  <label>Loading End Time</label>
+                  <input
+                    type="time"
+                    name="outward_loading_end_time"
+                    value={formData.outward_loading_end_time ? (formData.outward_loading_end_time.includes(' ') ? formData.outward_loading_end_time.split(' ')[1] : formData.outward_loading_end_time) : '12:30'}
+                    onChange={handleInputChange}
+                  />
+                </div>
+                <div className="inward-form-group">
+                  <label>Loading Duration (Auto)</label>
                   <input
                     type="text"
-                    name="outward_loading_end_time"
-                    value={formData.outward_loading_end_time}
+                    name="outward_loading_duration_combined"
+                    value={(() => {
+                      const h = parseInt(formData.outward_loading_duration_hours) || 0;
+                      const m = parseInt(formData.outward_loading_duration_mins) || 0;
+                      if (h >= 24) {
+                        const days = Math.floor(h / 24);
+                        const remH = h % 24;
+                        return `${days}d ${remH}h ${m}m (${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')})`;
+                      }
+                      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                    })()}
                     readOnly
                     className="readonly-field"
                     style={{ background: 'var(--surface-overlay, #f5f5f5)', cursor: 'not-allowed' }}
@@ -913,12 +1105,12 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Outward Vehicle Temp. (°C)</label>
+                  <label>Pre Vehicle Temp. (°C)</label>
                   <input
                     type="text"
                     inputMode="decimal"
-                    name="outward_vehicle_temp"
-                    value={formData.outward_vehicle_temp}
+                    name="outward_pre_vehicle_temp"
+                    value={formData.outward_pre_vehicle_temp}
                     onChange={handleInputChange}
                     placeholder="-18.5"
                   />
@@ -966,12 +1158,12 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Actual Loaded Qty</label>
+                  <label>Boxes Loaded Qty</label>
                   <input
                     type="text"
                     inputMode="numeric"
-                    name="outward_received_qty"
-                    value={formData.outward_received_qty}
+                    name="outward_received_boxes_qty"
+                    value={formData.outward_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
                   />
@@ -1268,11 +1460,11 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
 
                 {/* Vehicle Temp Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Outward Vehicle Temp Photo</label>
+                  <label>Pre Vehicle Temp Photo</label>
                   {!vehicleTempPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
-                      <span>Choose Outward Vehicle Temp Photo</span>
+                      <span>Choose Pre Vehicle Temp Photo</span>
                       <input
                         type="file"
                         accept="image/*"

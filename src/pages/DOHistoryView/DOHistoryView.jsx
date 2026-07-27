@@ -7,7 +7,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   History, Search, Calendar, Trash2, X, Eye, 
-  Thermometer, ArrowDownLeft, ArrowUpRight, Loader2, AlertCircle, Edit, Download 
+  Thermometer, ArrowDownLeft, ArrowUpRight, Loader2, AlertCircle, Edit, Download,
+  Copy, Check
 } from 'lucide-react';
 import { 
   fetchChamberLogs, deleteChamberLog, 
@@ -20,7 +21,21 @@ import './DOHistoryView.css';
 
 export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setEditOutwardData, setEditDailyData }) {
   const [activeTab, setActiveTab] = useState('daily'); // 'daily' | 'inward' | 'outward'
+  
+  const formatDuration = (hoursStr, minsStr) => {
+    const hours = parseInt(hoursStr) || 0;
+    const mins = parseInt(minsStr) || 0;
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24);
+      const remHours = hours % 24;
+      return `${days}d ${remHours}h ${mins}m`;
+    }
+    return `${hours}h ${mins}m`;
+  };
   const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [copiedRef, setCopiedRef] = useState(null);
+  const logsPerPage = 15;
   
   // Permission Request States & Handlers
   const [permissionModalData, setPermissionModalData] = useState({
@@ -75,7 +90,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
         }
       }
 
-      const descText = `Requested permission to ${actionLabel} ${recordType} log (ID: ${recordId})${extraDetails}`;
+      const refNo = log ? log.reference_no : null;
+      const descText = `Requested permission to ${actionLabel} ${recordType} log (Ref: ${refNo || ('ID: ' + recordId)})${extraDetails}`;
       const res = await requestEditPermission(
         recordType,
         recordId,
@@ -107,6 +123,9 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
   const [appliedFromDate, setAppliedFromDate] = useState('');
   const [appliedToDate, setAppliedToDate] = useState('');
 
+  // Log Detail modal state
+  const [selectedDetailLog, setSelectedDetailLog] = useState(null);
+  const [detailType, setDetailType] = useState('');
   // Helper to format today's date in YYYY-MM-DD
   const getTodayDateStr = () => {
     const today = new Date();
@@ -137,6 +156,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     setAppliedSearchTerm(searchTerm);
     setAppliedFromDate(fromDate);
     setAppliedToDate(toDate);
+    setCurrentPage(1);
   };
 
   // Handler to export filtered logs to Excel (CSV format)
@@ -196,7 +216,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           log.inward_damage_received_boxes_qty || 0,
           log.inward_unloading_start_time || '',
           log.inward_unloading_end_time || '',
-          `${log.inward_unloading_duration_hours || '0'}h ${log.inward_unloading_duration_mins || '0'}m`,
+          formatDuration(log.inward_unloading_duration_hours, log.inward_unloading_duration_mins),
           log.inward_unloading_supervisor_name || '',
           log.inward_remarks || '',
           getUpdateDiff(log.inward_created_at, log.inward_updated_at) ? formatDateTimeStr(log.inward_updated_at) : ''
@@ -206,7 +226,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     } else if (activeTab === 'outward') {
       const headers = [
         "Date", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
-        "Reporting Time", "Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
+        "Reporting Time", "Pre Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
         "Invoice Qty", "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Boxes", 
         "Loading Start", "Loading End", "Loading Duration", "Supervisor", "Remarks", "Last Updated"
       ];
@@ -223,7 +243,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           log.outward_driver_no || '',
           log.outward_dock_no || '',
           log.outward_vehicle_reporting_time || '',
-          log.outward_vehicle_temp !== undefined ? `${log.outward_vehicle_temp}°C` : '',
+          (log.outward_pre_vehicle_temp !== undefined && log.outward_pre_vehicle_temp !== null) ? `${log.outward_pre_vehicle_temp}°C` : ((log.outward_vehicle_temp !== undefined && log.outward_vehicle_temp !== null) ? `${log.outward_vehicle_temp}°C` : ''),
           log.outward_material_temp !== undefined ? `${log.outward_material_temp}°C` : '',
           log.outward_material_type || '',
           log.outward_pallets_in_qty || 0,
@@ -235,7 +255,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           log.outward_damage_received_boxes_qty || 0,
           log.outward_loading_start_time || '',
           log.outward_loading_end_time || '',
-          `${log.outward_loading_duration_hours || '0'}h ${log.outward_loading_duration_mins || '0'}m`,
+          formatDuration(log.outward_loading_duration_hours, log.outward_loading_duration_mins),
           log.outward_loading_supervisor_name || '',
           log.outward_remarks || '',
           getUpdateDiff(log.outward_created_at, log.outward_updated_at) ? formatDateTimeStr(log.outward_updated_at) : ''
@@ -284,6 +304,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
 
   useEffect(() => {
     loadLogs();
+    setCurrentPage(1);
   }, [activeTab]);
 
   // Handle Log Deletion
@@ -459,30 +480,41 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
 
     if (activeTab === 'daily') {
       return dailyLogs.filter(log => {
+        const dateStr = formatDateStr(log.formatted_date || log.entry_date).toLowerCase();
         const matchSearch = 
+          (log.reference_no || '').toLowerCase().includes(term) ||
           (log.client_name || '').toLowerCase().includes(term) ||
           (log.chamber_name || '').toLowerCase().includes(term) ||
-          (log.monitor_supervisor_name || '').toLowerCase().includes(term);
+          (log.monitor_supervisor_name || '').toLowerCase().includes(term) ||
+          dateStr.includes(term);
         const matchDate = matchDateRange(log.entry_date);
         return matchSearch && matchDate;
       });
     } else if (activeTab === 'inward') {
       return inwardLogs.filter(log => {
+        const dateStr = formatDateStr(log.inward_entry_date).toLowerCase();
         const matchSearch = 
+          (log.reference_no || '').toLowerCase().includes(term) ||
           (log.inward_client_name || '').toLowerCase().includes(term) ||
           (log.inward_vehicle_no || '').toLowerCase().includes(term) ||
           (log.inward_unloading_supervisor_name || '').toLowerCase().includes(term) ||
-          (log.inward_transporter_name || '').toLowerCase().includes(term);
+          (log.inward_transporter_name || '').toLowerCase().includes(term) ||
+          (log.inward_driver_name || '').toLowerCase().includes(term) ||
+          dateStr.includes(term);
         const matchDate = matchDateRange(log.inward_entry_date);
         return matchSearch && matchDate;
       });
     } else {
       return outwardLogs.filter(log => {
+        const dateStr = formatDateStr(log.outward_entry_date).toLowerCase();
         const matchSearch = 
+          (log.reference_no || '').toLowerCase().includes(term) ||
           (log.outward_client_name || '').toLowerCase().includes(term) ||
           (log.outward_vehicle_no || '').toLowerCase().includes(term) ||
           (log.outward_loading_supervisor_name || '').toLowerCase().includes(term) ||
-          (log.outward_transporter_name || '').toLowerCase().includes(term);
+          (log.outward_transporter_name || '').toLowerCase().includes(term) ||
+          (log.outward_driver_name || '').toLowerCase().includes(term) ||
+          dateStr.includes(term);
         const matchDate = matchDateRange(log.outward_entry_date);
         return matchSearch && matchDate;
       });
@@ -490,6 +522,9 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
   };
 
   const filteredLogs = getFilteredLogs();
+  const indexOfLastLog = currentPage * logsPerPage;
+  const indexOfFirstLog = indexOfLastLog - logsPerPage;
+  const currentLogs = filteredLogs.slice(indexOfFirstLog, indexOfLastLog);
 
   return (
     <div className="temp-monitor-page do-history-page">
@@ -547,14 +582,26 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
 
         {/* Search and Filters Bar */}
         <div className="history-filters-bar">
-          <div className="filter-input-group search-group">
+          <div 
+            className="filter-input-group search-group"
+            title={
+              activeTab === 'daily'
+                ? "Search matches: Date, Ref No, Chamber, Client Name, or Supervisor"
+                : "Search matches: Date, Ref No, Vehicle Number, Client Name, Supervisor, Transporter, or Driver"
+            }
+          >
             <Search size={16} className="filter-icon" />
             <input 
               type="text" 
               placeholder={
                 activeTab === 'daily' 
-                  ? "Search by Client, Chamber, Supervisor..." 
-                  : "Search by Client, Vehicle No, Transporter..."
+                  ? "Search by Ref No, Client, Chamber, Supervisor, Date..." 
+                  : "Search by Ref No, Vehicle No, Client, Supervisor, Date..."
+              }
+              title={
+                activeTab === 'daily'
+                  ? "Search matches: Date, Ref No, Chamber, Client Name, or Supervisor"
+                  : "Search matches: Date, Ref No, Vehicle Number, Client Name, Supervisor, Transporter, or Driver"
               }
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -705,12 +752,14 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
             <p>No temperature logs found matching the filter criteria.</p>
           </div>
         ) : (
-          <div className="table-responsive">
+          <>
+            <div className="table-responsive">
             <table className="logs-table inward-table">
               <thead>
                 {activeTab === 'daily' && (
                   <tr>
                     <th>Date</th>
+                    <th>Ref No</th>
                     <th>Chamber</th>
                     <th>Client Name</th>
                     <th>Inspection Time</th>
@@ -723,6 +772,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                 {activeTab === 'inward' && (
                   <tr>
                     <th>Date</th>
+                    <th>Ref No</th>
                     <th>Vehicle No</th>
                     <th className="wrap-text">Client</th>
                     <th>Inward Vehicle Temp</th>
@@ -737,9 +787,10 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                 {activeTab === 'outward' && (
                   <tr>
                     <th>Date</th>
+                    <th>Ref No</th>
                     <th>Vehicle No</th>
                     <th className="wrap-text">Client</th>
-                    <th>Outward Vehicle Temp</th>
+                    <th>Pre Vehicle Temp</th>
                     <th>Outward Material Temp</th>
                     <th>Pallets</th>
                     <th>Loading Time</th>
@@ -750,7 +801,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                 )}
               </thead>
               <tbody>
-                {activeTab === 'daily' && filteredLogs.map((log) => (
+                {activeTab === 'daily' && currentLogs.map((log) => (
                   <tr key={log.id}>
                     <td>
                       <strong>{formatDateStr(log.formatted_date || log.entry_date)}</strong>
@@ -759,6 +810,39 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                           Upd: {formatDateTimeStr(log.updated_at)}
                         </div>
                       )}
+                    </td>
+                    <td>
+                      <span 
+                        className="status-badge" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (log.reference_no) {
+                            navigator.clipboard.writeText(log.reference_no);
+                            setCopiedRef(log.reference_no);
+                            setTimeout(() => setCopiedRef(null), 1500);
+                          }
+                        }}
+                        title="Click to copy Reference Number"
+                        style={{ 
+                          backgroundColor: 'var(--bg-main)', 
+                          color: copiedRef === log.reference_no ? '#10b981' : 'var(--text-dark)', 
+                          fontWeight: 800, 
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'color 0.2s ease'
+                        }}
+                      >
+                        {log.reference_no || '-'}
+                        {log.reference_no && (
+                          copiedRef === log.reference_no ? (
+                            <Check size={12} color="#10b981" />
+                          ) : (
+                            <Copy size={10} style={{ opacity: 0.5 }} />
+                          )
+                        )}
+                      </span>
                     </td>
                     <td><span className="status-badge" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', fontWeight: 800 }}>{log.chamber_name}</span></td>
                     <td>{log.client_name || '-'}</td>
@@ -782,6 +866,17 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     <td>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button 
+                          className="btn-view-log"
+                          onClick={() => {
+                            setSelectedDetailLog(log);
+                            setDetailType('daily');
+                          }}
+                          title="View Data Profile & Photos"
+                          style={{ backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', color: '#334155', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <Eye size={15} />
+                        </button>
+                        <button 
                           className="btn-edit-log"
                           onClick={() => handleEditAttempt('Chamber', log, () => {
                             setEditDailyData(log);
@@ -804,7 +899,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                   </tr>
                 ))}
 
-                {activeTab === 'inward' && filteredLogs.map((log) => (
+                {activeTab === 'inward' && currentLogs.map((log) => (
                   <tr key={log.inward_id}>
                     <td>
                       <strong>{formatDateStr(log.inward_entry_date)}</strong>
@@ -813,6 +908,39 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                           Upd: {formatDateTimeStr(log.inward_updated_at)}
                         </div>
                       )}
+                    </td>
+                    <td>
+                      <span 
+                        className="status-badge" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (log.reference_no) {
+                            navigator.clipboard.writeText(log.reference_no);
+                            setCopiedRef(log.reference_no);
+                            setTimeout(() => setCopiedRef(null), 1500);
+                          }
+                        }}
+                        title="Click to copy Reference Number"
+                        style={{ 
+                          backgroundColor: 'var(--bg-main)', 
+                          color: copiedRef === log.reference_no ? '#10b981' : 'var(--text-dark)', 
+                          fontWeight: 800, 
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'color 0.2s ease'
+                        }}
+                      >
+                        {log.reference_no || '-'}
+                        {log.reference_no && (
+                          copiedRef === log.reference_no ? (
+                            <Check size={12} color="#10b981" />
+                          ) : (
+                            <Copy size={10} style={{ opacity: 0.5 }} />
+                          )
+                        )}
+                      </span>
                     </td>
                     <td><strong>{log.inward_vehicle_no}</strong></td>
                     <td className="wrap-text">{log.inward_client_name}</td>
@@ -824,7 +952,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         <div>S: {log.inward_unloading_start_time || '-'}</div>
                         <div>E: {log.inward_unloading_end_time || '-'}</div>
                         <div style={{ color: '#16a34a', fontWeight: 600, marginTop: '2px' }}>
-                          Dur: {log.inward_unloading_duration_hours || '0'}h {log.inward_unloading_duration_mins || '0'}m
+                          Dur: {formatDuration(log.inward_unloading_duration_hours, log.inward_unloading_duration_mins)}
                         </div>
                       </div>
                     </td>
@@ -837,6 +965,17 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                        <button 
+                          className="btn-view-log"
+                          onClick={() => {
+                            setSelectedDetailLog(log);
+                            setDetailType('inward');
+                          }}
+                          title="View Data Profile & Photos"
+                          style={{ backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', color: '#334155', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <Eye size={15} />
+                        </button>
                         <button 
                           className="btn-edit-log"
                           onClick={() => handleEditAttempt('Inward', log, () => {
@@ -860,7 +999,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                   </tr>
                 ))}
 
-                {activeTab === 'outward' && filteredLogs.map((log) => (
+                {activeTab === 'outward' && currentLogs.map((log) => (
                   <tr key={log.outward_id}>
                     <td>
                       <strong>{formatDateStr(log.outward_entry_date)}</strong>
@@ -870,9 +1009,42 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         </div>
                       )}
                     </td>
+                    <td>
+                      <span 
+                        className="status-badge" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (log.reference_no) {
+                            navigator.clipboard.writeText(log.reference_no);
+                            setCopiedRef(log.reference_no);
+                            setTimeout(() => setCopiedRef(null), 1500);
+                          }
+                        }}
+                        title="Click to copy Reference Number"
+                        style={{ 
+                          backgroundColor: 'var(--bg-main)', 
+                          color: copiedRef === log.reference_no ? '#10b981' : 'var(--text-dark)', 
+                          fontWeight: 800, 
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'color 0.2s ease'
+                        }}
+                      >
+                        {log.reference_no || '-'}
+                        {log.reference_no && (
+                          copiedRef === log.reference_no ? (
+                            <Check size={12} color="#10b981" />
+                          ) : (
+                            <Copy size={10} style={{ opacity: 0.5 }} />
+                          )
+                        )}
+                      </span>
+                    </td>
                     <td><strong>{log.outward_vehicle_no}</strong></td>
                     <td className="wrap-text">{log.outward_client_name}</td>
-                    <td>{log.outward_vehicle_temp}°C</td>
+                    <td>{log.outward_pre_vehicle_temp || log.outward_vehicle_temp}°C</td>
                     <td>{log.outward_material_temp}°C</td>
                     <td>{log.outward_pallets_in_qty || '-'}</td>
                     <td>
@@ -880,7 +1052,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         <div>S: {log.outward_loading_start_time || '-'}</div>
                         <div>E: {log.outward_loading_end_time || '-'}</div>
                         <div style={{ color: '#16a34a', fontWeight: 600, marginTop: '2px' }}>
-                          Dur: {log.outward_loading_duration_hours || '0'}h {log.outward_loading_duration_mins || '0'}m
+                          Dur: {formatDuration(log.outward_loading_duration_hours, log.outward_loading_duration_mins)}
                         </div>
                       </div>
                     </td>
@@ -893,6 +1065,17 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                        <button 
+                          className="btn-view-log"
+                          onClick={() => {
+                            setSelectedDetailLog(log);
+                            setDetailType('outward');
+                          }}
+                          title="View Data Profile & Photos"
+                          style={{ backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', color: '#334155', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <Eye size={15} />
+                        </button>
                         <button 
                           className="btn-edit-log"
                           onClick={() => handleEditAttempt('Outward', log, () => {
@@ -918,17 +1101,824 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
               </tbody>
             </table>
           </div>
+          
+          {/* Pagination Controls */}
+          {filteredLogs.length > 0 && (
+            <div className="pagination-controls" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '12px 16px', borderTop: '1px solid var(--border)', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                Showing <strong>{indexOfFirstLog + 1}</strong> to <strong>{Math.min(indexOfLastLog, filteredLogs.length)}</strong> of <strong>{filteredLogs.length}</strong> logs
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button 
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: currentPage === 1 ? '#f1f5f9' : '#ffffff',
+                    color: currentPage === 1 ? '#94a3b8' : '#334155',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  Previous
+                </button>
+                
+                {Array.from({ length: Math.ceil(filteredLogs.length / logsPerPage) }, (_, idx) => idx + 1)
+                  .filter(page => {
+                    const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
+                    return page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1;
+                  })
+                  .map((page, idx, arr) => {
+                    const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
+                    const showEllipsisBefore = page > 2 && idx === 1 && arr[0] === 1;
+                    const showEllipsisAfter = page < totalPages - 1 && idx === arr.length - 2 && arr[arr.length - 1] === totalPages;
+                    
+                    return (
+                      <React.Fragment key={page}>
+                        {showEllipsisBefore && <span style={{ padding: '4px 8px', color: '#94a3b8' }}>...</span>}
+                        <button
+                          onClick={() => setCurrentPage(page)}
+                          style={{
+                            padding: '6px 12px',
+                            minWidth: '32px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid',
+                            borderColor: currentPage === page ? 'var(--primary)' : 'var(--border)',
+                            backgroundColor: currentPage === page ? 'var(--primary)' : '#ffffff',
+                            color: currentPage === page ? '#ffffff' : '#334155',
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {page}
+                        </button>
+                        {showEllipsisAfter && <span style={{ padding: '4px 8px', color: '#94a3b8' }}>...</span>}
+                      </React.Fragment>
+                    );
+                  })}
+
+                <button 
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(filteredLogs.length / logsPerPage)))}
+                  disabled={currentPage === Math.ceil(filteredLogs.length / logsPerPage)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: currentPage === Math.ceil(filteredLogs.length / logsPerPage) ? '#f1f5f9' : '#ffffff',
+                    color: currentPage === Math.ceil(filteredLogs.length / logsPerPage) ? '#94a3b8' : '#334155',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: currentPage === Math.ceil(filteredLogs.length / logsPerPage) ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </div>
 
-      {/* 4. Lightbox View Modal */}
+      {/* Lightbox View Modal with absolute positioned controls */}
       {lightboxImg && (
-        <div className="lightbox-overlay" onClick={() => setLightboxImg(null)}>
-          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
-            <button className="lightbox-close" onClick={() => setLightboxImg(null)}>
-              <X size={24} />
+        <div 
+          className="lightbox-overlay" 
+          onClick={() => setLightboxImg(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            backdropFilter: 'blur(10px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            animation: 'fadeIn 0.22s ease'
+          }}
+        >
+          {/* Absolute Floating Controls Header */}
+          <div 
+            style={{
+              position: 'absolute',
+              top: '24px',
+              right: '24px',
+              display: 'flex',
+              gap: '12px',
+              zIndex: 100000,
+              pointerEvents: 'auto'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Download Button */}
+            <a 
+              href={lightboxImg} 
+              download={`DO_Audit_Attachment_${new Date().getTime()}.png`}
+              title="Download Photo"
+              style={{
+                padding: '10px 20px',
+                backgroundColor: 'var(--primary)',
+                color: '#ffffff',
+                borderRadius: 'var(--radius-sm)',
+                fontWeight: '700',
+                fontSize: '0.84rem',
+                textDecoration: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 14px rgba(0, 162, 232, 0.4)',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+            >
+              <Download size={16} />
+              <span>Download Photo</span>
+            </a>
+
+            {/* Close Button */}
+            <button 
+              onClick={() => setLightboxImg(null)}
+              style={{
+                padding: '10px 18px',
+                backgroundColor: '#ef4444',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: '700',
+                fontSize: '0.84rem',
+                gap: '6px',
+                boxShadow: '0 4px 14px rgba(239, 68, 68, 0.3)',
+                transition: 'all 0.2s'
+              }}
+              title="Close View"
+            >
+              <X size={16} />
+              <span>Close</span>
             </button>
-            <img src={lightboxImg} alt="Enlarged Audit Attachment" />
+          </div>
+
+          {/* Image Wrapper */}
+          <div 
+            className="lightbox-content" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'transparent',
+              boxShadow: 'none',
+              border: 'none',
+              padding: 0
+            }}
+          >
+            <img 
+              src={lightboxImg} 
+              alt="Enlarged Audit Attachment" 
+              style={{
+                display: 'block',
+                maxWidth: '95vw',
+                maxHeight: '85vh',
+                width: 'auto',
+                height: 'auto',
+                objectFit: 'contain',
+                borderRadius: 'var(--radius-md)',
+                boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+                border: '4px solid rgba(255,255,255,0.1)'
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 6. Detailed Data Profile Modal */}
+      {selectedDetailLog && (
+        <div className="profile-modal-overlay" onClick={() => setSelectedDetailLog(null)}>
+          <div className="profile-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="profile-modal-header">
+              <h3>
+                <History size={20} color="var(--primary)" />
+                <span>Log Details: {selectedDetailLog.reference_no || `ID: ${selectedDetailLog.id || selectedDetailLog.inward_id || selectedDetailLog.outward_id}`}</span>
+              </h3>
+              <button className="profile-modal-close-btn" onClick={() => setSelectedDetailLog(null)}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="profile-modal-body">
+              {/* Left Column: Data Fields */}
+              <div className="profile-details-section">
+                <div className="profile-group-card">
+                  <div className="profile-group-title">Metadata & Warehouse</div>
+                  <div className="profile-grid-list">
+                    <div className="profile-item">
+                      <span className="profile-label">Warehouse Facility</span>
+                      <span className="profile-value">{selectedDetailLog.warehouse_name || '-'}</span>
+                    </div>
+                    <div className="profile-item">
+                      <span className="profile-label">Recorded By Operator</span>
+                      <span className="profile-value">{selectedDetailLog.operator_email || '-'}</span>
+                    </div>
+                    <div className="profile-item">
+                      <span className="profile-label">Created Time</span>
+                      <span className="profile-value">{formatDateTimeStr(selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at)}</span>
+                    </div>
+                    {getUpdateDiff(
+                      selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
+                      selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
+                    ) && (
+                      <div className="profile-item">
+                        <span className="profile-label">Last Updated Time</span>
+                        <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
+                          {formatDateTimeStr(selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at)}
+                        </span>
+                      </div>
+                    )}
+                    {selectedDetailLog.update_details && (
+                      <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                        <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
+                        <span className="profile-value" style={{ fontWeight: 'normal', color: 'var(--text-dark)' }}>
+                          {selectedDetailLog.update_details}
+                        </span>
+                      </div>
+                    )}
+                    {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks ? (
+                      <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                        <span className="profile-label">Remarks</span>
+                        <span className="profile-value" style={{ fontWeight: 'normal', fontStyle: 'italic' }}>
+                          {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                {detailType === 'daily' && (
+                  <>
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">General Information</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Date</span>
+                          <span className="profile-value">{formatDateStr(selectedDetailLog.formatted_date || selectedDetailLog.entry_date)}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Reference No</span>
+                          <span 
+                            className="profile-value"
+                            onClick={() => {
+                              if (selectedDetailLog.reference_no) {
+                                navigator.clipboard.writeText(selectedDetailLog.reference_no);
+                                setCopiedRef(selectedDetailLog.reference_no);
+                                setTimeout(() => setCopiedRef(null), 1500);
+                              }
+                            }}
+                            title="Click to copy Reference Number"
+                            style={{ 
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              color: copiedRef === selectedDetailLog.reference_no ? '#10b981' : 'var(--text-dark)',
+                              transition: 'color 0.2s ease'
+                            }}
+                          >
+                            {selectedDetailLog.reference_no || '-'}
+                            {selectedDetailLog.reference_no && (
+                              copiedRef === selectedDetailLog.reference_no ? (
+                                <Check size={12} color="#10b981" />
+                              ) : (
+                                <Copy size={10} style={{ opacity: 0.5 }} />
+                              )
+                            )}
+                          </span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Chamber Name</span>
+                          <span className="profile-value">{selectedDetailLog.chamber_name}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Client Name</span>
+                          <span className="profile-value">{selectedDetailLog.client_name}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Temperature & Supervisor</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Chamber Temp</span>
+                          <span className="profile-value">{selectedDetailLog.chamber_temp}°C</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Inspection Time</span>
+                          <span className="profile-value">{selectedDetailLog.inspection_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Supervisor Name</span>
+                          <span className="profile-value">{selectedDetailLog.monitor_supervisor_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Recorded Time variance</span>
+                          <span className="profile-value">{selectedDetailLog.time_variance_minutes !== undefined ? `${selectedDetailLog.time_variance_minutes} mins` : '-'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {detailType === 'inward' && (
+                  <>
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Vehicle & General Information</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Date</span>
+                          <span className="profile-value">{formatDateStr(selectedDetailLog.inward_entry_date)}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Reference No</span>
+                          <span 
+                            className="profile-value"
+                            onClick={() => {
+                              if (selectedDetailLog.reference_no) {
+                                navigator.clipboard.writeText(selectedDetailLog.reference_no);
+                                setCopiedRef(selectedDetailLog.reference_no);
+                                setTimeout(() => setCopiedRef(null), 1500);
+                              }
+                            }}
+                            title="Click to copy Reference Number"
+                            style={{ 
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              color: copiedRef === selectedDetailLog.reference_no ? '#10b981' : 'var(--text-dark)',
+                              transition: 'color 0.2s ease'
+                            }}
+                          >
+                            {selectedDetailLog.reference_no || '-'}
+                            {selectedDetailLog.reference_no && (
+                              copiedRef === selectedDetailLog.reference_no ? (
+                                <Check size={12} color="#10b981" />
+                              ) : (
+                                <Copy size={10} style={{ opacity: 0.5 }} />
+                              )
+                            )}
+                          </span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Vehicle Number</span>
+                          <span className="profile-value">{selectedDetailLog.inward_vehicle_no}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Client Name</span>
+                          <span className="profile-value">{selectedDetailLog.inward_client_name}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Dock Number</span>
+                          <span className="profile-value">{selectedDetailLog.inward_dock_no || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Seal Number</span>
+                          <span className="profile-value">{selectedDetailLog.inward_seal_no || '-'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Temperature & Logistics Details</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Vehicle Temp</span>
+                          <span className="profile-value">{selectedDetailLog.inward_vehicle_temp !== null ? `${selectedDetailLog.inward_vehicle_temp}°C` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Material Temp</span>
+                          <span className="profile-value">{selectedDetailLog.inward_material_temp !== null ? `${selectedDetailLog.inward_material_temp}°C` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Pallets In Quantity</span>
+                          <span className="profile-value">{selectedDetailLog.inward_pallets_in_qty || '0'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Material Type</span>
+                          <span className="profile-value">{selectedDetailLog.inward_material_type || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Unloading Supervisor</span>
+                          <span className="profile-value">{selectedDetailLog.inward_unloading_supervisor_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Invoice / Received Qty</span>
+                          <span className="profile-value">{selectedDetailLog.inward_invoice_qty || '0'} / {selectedDetailLog.inward_received_qty || '0'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Driver & Timing Info</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Transporter</span>
+                          <span className="profile-value">{selectedDetailLog.inward_transporter_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Driver Name</span>
+                          <span className="profile-value">{selectedDetailLog.inward_driver_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Driver Phone</span>
+                          <span className="profile-value">{selectedDetailLog.inward_driver_no || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Reporting Time</span>
+                          <span className="profile-value">{selectedDetailLog.inward_vehicle_reporting_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Unloading Start</span>
+                          <span className="profile-value">{selectedDetailLog.inward_unloading_start_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Unloading End</span>
+                          <span className="profile-value">{selectedDetailLog.inward_unloading_end_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Unloading Duration</span>
+                          <span className="profile-value">
+                            <strong>{formatDuration(selectedDetailLog.inward_unloading_duration_hours, selectedDetailLog.inward_unloading_duration_mins)}</strong>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              ({selectedDetailLog.inward_unloading_start_time || '-'} to {selectedDetailLog.inward_unloading_end_time || '-'})
+                            </div>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {detailType === 'outward' && (
+                  <>
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Vehicle & General Information</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Date</span>
+                          <span className="profile-value">{formatDateStr(selectedDetailLog.outward_entry_date)}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Reference No</span>
+                          <span 
+                            className="profile-value"
+                            onClick={() => {
+                              if (selectedDetailLog.reference_no) {
+                                navigator.clipboard.writeText(selectedDetailLog.reference_no);
+                                setCopiedRef(selectedDetailLog.reference_no);
+                                setTimeout(() => setCopiedRef(null), 1500);
+                              }
+                            }}
+                            title="Click to copy Reference Number"
+                            style={{ 
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              color: copiedRef === selectedDetailLog.reference_no ? '#10b981' : 'var(--text-dark)',
+                              transition: 'color 0.2s ease'
+                            }}
+                          >
+                            {selectedDetailLog.reference_no || '-'}
+                            {selectedDetailLog.reference_no && (
+                              copiedRef === selectedDetailLog.reference_no ? (
+                                <Check size={12} color="#10b981" />
+                              ) : (
+                                <Copy size={10} style={{ opacity: 0.5 }} />
+                              )
+                            )}
+                          </span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Vehicle Number</span>
+                          <span className="profile-value">{selectedDetailLog.outward_vehicle_no}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Client Name</span>
+                          <span className="profile-value">{selectedDetailLog.outward_client_name}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Dock Number</span>
+                          <span className="profile-value">{selectedDetailLog.outward_dock_no || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Seal Number</span>
+                          <span className="profile-value">{selectedDetailLog.outward_seal_no || '-'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Temperature & Logistics Details</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Pre-Cooling Temp</span>
+                          <span className="profile-value">{selectedDetailLog.outward_pre_vehicle_temp !== null ? `${selectedDetailLog.outward_pre_vehicle_temp}°C` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Loading Temp</span>
+                          <span className="profile-value">{selectedDetailLog.outward_vehicle_temp !== null ? `${selectedDetailLog.outward_vehicle_temp}°C` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Material Temp</span>
+                          <span className="profile-value">{selectedDetailLog.outward_material_temp !== null ? `${selectedDetailLog.outward_material_temp}°C` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Pallets Out Quantity</span>
+                          <span className="profile-value">{selectedDetailLog.outward_pallets_in_qty || '0'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Material Type</span>
+                          <span className="profile-value">{selectedDetailLog.outward_material_type || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Loading Supervisor</span>
+                          <span className="profile-value">{selectedDetailLog.outward_loading_supervisor_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Invoice / Loaded Qty</span>
+                          <span className="profile-value">{selectedDetailLog.outward_invoice_qty || '0'} / {selectedDetailLog.outward_received_qty || '0'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="profile-group-card">
+                      <div className="profile-group-title">Driver & Timing Info</div>
+                      <div className="profile-grid-list">
+                        <div className="profile-item">
+                          <span className="profile-label">Transporter</span>
+                          <span className="profile-value">{selectedDetailLog.outward_transporter_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Driver Name</span>
+                          <span className="profile-value">{selectedDetailLog.outward_driver_name || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Driver Phone</span>
+                          <span className="profile-value">{selectedDetailLog.outward_driver_no || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Reporting Time</span>
+                          <span className="profile-value">{selectedDetailLog.outward_vehicle_reporting_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Loading Start</span>
+                          <span className="profile-value">{selectedDetailLog.outward_loading_start_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Loading End</span>
+                          <span className="profile-value">{selectedDetailLog.outward_loading_end_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Loading Duration</span>
+                          <span className="profile-value">
+                            <strong>{formatDuration(selectedDetailLog.outward_loading_duration_hours, selectedDetailLog.outward_loading_duration_mins)}</strong>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              ({selectedDetailLog.outward_loading_start_time || '-'} to {selectedDetailLog.outward_loading_end_time || '-'})
+                            </div>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Right Column: Uploaded Photos & Files */}
+              <div className="profile-photos-section">
+                <h4>Uploaded Audit Attachment Photos</h4>
+                
+                {/* Check if any photos exist */}
+                {((detailType === 'daily' && selectedDetailLog.temp_sensor_image) ||
+                  (detailType === 'inward' && (
+                    selectedDetailLog.inward_invoice_photos ||
+                    selectedDetailLog.inward_pod_photo ||
+                    selectedDetailLog.inward_vehicle_seal_photo ||
+                    selectedDetailLog.inward_vehicle_temp_photo ||
+                    selectedDetailLog.inward_material_temp_photo ||
+                    selectedDetailLog.inward_vehicle_back_side_photo ||
+                    selectedDetailLog.inward_vehicle_back_side_photo_with_material ||
+                    selectedDetailLog.inward_count_sheet_photo ||
+                    selectedDetailLog.inward_damage_boxes_photo
+                  )) ||
+                  (detailType === 'outward' && (
+                    selectedDetailLog.outward_invoice_photos ||
+                    selectedDetailLog.outward_pod_photo ||
+                    selectedDetailLog.outward_vehicle_seal_photo ||
+                    selectedDetailLog.outward_vehicle_temp_photo ||
+                    selectedDetailLog.outward_pre_vehicle_temp_photo ||
+                    selectedDetailLog.outward_material_temp_photo ||
+                    selectedDetailLog.outward_vehicle_back_side_photo ||
+                    selectedDetailLog.outward_vehicle_back_side_photo_with_material ||
+                    selectedDetailLog.outward_count_sheet_photo ||
+                    selectedDetailLog.outward_damage_boxes_photo
+                  ))) ? (
+                  <div className="profile-photo-grid">
+                    {/* Render Chamber Logs Photo */}
+                    {detailType === 'daily' && selectedDetailLog.temp_sensor_image && (
+                      <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.temp_sensor_image.startsWith('data:') ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`)}>
+                        <div className="profile-photo-wrapper">
+                          <img src={selectedDetailLog.temp_sensor_image.startsWith('data:') ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`} alt="Temp Sensor" />
+                        </div>
+                        <div className="profile-photo-label">Temp Sensor</div>
+                      </div>
+                    )}
+
+                    {/* Render Inward Logs Photos */}
+                    {detailType === 'inward' && (
+                      <>
+                        {selectedDetailLog.inward_invoice_photos && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_invoice_photos.startsWith('data:') ? selectedDetailLog.inward_invoice_photos : `/${selectedDetailLog.inward_invoice_photos}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_invoice_photos.startsWith('data:') ? selectedDetailLog.inward_invoice_photos : `/${selectedDetailLog.inward_invoice_photos}`} alt="Invoice" />
+                            </div>
+                            <div className="profile-photo-label">Invoice Photo</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_pod_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`} alt="POD" />
+                            </div>
+                            <div className="profile-photo-label">POD Photo</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_vehicle_seal_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_seal_photo : `/${selectedDetailLog.inward_vehicle_seal_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_seal_photo : `/${selectedDetailLog.inward_vehicle_seal_photo}`} alt="Vehicle Seal" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Seal</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_vehicle_temp_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_temp_photo : `/${selectedDetailLog.inward_vehicle_temp_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_temp_photo : `/${selectedDetailLog.inward_vehicle_temp_photo}`} alt="Vehicle Temp" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Temp</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_material_temp_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_material_temp_photo.startsWith('data:') ? selectedDetailLog.inward_material_temp_photo : `/${selectedDetailLog.inward_material_temp_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_material_temp_photo.startsWith('data:') ? selectedDetailLog.inward_material_temp_photo : `/${selectedDetailLog.inward_material_temp_photo}`} alt="Material Temp" />
+                            </div>
+                            <div className="profile-photo-label">Material Temp</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_vehicle_back_side_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo : `/${selectedDetailLog.inward_vehicle_back_side_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo : `/${selectedDetailLog.inward_vehicle_back_side_photo}`} alt="Vehicle Back" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Back</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_vehicle_back_side_photo_with_material && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.inward_vehicle_back_side_photo_with_material}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.inward_vehicle_back_side_photo_with_material}`} alt="Vehicle Back Load" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Loaded</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_count_sheet_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.inward_count_sheet_photo : `/${selectedDetailLog.inward_count_sheet_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.inward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.inward_count_sheet_photo : `/${selectedDetailLog.inward_count_sheet_photo}`} alt="Count Sheet" />
+                            </div>
+                            <div className="profile-photo-label">Count Sheet</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.inward_damage_boxes_photo && selectedDetailLog.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
+                          <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`} alt={`Damage ${idx + 1}`} />
+                            </div>
+                            <div className="profile-photo-label">Damage #{idx + 1}</div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+
+                    {/* Render Outward Logs Photos */}
+                    {detailType === 'outward' && (
+                      <>
+                        {selectedDetailLog.outward_invoice_photos && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_invoice_photos.startsWith('data:') ? selectedDetailLog.outward_invoice_photos : `/${selectedDetailLog.outward_invoice_photos}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_invoice_photos.startsWith('data:') ? selectedDetailLog.outward_invoice_photos : `/${selectedDetailLog.outward_invoice_photos}`} alt="Invoice" />
+                            </div>
+                            <div className="profile-photo-label">Invoice Photo</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_pod_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`} alt="POD" />
+                            </div>
+                            <div className="profile-photo-label">POD Photo</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_vehicle_seal_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_seal_photo : `/${selectedDetailLog.outward_vehicle_seal_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_seal_photo : `/${selectedDetailLog.outward_vehicle_seal_photo}`} alt="Vehicle Seal" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Seal</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_pre_vehicle_temp_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_pre_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_pre_vehicle_temp_photo : `/${selectedDetailLog.outward_pre_vehicle_temp_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_pre_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_pre_vehicle_temp_photo : `/${selectedDetailLog.outward_pre_vehicle_temp_photo}`} alt="Pre vehicle temp" />
+                            </div>
+                            <div className="profile-photo-label">Pre-Cooling Temp</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_vehicle_temp_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_temp_photo : `/${selectedDetailLog.outward_vehicle_temp_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_temp_photo : `/${selectedDetailLog.outward_vehicle_temp_photo}`} alt="Vehicle Temp" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Temp</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_material_temp_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_material_temp_photo.startsWith('data:') ? selectedDetailLog.outward_material_temp_photo : `/${selectedDetailLog.outward_material_temp_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_material_temp_photo.startsWith('data:') ? selectedDetailLog.outward_material_temp_photo : `/${selectedDetailLog.outward_material_temp_photo}`} alt="Material Temp" />
+                            </div>
+                            <div className="profile-photo-label">Material Temp</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_vehicle_back_side_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo : `/${selectedDetailLog.outward_vehicle_back_side_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo : `/${selectedDetailLog.outward_vehicle_back_side_photo}`} alt="Vehicle Back" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Back</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_vehicle_back_side_photo_with_material && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.outward_vehicle_back_side_photo_with_material}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.outward_vehicle_back_side_photo_with_material}`} alt="Vehicle Back Load" />
+                            </div>
+                            <div className="profile-photo-label">Vehicle Loaded</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_count_sheet_photo && (
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.outward_count_sheet_photo : `/${selectedDetailLog.outward_count_sheet_photo}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={selectedDetailLog.outward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.outward_count_sheet_photo : `/${selectedDetailLog.outward_count_sheet_photo}`} alt="Count Sheet" />
+                            </div>
+                            <div className="profile-photo-label">Count Sheet</div>
+                          </div>
+                        )}
+                        {selectedDetailLog.outward_damage_boxes_photo && selectedDetailLog.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
+                          <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
+                            <div className="profile-photo-wrapper">
+                              <img src={dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`} alt={`Damage ${idx + 1}`} />
+                            </div>
+                            <div className="profile-photo-label">Damage #{idx + 1}</div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ padding: '40px 20px', textAlign: 'center', backgroundColor: 'var(--bg-main)', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)', color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
+                    No audit attachment photos uploaded for this record.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="profile-modal-body" style={{ gridTemplateColumns: '1fr', padding: '0 24px 24px 24px' }}>
+              
+            </div>
+
+            <div className="profile-modal-footer">
+              <button className="profile-close-btn" onClick={() => setSelectedDetailLog(null)}>Close View</button>
+            </div>
           </div>
         </div>
       )}

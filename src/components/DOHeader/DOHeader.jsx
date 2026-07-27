@@ -6,7 +6,7 @@
 // ====================================================================
 
 import React, { useState, useEffect } from 'react';
-import { Clock, Menu, X, Thermometer, ArrowDownLeft, ArrowUpRight, ChevronRight, User, LogOut, Bell } from 'lucide-react';
+import { Clock, Menu, X, Thermometer, ArrowDownLeft, ArrowUpRight, ChevronRight, User, LogOut, Bell, Search } from 'lucide-react';
 import Logo from '../Logo/Logo';
 import './DOHeader.css'; // Paired CSS file
 
@@ -175,6 +175,17 @@ export default function DOHeader({ user, activeTitle, activeDOMenu, setActiveDOM
               <div className="item-left">
                 <Clock size={18} className="item-icon" />
                 <span>History Logs</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeDOMenu === 'Lookup' ? 'active' : ''}`}
+              onClick={() => handleMenuSelect('Lookup')}
+            >
+              <div className="item-left">
+                <Search size={18} className="item-icon" />
+                <span>Profile Lookup</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
