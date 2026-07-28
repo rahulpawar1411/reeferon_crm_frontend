@@ -167,6 +167,36 @@
   box-shadow: 0 0 0 4px rgba(0, 162, 232, 0.1);
 }
 
+.input-field-icon-wrapper input.login-password-input {
+  padding-right: 44px;
+}
+
+.login-password-eye-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.login-password-eye-btn:hover:not(:disabled) {
+  color: var(--text-dark, #0f172a);
+  background: #f1f5f9;
+}
+
+.login-password-eye-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Submit Action Buttons (Colored based on active role color scheme) */
 .login-submit-btn {
   display: flex;

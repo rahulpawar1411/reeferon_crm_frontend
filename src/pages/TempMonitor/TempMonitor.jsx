@@ -5,15 +5,69 @@
 // ====================================================================
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Thermometer, Plus, CheckCircle, PlusCircle, Camera, Loader2, Check, Trash2, RefreshCw
 } from 'lucide-react';
 import { addChamberLog, fetchChamberLogs, deleteChamberLog, updateChamberLog } from '../../services/api';
 import exifr from 'exifr';
+import {
+  CHAMBER_PRESETS,
+  INSPECTION_TIME_PRESETS,
+  isPresetChamber,
+  isPresetInspectionTime,
+  readChamberFormDraft,
+  writeChamberFormDraft,
+  clearChamberFormDraft
+} from './chamberFormPresets';
 import './TempMonitor.css'; // Paired CSS file
 
+function getLocalTodayStr() {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function buildInitialFormState() {
+  const todayStr = getLocalTodayStr();
+  const draft = readChamberFormDraft();
+  if (draft) {
+    return {
+      formData: {
+        entry_date: draft.entry_date || todayStr,
+        client_name: draft.client_name || '',
+        chamber_name: draft.chamber_name || 'BDF-1',
+        inspection_time: draft.inspection_time || '11:00',
+        chamber_temp: draft.chamber_temp || '',
+        monitor_supervisor_name: draft.monitor_supervisor_name || ''
+      },
+      isChamberCustom: !isPresetChamber(draft.chamber_name || 'BDF-1'),
+      isTimeCustom: !isPresetInspectionTime(draft.inspection_time || '11:00')
+    };
+  }
+  return {
+    formData: {
+      entry_date: todayStr,
+      client_name: '',
+      chamber_name: 'BDF-1',
+      inspection_time: '11:00',
+      chamber_temp: '',
+      monitor_supervisor_name: ''
+    },
+    isChamberCustom: false,
+    isTimeCustom: false
+  };
+}
+
 export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEditData }) {
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Compressed Temp Sensor Image File & Preview Thumbnail State
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+
+  const initial = buildInitialFormState();
+  const todayStr = getLocalTodayStr();
   const fileInputRef = useRef(null);
 
   const [submitting, setSubmitting] = useState(false);
@@ -21,16 +75,8 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
   const [successMsg, setSuccessMsg] = useState('');
   const [showErrors, setShowErrors] = useState(false);
 
-  // Is Chamber Name in custom text mode?
-  const [isChamberCustom, setIsChamberCustom] = useState(false);
-  // Is Time in custom time picker mode?
-  const [isTimeCustom, setIsTimeCustom] = useState(false);
-
-  // Compressed Temp Sensor Image File & Preview Thumbnail State
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-
-  // Inspection Logs & Loading States
+  const [isChamberCustom, setIsChamberCustom] = useState(initial.isChamberCustom);
+  const [isTimeCustom, setIsTimeCustom] = useState(initial.isTimeCustom);
   const [logs, setLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
   const [lightboxImage, setLightboxImage] = useState(null);
@@ -39,14 +85,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
   const [verificationData, setVerificationData] = useState(null);
 
   // Direct On-Screen Form State (Strict 24-Hour Time)
-  const [formData, setFormData] = useState({
-    entry_date: todayStr,
-    client_name: '',
-    chamber_name: 'BDF-1',
-    inspection_time: '11:00',
-    chamber_temp: '',
-    monitor_supervisor_name: ''
-  });
+  const [formData, setFormData] = useState(initial.formData);
 
   const formatDateTime = (date) => {
     if (!date || isNaN(date.getTime())) return '';
@@ -88,16 +127,24 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
   }, []);
 
   useEffect(() => {
+    if (editData) return;
+    writeChamberFormDraft(formData);
+  }, [formData, editData]);
+
+  useEffect(() => {
     if (editData) {
+      const chamber = editData.chamber_name || 'BDF-1';
+      const time = editData.inspection_time || '11:00';
       setFormData({
         entry_date: editData.formatted_date || (editData.entry_date ? editData.entry_date.split('T')[0] : todayStr),
         client_name: editData.client_name || '',
-        chamber_name: editData.chamber_name || 'BDF-1',
-        inspection_time: editData.inspection_time || '11:00',
+        chamber_name: chamber,
+        inspection_time: time,
         chamber_temp: editData.chamber_temp !== undefined && editData.chamber_temp !== null ? editData.chamber_temp.toString() : '',
         monitor_supervisor_name: editData.monitor_supervisor_name || ''
       });
-      setIsChamberCustom(!['BDF-1', 'BDF-2', 'BDF-3', 'BDF-4', 'BDF-5', 'BDF-6', 'Antechamber'].includes(editData.chamber_name));
+      setIsChamberCustom(!isPresetChamber(chamber));
+      setIsTimeCustom(!isPresetInspectionTime(time));
       const imgSrc = editData.temp_sensor_image || editData.chamber_image;
       if (imgSrc) {
         const imageSrc = imgSrc.startsWith('data:image') 
@@ -256,7 +303,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
     const isTimeEmpty = !formData.inspection_time;
     const isTempEmpty = !formData.chamber_temp;
     const isSupervisorEmpty = !formData.monitor_supervisor_name || !formData.monitor_supervisor_name.trim();
-    const isPhotoEmpty = !imageFile;
+    const isPhotoEmpty = !(imageFile || imagePreview);
 
     if (isDateEmpty || isClientEmpty || isChamberEmpty || isTimeEmpty || isTempEmpty || isSupervisorEmpty || isPhotoEmpty) {
       setShowErrors(true);
@@ -276,8 +323,17 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
 
     setShowErrors(false);
 
-    // Calculate metadata from the file uploaded on client
-    const captureTime = new Date(imageFile.lastModified || Date.now());
+    // Calculate metadata from newly uploaded file, else reuse existing capture time on edit
+    let captureTime = new Date();
+    if (imageFile) {
+      captureTime = new Date(imageFile.lastModified || Date.now());
+    } else if (editData?.photo_capture_time) {
+      const raw = String(editData.photo_capture_time).trim();
+      const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+      if (m) {
+        captureTime = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+      }
+    }
     const formattedCapture = formatDateTime(captureTime);
     const variance = calculateVariance(formData.entry_date, formData.inspection_time, captureTime);
 
@@ -332,6 +388,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
     setImagePreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
 
+    clearChamberFormDraft();
     setFormData({
       entry_date: todayStr,
       client_name: '',
@@ -383,14 +440,10 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
               className="btn-cancel-edit" 
               onClick={() => {
                 setEditData(null);
-                setFormData({
-                  entry_date: todayStr,
-                  client_name: '',
-                  chamber_name: 'BDF-1',
-                  inspection_time: '11:00',
-                  chamber_temp: '',
-                  monitor_supervisor_name: ''
-                });
+                const restored = buildInitialFormState();
+                setFormData(restored.formData);
+                setIsChamberCustom(restored.isChamberCustom);
+                setIsTimeCustom(restored.isTimeCustom);
                 setImageFile(null);
                 setImagePreview(null);
                 if (fileInputRef.current) fileInputRef.current.value = '';
@@ -440,19 +493,14 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
               <label>Chamber Name *</label>
               {!isChamberCustom ? (
                 <select 
-                  value={formData.chamber_name}
+                  value={isChamberCustom ? 'OTHER_CUSTOM' : formData.chamber_name}
                   onChange={(e) => handleChamberChange(e.target.value)}
                   required
                   className={showErrors && !formData.chamber_name ? 'input-error' : ''}
                 >
-                  <option value="BDF-1">BDF-1</option>
-                  <option value="BDF-2">BDF-2</option>
-                  <option value="BDF-3">BDF-3</option>
-                  <option value="BDF-4">BDF-4</option>
-                  <option value="BDF-5">BDF-5</option>
-                  <option value="BDF-6">BDF-6</option>
-                  <option value="BDF-7">BDF-7</option>
-                  <option value="BDF-8">BDF-8</option>
+                  {CHAMBER_PRESETS.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
                   <option value="OTHER_CUSTOM">Other (Type Custom Name...)</option>
                 </select>
               ) : (
@@ -473,13 +521,14 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
               <label>Inspection Time *</label>
               {!isTimeCustom ? (
                 <select 
-                  value={formData.inspection_time}
+                  value={isTimeCustom ? 'OTHER_CUSTOM' : formData.inspection_time}
                   onChange={(e) => handleTimeChange(e.target.value)}
                   required
                   className={showErrors && !formData.inspection_time ? 'input-error' : ''}
                 >
-                  <option value="11:00">11:00</option>
-                  <option value="18:00">18:00</option>
+                  {INSPECTION_TIME_PRESETS.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
                   <option value="OTHER_CUSTOM">Other (Current 24h Clock...)</option>
                 </select>
               ) : (
@@ -616,9 +665,9 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
         </div>
       )}
 
-      {/* Verification Modal Popup Overlay */}
-      {verificationData && (
-        <div className="verification-modal-overlay">
+      {/* Verification Modal Popup Overlay — portaled for Super Admin edit */}
+      {verificationData && createPortal(
+        <div className="verification-modal-overlay" role="dialog" aria-modal="true">
           <div className="verification-modal-content">
             <div className="direct-form-header">
               <h3 className="verify-title">
@@ -708,7 +757,8 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -4,23 +4,34 @@
 // Strictly accessible by role: 'super_admin' only.
 // ====================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { 
   ShieldCheck, Clock, LogOut, Database, Lock,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
   Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard,
-  Copy, Check
+  Copy, Check, Loader2, CheckCircle, MessageSquareWarning
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
+import PaginationBar from '../../components/PaginationBar/PaginationBar';
 import { 
   fetchOperators, createOperator, updateOperator, deleteOperator, fetchOperatorActivities,
   fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
   fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats,
-  fetchSubAdmins, createSubAdmin, updateSubAdmin, deleteSubAdmin
+  fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs,
+  deleteChamberLog, deleteInwardLog, deleteOutwardLog,
+  toApiDateParam,
+  fetchSubAdmins, createSubAdmin, updateSubAdmin, deleteSubAdmin, fetchAccessScopeOptions,
+  changeSuperAdminPassword, verifySuperAdminProfileAccess,
+  fetchCustomerReports, updateCustomerReportStatus
 } from '../../services/api';
+import '../../components/DOSidebar/DOSidebar.css';
 import './SuperAdminSecureWindow.css';
 
-export default function SuperAdminSecureWindow({ user, onLogout }) {
+const TempMonitor = lazy(() => import('../TempMonitor/TempMonitor'));
+const InwardMonitor = lazy(() => import('../InwardMonitor/InwardMonitor'));
+const OutwardMonitor = lazy(() => import('../OutwardMonitor/OutwardMonitor'));
+
+export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate }) {
   const [time, setTime] = useState(new Date());
   const [activeMenu, setActiveMenu] = useState(() => {
     return localStorage.getItem('super_admin_active_menu') || 'dashboard';
@@ -37,6 +48,32 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   useEffect(() => {
     localStorage.setItem('super_admin_audit_sub_tab', auditSubTab);
   }, [auditSubTab]);
+
+  useEffect(() => {
+    setProfileEmail(user?.email || '');
+    setOldProfileEmail(user?.email || '');
+  }, [user?.email]);
+
+  useEffect(() => {
+    if (activeMenu === 'super_admin_profile') {
+      setProfileAccessId(user?.email || '');
+      setProfileAccessPassword('');
+      setProfileAccessVerified(false);
+      setProfileAccessLoading(false);
+      setProfileAccessErr('');
+      setNewAdminPassword('');
+      setConfirmAdminPassword('');
+      setProfilePwdMsg('');
+      setProfilePwdErr('');
+      setShowCurrentAdminPassword(false);
+      setShowNewAdminPassword(false);
+      setShowConfirmAdminPassword(false);
+      setShowProfileConfirm(false);
+      setProfileConfirmSummary(null);
+      setProfileEmail(user?.email || '');
+      setOldProfileEmail(user?.email || '');
+    }
+  }, [activeMenu, user?.email]);
 
   // Lock background scroll when mobile menu is open
   useEffect(() => {
@@ -59,9 +96,28 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const [opPhoneNo, setOpPhoneNo] = useState('');
   const [opWarehouseName, setOpWarehouseName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [confirmAdminPassword, setConfirmAdminPassword] = useState('');
+  const [profileEmail, setProfileEmail] = useState(user?.email || '');
+  const [oldProfileEmail, setOldProfileEmail] = useState(user?.email || '');
+  const [profileAccessId, setProfileAccessId] = useState(user?.email || '');
+  const [profileAccessPassword, setProfileAccessPassword] = useState('');
+  const [profileAccessVerified, setProfileAccessVerified] = useState(false);
+  const [profileAccessLoading, setProfileAccessLoading] = useState(false);
+  const [profileAccessErr, setProfileAccessErr] = useState('');
+  const [profilePwdLoading, setProfilePwdLoading] = useState(false);
+  const [profilePwdMsg, setProfilePwdMsg] = useState('');
+  const [profilePwdErr, setProfilePwdErr] = useState('');
+  const [showCurrentAdminPassword, setShowCurrentAdminPassword] = useState(false);
+  const [showNewAdminPassword, setShowNewAdminPassword] = useState(false);
+  const [showConfirmAdminPassword, setShowConfirmAdminPassword] = useState(false);
+  const [showProfileConfirm, setShowProfileConfirm] = useState(false);
+  const [profileConfirmSummary, setProfileConfirmSummary] = useState(null);
   const [editingOp, setEditingOp] = useState(null);
   const [opError, setOpError] = useState('');
   const [opSuccess, setOpSuccess] = useState('');
+  const [savingOp, setSavingOp] = useState(false);
+  const [opProcessStatus, setOpProcessStatus] = useState('');
   const [operatorSearch, setOperatorSearch] = useState('');
 
   // Activity Logs States
@@ -85,6 +141,11 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const [inwardLogs, setInwardLogs] = useState([]);
   const [outwardLogs, setOutwardLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const historyPerPage = 50;
+  const [appliedLogsSearch, setAppliedLogsSearch] = useState('');
+  const [logsExportLoading, setLogsExportLoading] = useState(false);
   const [logsSearch, setLogsSearch] = useState('');
   const [selectedWarehouse, setSelectedWarehouse] = useState('All');
   const [fromDate, setFromDate] = useState('');
@@ -94,6 +155,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const [selectedDetailLog, setSelectedDetailLog] = useState(null);
   const [detailType, setDetailType] = useState('');
   const [lightboxImg, setLightboxImg] = useState(null);
+  /** Super Admin direct edit (no permission): { type: 'daily'|'inward'|'outward', data } */
+  const [saEditLog, setSaEditLog] = useState(null);
+  const [saLogActionBusy, setSaLogActionBusy] = useState(false);
 
   // Lookup Menu States
   const [lookupQuery, setLookupQuery] = useState('');
@@ -160,17 +224,63 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const [loadingSubAdmins, setLoadingSubAdmins] = useState(false);
   const [subAdminSuccess, setSubAdminSuccess] = useState('');
   const [subAdminError, setSubAdminError] = useState('');
+  const [savingSubAdmin, setSavingSubAdmin] = useState(false);
+  const [subAdminProcessStatus, setSubAdminProcessStatus] = useState('');
   const [subAdminEmail, setSubAdminEmail] = useState('');
   const [subAdminPassword, setSubAdminPassword] = useState('');
   const [subAdminFullName, setSubAdminFullName] = useState('');
   const [subAdminPhoneNo, setSubAdminPhoneNo] = useState('');
   const [editingSubAdmin, setEditingSubAdmin] = useState(null);
 
+  // Access Scope States (Client & Warehouse restrictions)
+  const [accessScopeOptions, setAccessScopeOptions] = useState({ clients: [], warehouses: [] });
+  const [subAdminSelectedClients, setSubAdminSelectedClients] = useState([]);
+  const [subAdminSelectedWarehouses, setSubAdminSelectedWarehouses] = useState([]);
+
+  // Customer Reports (from Sub Admin portal → customer_reports table)
+  const [customerReports, setCustomerReports] = useState([]);
+  const [loadingCustomerReports, setLoadingCustomerReports] = useState(false);
+  const [customerReportsError, setCustomerReportsError] = useState('');
+  const [customerReportSearch, setCustomerReportSearch] = useState('');
+  const [customerReportStatusFilter, setCustomerReportStatusFilter] = useState('All');
+  const [updatingReportId, setUpdatingReportId] = useState(null);
+
   // Real-time ticking clock for header
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const loadCustomerReportsData = async () => {
+    setLoadingCustomerReports(true);
+    setCustomerReportsError('');
+    try {
+      const data = await fetchCustomerReports({
+        status: customerReportStatusFilter,
+        search: customerReportSearch.trim()
+      });
+      setCustomerReports(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to fetch customer reports:', err);
+      setCustomerReportsError(err.message || 'Failed to fetch customer reports.');
+      setCustomerReports([]);
+    } finally {
+      setLoadingCustomerReports(false);
+    }
+  };
+
+  const handleUpdateCustomerReportStatus = async (id, status) => {
+    setUpdatingReportId(id);
+    setCustomerReportsError('');
+    try {
+      await updateCustomerReportStatus(id, status);
+      await loadCustomerReportsData();
+    } catch (err) {
+      setCustomerReportsError(err.message || 'Failed to update status.');
+    } finally {
+      setUpdatingReportId(null);
+    }
+  };
 
   const loadOperatorsData = async () => {
     setLoadingOps(true);
@@ -321,13 +431,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     return info;
   };
 
-  const showLogDetailsByRef = (refNo, fallbackId, moduleType) => {
+  const showLogDetailsByRef = async (refNo, fallbackId, moduleType) => {
     if (!refNo && !fallbackId) return;
     
     let foundLog = null;
     let type = '';
     
-    // 1. Try matching reference number first
+    // 1. Try matching reference number first (in-memory page cache)
     if (refNo) {
       const chamberLog = (chamberLogs || []).find(l => l && l.reference_no === refNo);
       if (chamberLog) {
@@ -348,7 +458,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       }
     }
     
-    // 2. Try matching fallback ID
+    // 2. Try matching fallback ID (in-memory)
     if (!foundLog && fallbackId) {
       if (moduleType === 'Chamber Temp' || moduleType === 'Chamber Temp Log' || moduleType === 'Chamber') {
         foundLog = (chamberLogs || []).find(l => l && l.id == fallbackId);
@@ -359,6 +469,29 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       } else if (moduleType === 'Outward DO Log' || moduleType === 'Outward DO' || moduleType === 'Outward' || moduleType === 'Outward Log') {
         foundLog = (outwardLogs || []).find(l => l && l.outward_id == fallbackId);
         type = 'outward';
+      }
+    }
+
+    // 3. Server lookup when not in current page cache
+    if (!foundLog && refNo) {
+      try {
+        const searchOpts = { paginated: true, search: refNo, page: 1, limit: 20 };
+        const [c, i, o] = await Promise.all([
+          fetchChamberLogs('', searchOpts),
+          fetchInwardLogs('', searchOpts),
+          fetchOutwardLogs('', searchOpts)
+        ]);
+        foundLog =
+          (c.items || []).find(l => l.reference_no === refNo) ||
+          (i.items || []).find(l => l.reference_no === refNo) ||
+          (o.items || []).find(l => l.reference_no === refNo);
+        if (foundLog) {
+          if ((c.items || []).some(l => l.reference_no === refNo)) type = 'daily';
+          else if ((i.items || []).some(l => l.reference_no === refNo)) type = 'inward';
+          else type = 'outward';
+        }
+      } catch (err) {
+        console.error('Failed to resolve log by ref:', err);
       }
     }
     
@@ -373,16 +506,29 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const renderOperatorEmail = (email) => {
     if (!email) return '-';
     const emailLower = email.toLowerCase().trim();
-    if (emailLower === 'system' || emailLower.includes('admin')) {
+    const matchedOp = (operators || []).find(
+      (op) => op && op.email && op.email.toLowerCase().trim() === emailLower
+    );
+    const doName = matchedOp?.full_name ? String(matchedOp.full_name).trim() : '';
+
+    if (emailLower === 'system' || (emailLower.includes('admin') && !matchedOp)) {
       return email;
     }
-    const isActive = (operators || []).some(
-      op => op && op.email && op.email.toLowerCase().trim() === emailLower
+
+    const isActive = Boolean(matchedOp);
+    const identity = doName ? (
+      <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '1px', minWidth: 0 }}>
+        <span style={{ fontWeight: 800, color: '#0f172a' }}>{doName}</span>
+        <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)' }}>{email}</span>
+      </span>
+    ) : (
+      <span>{email}</span>
     );
+
     if (!isActive) {
       return (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4.5px' }}>
-          <span>{email}</span>
+          {identity}
           <span style={{ 
             fontSize: '0.62rem', 
             fontWeight: '800', 
@@ -398,7 +544,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
         </span>
       );
     }
-    return email;
+    return identity;
   };
 
   const formatDuration = (hoursStr, minsStr) => {
@@ -410,6 +556,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       return `${days}d ${remHours}h ${mins}m`;
     }
     return `${hours}h ${mins}m`;
+  };
+
+  const getUpdateDiff = (created, updated) => {
+    if (!created || !updated) return false;
+    const cTime = Math.floor(new Date(created).getTime() / 1000);
+    const uTime = Math.floor(new Date(updated).getTime() / 1000);
+    return uTime > cTime;
   };
 
   const operatorWarehouseMap = {};
@@ -433,45 +586,53 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
   const loadHistoryLogs = async () => {
     setLoadingLogs(true);
-    
-    // 1. Fetch Chamber Logs
-    try {
-      const chamberData = await fetchChamberLogs();
-      setChamberLogs(Array.isArray(chamberData) ? chamberData : []);
-    } catch (err) {
-      console.error('Error loading chamber logs:', err);
-      setChamberLogs([]);
-    }
 
-    // 2. Fetch Inward Logs
-    try {
-      const inwardData = await fetchInwardLogs();
-      setInwardLogs(Array.isArray(inwardData) ? inwardData : []);
-    } catch (err) {
-      console.error('Error loading inward logs:', err);
-      setInwardLogs([]);
-    }
+    const opts = {
+      paginated: true,
+      page: historyPage,
+      limit: historyPerPage,
+      search: appliedLogsSearch,
+      fromDate: toApiDateParam(appliedFromDate),
+      toDate: toApiDateParam(appliedToDate),
+      warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined
+    };
 
-    // 3. Fetch Outward Logs
     try {
-      const outwardData = await fetchOutwardLogs();
-      setOutwardLogs(Array.isArray(outwardData) ? outwardData : []);
+      if (historyTab === 'daily') {
+        const data = await fetchChamberLogs('', opts);
+        setChamberLogs(Array.isArray(data?.items) ? data.items : []);
+        setHistoryTotal(data?.total ?? 0);
+      } else if (historyTab === 'inward') {
+        const data = await fetchInwardLogs('', opts);
+        setInwardLogs(Array.isArray(data?.items) ? data.items : []);
+        setHistoryTotal(data?.total ?? 0);
+      } else {
+        const data = await fetchOutwardLogs('', opts);
+        setOutwardLogs(Array.isArray(data?.items) ? data.items : []);
+        setHistoryTotal(data?.total ?? 0);
+      }
     } catch (err) {
-      console.error('Error loading outward logs:', err);
-      setOutwardLogs([]);
+      console.error('Error loading history logs:', err);
+      if (historyTab === 'daily') setChamberLogs([]);
+      else if (historyTab === 'inward') setInwardLogs([]);
+      else setOutwardLogs([]);
+      setHistoryTotal(0);
+    } finally {
+      setLoadingLogs(false);
     }
-
-    setLoadingLogs(false);
   };
 
   useEffect(() => {
     if (activeMenu === 'dashboard') {
       loadOperatorsData();
-      loadHistoryLogs();
       loadDashboardStatsData();
       loadSubAdminsData();
+      loadCustomerReportsData();
     } else if (activeMenu === 'sub_admins') {
       loadSubAdminsData();
+      loadAccessScopeOptions();
+    } else if (activeMenu === 'customer_reports') {
+      loadCustomerReportsData();
     } else if (activeMenu === 'data_operators') {
       loadOperatorsData();
     } else if (activeMenu === 'activity_logs') {
@@ -481,99 +642,90 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       loadSystemConfig();
     } else if (activeMenu === 'history_logs' || activeMenu === 'profile_lookup') {
       loadOperatorsData();
-      loadHistoryLogs();
     }
   }, [activeMenu]);
 
-  const handleLookupSearch = () => {
-    const q = lookupQuery.trim().toLowerCase();
+  useEffect(() => {
+    if (activeMenu !== 'history_logs') return;
+    loadHistoryLogs();
+  }, [activeMenu, historyTab, historyPage, appliedFromDate, appliedToDate, appliedLogsSearch, selectedWarehouse]);
+
+  useEffect(() => {
+    setHistoryPage(1);
+  }, [historyTab]);
+
+  const handleLookupSearch = async () => {
+    const q = lookupQuery.trim();
     if (!q) {
       setSearchResults([]);
       setSearchedRecord(null);
       return;
     }
 
-    const results = [];
+    setLoadingLogs(true);
+    try {
+      const searchOpts = { paginated: true, search: q, page: 1, limit: 100 };
+      const [chamberRes, inwardRes, outwardRes] = await Promise.all([
+        fetchChamberLogs('', searchOpts),
+        fetchInwardLogs('', searchOpts),
+        fetchOutwardLogs('', searchOpts)
+      ]);
 
-    // Search in Daily Chamber logs
-    chamberLogs.forEach(log => {
-      const dateStr = (log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '')).toLowerCase();
-      if (
-        (log.reference_no && log.reference_no.toLowerCase().includes(q)) ||
-        (log.client_name && log.client_name.toLowerCase().includes(q)) ||
-        (log.chamber_name && log.chamber_name.toLowerCase().includes(q)) ||
-        (log.monitor_supervisor_name && log.monitor_supervisor_name.toLowerCase().includes(q)) ||
-        dateStr.includes(q)
-      ) {
+      const results = [];
+
+      (chamberRes.items || []).forEach((log) => {
         results.push({
           type: 'daily',
           label: 'Daily Chamber Log',
           reference_no: log.reference_no,
-          date: log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : ''),
+          date: log.formatted_date || (log.entry_date ? String(log.entry_date).split('T')[0] : ''),
           facility: log.warehouse_name || 'Generic',
           client: log.client_name,
           details: `Chamber: ${log.chamber_name} | Temp: ${log.chamber_temp}°C`,
           original: log
         });
-      }
-    });
+      });
 
-    // Search Inward logs
-    inwardLogs.forEach(log => {
-      const dateStr = (log.inward_entry_date ? log.inward_entry_date.split('T')[0] : '').toLowerCase();
-      if (
-        (log.reference_no && log.reference_no.toLowerCase().includes(q)) ||
-        (log.inward_vehicle_no && log.inward_vehicle_no.toLowerCase().includes(q)) ||
-        (log.inward_client_name && log.inward_client_name.toLowerCase().includes(q)) ||
-        (log.inward_transporter_name && log.inward_transporter_name.toLowerCase().includes(q)) ||
-        (log.inward_driver_name && log.inward_driver_name.toLowerCase().includes(q)) ||
-        dateStr.includes(q)
-      ) {
+      (inwardRes.items || []).forEach((log) => {
         results.push({
           type: 'inward',
           label: 'Inward Log',
           reference_no: log.reference_no,
-          date: log.inward_entry_date ? log.inward_entry_date.split('T')[0] : '',
+          date: log.inward_entry_date ? String(log.inward_entry_date).split('T')[0] : '',
           facility: log.warehouse_name || 'Generic',
           client: log.inward_client_name,
           details: `Vehicle: ${log.inward_vehicle_no} | Temp: ${log.inward_vehicle_temp}°C | Pallets: ${log.inward_pallets_in_qty}`,
           original: log
         });
-      }
-    });
+      });
 
-    // Search Outward logs
-    outwardLogs.forEach(log => {
-      const dateStr = (log.outward_entry_date ? log.outward_entry_date.split('T')[0] : '').toLowerCase();
-      if (
-        (log.reference_no && log.reference_no.toLowerCase().includes(q)) ||
-        (log.outward_vehicle_no && log.outward_vehicle_no.toLowerCase().includes(q)) ||
-        (log.outward_client_name && log.outward_client_name.toLowerCase().includes(q)) ||
-        (log.outward_transporter_name && log.outward_transporter_name.toLowerCase().includes(q)) ||
-        (log.outward_driver_name && log.outward_driver_name.toLowerCase().includes(q)) ||
-        dateStr.includes(q)
-      ) {
+      (outwardRes.items || []).forEach((log) => {
         results.push({
           type: 'outward',
           label: 'Outward Log',
           reference_no: log.reference_no,
-          date: log.outward_entry_date ? log.outward_entry_date.split('T')[0] : '',
+          date: log.outward_entry_date ? String(log.outward_entry_date).split('T')[0] : '',
           facility: log.warehouse_name || 'Generic',
           client: log.outward_client_name,
           details: `Vehicle: ${log.outward_vehicle_no} | Temp: ${log.outward_vehicle_temp}°C | Pallets: ${log.outward_pallets_qty || log.outward_pallets_in_qty || 0}`,
           original: log
         });
+      });
+
+      setSearchResults(results);
+
+      if (results.length === 1) {
+        setSearchedRecord(results[0].original);
+        setSearchedRecordType(results[0].type);
+      } else {
+        setSearchedRecord(null);
       }
-    });
-
-    setSearchResults(results);
-
-    // If exactly one match, view it directly
-    if (results.length === 1) {
-      setSearchedRecord(results[0].original);
-      setSearchedRecordType(results[0].type);
-    } else {
-      setSearchedRecord(null);
+    } catch (err) {
+      console.error('Lookup failed:', err);
+      alert(err.message || 'Search failed. Please try again.');
+      setSearchResults([]);
+    } finally {
+      setLoadingLogs(false);
     }
   };
 
@@ -581,15 +733,24 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     let list = (activities || []).filter(act => 
       act && 
       act.log_type !== 'PERMISSION' && 
-      act.log_type !== 'SECURITY'
+      act.log_type !== 'SECURITY' &&
+      act.log_type !== 'ERROR' &&
+      act.log_type !== 'SYSTEM' &&
+      act.action !== 'SYSTEM_ERROR'
     );
 
-    // Apply warehouse filter
+    // Apply warehouse filter (keep Super Admin / System rows visible with DO warehouses;
+    // "System/Admin" option shows only those without a DO warehouse mapping)
     if (selectedWarehouseFilter !== 'All') {
       list = list.filter(act => {
         if (!act) return false;
         const opEmail = act.operator_email ? act.operator_email.toLowerCase() : '';
         const opWarehouse = operatorWarehouseMap[opEmail] || '';
+        if (selectedWarehouseFilter === 'System/Admin') {
+          return !opWarehouse;
+        }
+        // Selected DO warehouse: include that warehouse's DO logs + Super Admin/system logs
+        if (!opWarehouse) return true;
         return opWarehouse === selectedWarehouseFilter;
       });
     }
@@ -599,14 +760,23 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       list = list.filter(act => act && act.action === activitiesActionFilter);
     }
 
-    // Apply Search filter (matches operator email, description, action type)
+    // Apply Search filter (matches operator email, DO name, description, action type)
     if (activitiesSearch.trim() !== '') {
       const q = activitiesSearch.toLowerCase().trim();
       list = list.filter(act => 
         act && (
           (act.operator_email && act.operator_email.toLowerCase().includes(q)) ||
           (act.description && act.description.toLowerCase().includes(q)) ||
-          (act.action && act.action.toLowerCase().includes(q))
+          (act.action && act.action.toLowerCase().includes(q)) ||
+          ((operators || []).some(
+            (op) =>
+              op &&
+              op.email &&
+              act.operator_email &&
+              op.email.toLowerCase() === act.operator_email.toLowerCase() &&
+              op.full_name &&
+              String(op.full_name).toLowerCase().includes(q)
+          ))
         )
       );
     }
@@ -634,18 +804,22 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   const handleExportActivitiesExcel = () => {
     const list = getFilteredActivities();
     let csvContent = "\uFEFF"; // UTF-8 BOM
-    const headers = ["Timestamp", "Operator Email", "Allocated Warehouse", "Action Type", "Module Log", "Activity Description"];
+    const headers = ["Timestamp", "DO Name / Operator", "Operator Email", "Allocated Warehouse", "Action Type", "Module Log", "Activity Description"];
     csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
     list.forEach(act => {
       const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
       const opEmail = act.operator_email || '-';
+      const matchedOp = (operators || []).find(
+        (op) => op && op.email && op.email.toLowerCase() === String(opEmail).toLowerCase()
+      );
+      const opName = matchedOp?.full_name ? String(matchedOp.full_name).trim() : '-';
       const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System / Admin';
       const action = act.action || '-';
       const logType = act.log_type || '-';
       const description = act.description || '-';
 
-      const row = [timestamp, opEmail, opWarehouse, action, logType, description];
+      const row = [timestamp, opName, opEmail, opWarehouse, action, logType, description];
       csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
     });
 
@@ -654,6 +828,64 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     const link = document.createElement("a");
     link.setAttribute("href", url);
     link.setAttribute("download", `Operator_Activity_Audit_Trail_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExportOperatorsDirectory = () => {
+    const term = (operatorSearch || '').toLowerCase().trim();
+    const list = (operators || []).filter((op) => {
+      if (!op) return false;
+      if (!term) return true;
+      return (
+        (op.full_name && op.full_name.toLowerCase().includes(term)) ||
+        (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
+        (op.email && op.email.toLowerCase().includes(term)) ||
+        (op.phone_no && String(op.phone_no).toLowerCase().includes(term))
+      );
+    });
+
+    let csvContent = '\uFEFF';
+    const headers = [
+      'Operator ID',
+      'Full Name',
+      'Phone No.',
+      'Email Address',
+      'Warehouse',
+      'Data Access Scope',
+      'Registration Date'
+    ];
+    csvContent += headers.map((h) => `"${h.replace(/"/g, '""')}"`).join(',') + '\n';
+
+    list.forEach((op) => {
+      const warehouse = op.warehouse_name || 'Not Configured';
+      const accessScope = op.warehouse_name
+        ? `Access: ${op.warehouse_name} Logs Only`
+        : 'Access: All Warehouses';
+      const registered = op.created_at
+        ? new Date(op.created_at).toLocaleDateString('en-GB')
+        : '-';
+      const row = [
+        op.id ?? '-',
+        op.full_name || '-',
+        op.phone_no || '-',
+        op.email || '-',
+        warehouse,
+        accessScope,
+        registered
+      ];
+      csvContent += row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(',') + '\n';
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute(
+      'download',
+      `Registered_Operators_Directory_${new Date().toISOString().split('T')[0]}.csv`
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -732,12 +964,71 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
   };
 
 
+  const parseCheckpointDescription = (description) => {
+    if (!description || typeof description !== 'string' || !description.includes('[CHECKPOINT]')) {
+      return null;
+    }
+    const parts = {};
+    description.split('|').forEach((chunk) => {
+      const text = chunk.trim();
+      if (!text || text === '[CHECKPOINT]') return;
+      const eq = text.indexOf('=');
+      if (eq <= 0) return;
+      parts[text.slice(0, eq).trim()] = text.slice(eq + 1).trim();
+    });
+    return Object.keys(parts).length ? parts : null;
+  };
+
+  const renderSystemErrorDescription = (description, isError) => {
+    const cp = parseCheckpointDescription(description);
+    if (!cp) {
+      return (
+        <span style={{
+          fontFamily: isError ? 'monospace' : 'inherit',
+          fontSize: isError ? '0.74rem' : '0.78rem',
+          color: '#334155'
+        }}>
+          {description || '-'}
+        </span>
+      );
+    }
+
+    const rows = [
+      ['Type', cp.type],
+      ['Status', cp.status],
+      ['File', cp.file && cp.line ? `${cp.file}:${cp.line}` : (cp.file || null)],
+      ['Checkpoint', cp.checkpoint],
+      ['Request', cp.method && cp.url ? `${cp.method} ${cp.url}` : (cp.url || cp.method || null)],
+      ['Message', cp.msg]
+    ].filter(([, v]) => v && v !== '-');
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: '240px' }}>
+        {rows.map(([label, value]) => (
+          <div key={label} style={{ display: 'flex', gap: '6px', alignItems: 'baseline', lineHeight: 1.35 }}>
+            <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', minWidth: '72px' }}>{label}</span>
+            <span style={{
+              fontSize: label === 'Message' ? '0.74rem' : '0.72rem',
+              fontWeight: label === 'Message' ? 700 : 600,
+              color: label === 'Status' && String(value).startsWith('5') ? '#dc2626' : '#334155',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              wordBreak: 'break-word'
+            }}>
+              {value}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const getFilteredSystemLogs = () => {
     let list = (activities || []).filter(act => 
       act && (
         act.log_type === 'SYSTEM' || 
         act.log_type === 'ERROR' ||
-        act.action === 'SYSTEM_ERROR'
+        act.action === 'SYSTEM_ERROR' ||
+        (typeof act.description === 'string' && act.description.includes('[CHECKPOINT]'))
       )
     );
 
@@ -808,104 +1099,31 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
 
   const getFilteredHistoryLogs = () => {
-    let logs = [];
-    if (historyTab === 'daily') {
-      logs = chamberLogs;
-    } else if (historyTab === 'inward') {
-      logs = inwardLogs;
-    } else if (historyTab === 'outward') {
-      logs = outwardLogs;
-    }
-
-    // Filter by Warehouse
-    if (selectedWarehouse && selectedWarehouse !== 'All') {
-      logs = logs.filter(l => l.warehouse_name === selectedWarehouse);
-    }
-
-    // Filter by Search Query
-    if (logsSearch) {
-      const q = logsSearch.toLowerCase();
-      logs = logs.filter(l => {
-        const opEmail = l.operator_email ? l.operator_email.toLowerCase() : '';
-        const opProfile = operators.find(o => o.email.toLowerCase() === opEmail);
-        const opName = opProfile && opProfile.full_name ? opProfile.full_name.toLowerCase() : '';
-        const opPhone = opProfile && opProfile.phone_no ? opProfile.phone_no.toLowerCase() : '';
-        
-        const matchesOperator = opEmail.includes(q) || opName.includes(q) || opPhone.includes(q);
-
-        if (historyTab === 'daily') {
-          const dateStr = (l.formatted_date || (l.entry_date ? l.entry_date.split('T')[0] : '')).toLowerCase();
-          return matchesOperator ||
-            (l.reference_no && l.reference_no.toLowerCase().includes(q)) ||
-            (l.client_name && l.client_name.toLowerCase().includes(q)) ||
-            (l.chamber_name && l.chamber_name.toLowerCase().includes(q)) ||
-            (l.monitor_supervisor_name && l.monitor_supervisor_name.toLowerCase().includes(q)) ||
-            dateStr.includes(q);
-        } else if (historyTab === 'inward') {
-          const dateStr = (l.inward_entry_date ? l.inward_entry_date.split('T')[0] : '').toLowerCase();
-          return matchesOperator ||
-            (l.reference_no && l.reference_no.toLowerCase().includes(q)) ||
-            (l.inward_vehicle_no && l.inward_vehicle_no.toLowerCase().includes(q)) ||
-            (l.inward_client_name && l.inward_client_name.toLowerCase().includes(q)) ||
-            (l.inward_transporter_name && l.inward_transporter_name.toLowerCase().includes(q)) ||
-            (l.inward_driver_name && l.inward_driver_name.toLowerCase().includes(q)) ||
-            dateStr.includes(q);
-        } else if (historyTab === 'outward') {
-          const dateStr = (l.outward_entry_date ? l.outward_entry_date.split('T')[0] : '').toLowerCase();
-          return matchesOperator ||
-            (l.reference_no && l.reference_no.toLowerCase().includes(q)) ||
-            (l.outward_vehicle_no && l.outward_vehicle_no.toLowerCase().includes(q)) ||
-            (l.outward_client_name && l.outward_client_name.toLowerCase().includes(q)) ||
-            (l.outward_transporter_name && l.outward_transporter_name.toLowerCase().includes(q)) ||
-            (l.outward_driver_name && l.outward_driver_name.toLowerCase().includes(q)) ||
-            dateStr.includes(q);
-        }
-        return false;
-      });
-    }
-
-    // Filter by Date Range (using applied filters)
-    if (appliedFromDate || appliedToDate) {
-      logs = logs.filter(l => {
-        const entryDateStr = historyTab === 'daily' 
-          ? (l.formatted_date || l.entry_date) 
-          : (historyTab === 'inward' ? l.inward_entry_date : l.outward_entry_date);
-        
-        if (!entryDateStr) return false;
-        
-        let logDateObj;
-        if (entryDateStr.includes('-')) {
-          const parts = entryDateStr.split('T')[0].split('-');
-          if (parts[0].length === 4) {
-            logDateObj = new Date(parts[0], parts[1] - 1, parts[2]);
-          } else {
-            logDateObj = new Date(parts[2], parts[1] - 1, parts[0]);
-          }
-        } else {
-          logDateObj = new Date(entryDateStr);
-        }
-        
-        if (isNaN(logDateObj.getTime())) return false;
-
-        if (appliedFromDate) {
-          const [fY, fM, fD] = appliedFromDate.split('-');
-          const fromDateObj = new Date(fY, fM - 1, fD);
-          if (logDateObj < fromDateObj) return false;
-        }
-        if (appliedToDate) {
-          const [tY, tM, tD] = appliedToDate.split('-');
-          const toDateObj = new Date(tY, tM - 1, tD);
-          if (logDateObj > toDateObj) return false;
-        }
-        return true;
-      });
-    }
-
-    return logs;
+    if (historyTab === 'daily') return chamberLogs;
+    if (historyTab === 'inward') return inwardLogs;
+    return outwardLogs;
   };
 
-  const handleExportLogsExcel = () => {
-    const filteredLogs = getFilteredHistoryLogs();
+  const handleExportLogsExcel = async () => {
+    setLogsExportLoading(true);
+    try {
+      const exportParams = {
+        search: appliedLogsSearch,
+        fromDate: toApiDateParam(appliedFromDate),
+        toDate: toApiDateParam(appliedToDate),
+        warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined
+      };
+      let allItems = [];
+      if (historyTab === 'daily') {
+        ({ items: allItems } = await fetchAllChamberLogs(exportParams));
+      } else if (historyTab === 'inward') {
+        ({ items: allItems } = await fetchAllInwardLogs(exportParams));
+      } else {
+        ({ items: allItems } = await fetchAllOutwardLogs(exportParams));
+      }
+
+      let filteredLogs = allItems;
+
     if (filteredLogs.length === 0) {
       alert("No data available to export.");
       return;
@@ -1024,6 +1242,12 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert(err.message || 'Export failed. Please try again.');
+    } finally {
+      setLogsExportLoading(false);
+    }
   };
 
   const handleSaveOperator = async (e) => {
@@ -1041,6 +1265,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       return;
     }
 
+    setSavingOp(true);
     try {
       const payload = {
         email: opEmail,
@@ -1051,20 +1276,37 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       };
 
       if (editingOp) {
-        // Update operator details
+        setOpProcessStatus('Updating operator profile…');
         await updateOperator(editingOp.id, payload);
         setOpSuccess('Operator profile updated successfully.');
       } else {
-        // Register new operator profile
-        await createOperator(payload);
-        setOpSuccess('Data operator registered successfully.');
+        setOpProcessStatus('Creating operator account…');
+        // Yield so overlay paints before the network/email wait
+        await new Promise((r) => setTimeout(r, 50));
+        setOpProcessStatus('Creating account & sending credentials email…');
+        const created = await createOperator(payload);
+        if (created?.emailSent) {
+          setOpProcessStatus('Email sent successfully.');
+          setOpSuccess('Data operator registered. Login credentials emailed successfully.');
+        } else if (created?.emailSkipped) {
+          setOpSuccess(
+            created?.emailError
+              || 'Data operator registered. Email skipped — set RESEND_API_KEY in backend .env and restart server.'
+          );
+        } else {
+          setOpSuccess(
+            `Data operator registered, but email failed${created?.emailError ? `: ${created.emailError}` : '.'}`
+          );
+        }
       }
 
-      // Reset form fields
       cancelEditOperator();
       loadOperatorsData();
     } catch (err) {
       setOpError(err.message || 'Action failed.');
+    } finally {
+      setSavingOp(false);
+      setOpProcessStatus('');
     }
   };
 
@@ -1124,6 +1366,15 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     }
   };
 
+  const loadAccessScopeOptions = async () => {
+    try {
+      const data = await fetchAccessScopeOptions();
+      setAccessScopeOptions(data || { clients: [], warehouses: [] });
+    } catch (err) {
+      console.error('Failed to load access scope options:', err);
+    }
+  };
+
   const handleSaveSubAdmin = async (e) => {
     e.preventDefault();
     setSubAdminError('');
@@ -1139,20 +1390,39 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       return;
     }
 
+    setSavingSubAdmin(true);
     try {
       const payload = {
         email: subAdminEmail,
         password: subAdminPassword,
         full_name: subAdminFullName,
-        phone_no: subAdminPhoneNo
+        phone_no: subAdminPhoneNo,
+        allowed_clients: subAdminSelectedClients.length > 0 ? subAdminSelectedClients : null,
+        allowed_warehouses: subAdminSelectedWarehouses.length > 0 ? subAdminSelectedWarehouses : null
       };
 
       if (editingSubAdmin) {
+        setSubAdminProcessStatus('Updating Sub-Admin profile…');
         await updateSubAdmin(editingSubAdmin.id, payload);
         setSubAdminSuccess('Sub-Admin profile updated successfully.');
       } else {
-        await createSubAdmin(payload);
-        setSubAdminSuccess('Sub-Admin registered successfully.');
+        setSubAdminProcessStatus('Creating Sub-Admin account…');
+        await new Promise((r) => setTimeout(r, 50));
+        setSubAdminProcessStatus('Creating account & sending credentials email…');
+        const created = await createSubAdmin(payload);
+        if (created?.emailSent) {
+          setSubAdminProcessStatus('Email sent successfully.');
+          setSubAdminSuccess('Sub-Admin registered. Login credentials emailed successfully.');
+        } else if (created?.emailSkipped) {
+          setSubAdminSuccess(
+            created?.emailError
+              || 'Sub-Admin registered. Email skipped — set RESEND_API_KEY in backend .env and restart server.'
+          );
+        } else {
+          setSubAdminSuccess(
+            `Sub-Admin registered, but email failed${created?.emailError ? `: ${created.emailError}` : '.'}`
+          );
+        }
       }
 
       cancelEditSubAdmin();
@@ -1160,6 +1430,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
       loadDashboardStatsData();
     } catch (err) {
       setSubAdminError(err.message || 'Action failed.');
+    } finally {
+      setSavingSubAdmin(false);
+      setSubAdminProcessStatus('');
     }
   };
 
@@ -1188,6 +1461,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     setSubAdminFullName(sa.full_name || '');
     setSubAdminPhoneNo(sa.phone_no || '');
     setSubAdminPassword('');
+    setSubAdminSelectedClients(sa.allowed_clients ? sa.allowed_clients.split(',').map(c => c.trim()).filter(Boolean) : []);
+    setSubAdminSelectedWarehouses(sa.allowed_warehouses ? sa.allowed_warehouses.split(',').map(w => w.trim()).filter(Boolean) : []);
     setSubAdminError('');
     setSubAdminSuccess('');
   };
@@ -1198,10 +1473,154 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     setSubAdminFullName('');
     setSubAdminPhoneNo('');
     setSubAdminPassword('');
+    setSubAdminSelectedClients([]);
+    setSubAdminSelectedWarehouses([]);
     setShowPassword(false);
     setSubAdminError('');
     setSubAdminSuccess('');
     setSubAdminSearch('');
+  };
+
+  const clearProfilePasswordForm = () => {
+    setNewAdminPassword('');
+    setConfirmAdminPassword('');
+    setProfileEmail(user?.email || '');
+    setOldProfileEmail(user?.email || '');
+    setProfileAccessId(user?.email || '');
+    setProfileAccessPassword('');
+    setProfileAccessVerified(false);
+    setProfileAccessLoading(false);
+    setProfileAccessErr('');
+    setProfilePwdMsg('');
+    setProfilePwdErr('');
+    setShowCurrentAdminPassword(false);
+    setShowNewAdminPassword(false);
+    setShowConfirmAdminPassword(false);
+    setShowProfileConfirm(false);
+    setProfileConfirmSummary(null);
+  };
+
+  const openSuperAdminProfileWindow = () => {
+    setSaEditLog(null);
+    clearProfilePasswordForm();
+    setProfileAccessId(user?.email || '');
+    setProfileEmail(user?.email || '');
+    setOldProfileEmail(user?.email || '');
+    setActiveMenu('super_admin_profile');
+  };
+
+  const handleProfileAccessVerify = async (e) => {
+    e.preventDefault();
+    setProfileAccessErr('');
+    setProfilePwdMsg('');
+    setProfilePwdErr('');
+
+    const cleanId = (profileAccessId || '').trim().toLowerCase();
+    if (!cleanId || !profileAccessPassword) {
+      setProfileAccessErr('Please enter your ID and password.');
+      return;
+    }
+
+    setProfileAccessLoading(true);
+    try {
+      const res = await verifySuperAdminProfileAccess({
+        email: cleanId,
+        password: profileAccessPassword
+      });
+      const verifiedEmail = res?.profile?.email || user?.email || cleanId;
+      setProfileAccessVerified(true);
+      setOldProfileEmail(verifiedEmail);
+      setProfileEmail(verifiedEmail);
+      setProfileAccessErr('');
+    } catch (err) {
+      setProfileAccessErr(err.message || 'Verification failed.');
+      setProfileAccessVerified(false);
+    } finally {
+      setProfileAccessLoading(false);
+    }
+  };
+
+  const handleProfilePasswordSubmit = (e) => {
+    e.preventDefault();
+    setProfilePwdErr('');
+    setProfilePwdMsg('');
+    if (!profileAccessVerified) {
+      setProfilePwdErr('Please verify your ID and password first.');
+      return;
+    }
+
+    const nextEmail = (profileEmail || '').trim().toLowerCase();
+    const currentEmail = (oldProfileEmail || user?.email || '').trim().toLowerCase();
+    const emailChanged = Boolean(nextEmail) && nextEmail !== currentEmail;
+    const passwordChanged = Boolean(newAdminPassword || confirmAdminPassword);
+
+    if (!emailChanged && !passwordChanged) {
+      setProfilePwdErr('Update email and/or password before saving.');
+      return;
+    }
+    if (emailChanged && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      setProfilePwdErr('Please enter a valid email address.');
+      return;
+    }
+    if (passwordChanged) {
+      if (!newAdminPassword || !confirmAdminPassword) {
+        setProfilePwdErr('Please enter and confirm your new password.');
+        return;
+      }
+      if (newAdminPassword.length < 8) {
+        setProfilePwdErr('New password must be at least 8 characters.');
+        return;
+      }
+      if (newAdminPassword !== confirmAdminPassword) {
+        setProfilePwdErr('New password and confirm password do not match.');
+        return;
+      }
+    }
+
+    // Same DO-style confirm window before applying changes
+    setProfileConfirmSummary({
+      oldEmail: oldProfileEmail || user?.email || '-',
+      newEmail: emailChanged ? nextEmail : (oldProfileEmail || user?.email || '-'),
+      emailChanged,
+      passwordChanged
+    });
+    setShowProfileConfirm(true);
+  };
+
+  const handleConfirmProfileUpdate = async () => {
+    if (!profileConfirmSummary) return;
+
+    setProfilePwdLoading(true);
+    setProfilePwdErr('');
+    try {
+      const res = await changeSuperAdminPassword({
+        currentPassword: profileAccessPassword,
+        newPassword: profileConfirmSummary.passwordChanged ? newAdminPassword : undefined,
+        email: profileConfirmSummary.emailChanged ? profileConfirmSummary.newEmail : undefined
+      });
+      if (res?.user && typeof onUserUpdate === 'function') {
+        onUserUpdate(res.user);
+      }
+      setShowProfileConfirm(false);
+      setProfileConfirmSummary(null);
+      setProfilePwdMsg(res?.message || 'Profile updated successfully.');
+      setNewAdminPassword('');
+      setConfirmAdminPassword('');
+      setProfileAccessPassword('');
+      setProfileAccessVerified(false);
+      setProfileAccessId(res?.user?.email || user?.email || '');
+      setShowCurrentAdminPassword(false);
+      setShowNewAdminPassword(false);
+      setShowConfirmAdminPassword(false);
+      setProfileEmail(res?.user?.email || user?.email || '');
+      setOldProfileEmail(res?.user?.email || user?.email || '');
+    } catch (err) {
+      setShowProfileConfirm(false);
+      setProfileConfirmSummary(null);
+      setProfilePwdErr(err.message || 'Failed to update profile.');
+    } finally {
+      setProfilePwdLoading(false);
+    }
   };
 
   const formatDate = (date) => {
@@ -1222,10 +1641,193 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
     });
   };
 
+  const startSaEditLog = (type, log) => {
+    setSelectedDetailLog(null);
+    setSaEditLog({ type, data: log });
+  };
+
+  const handleSaDeleteLog = async (type, log) => {
+    const id = type === 'daily' ? log.id : type === 'inward' ? log.inward_id : log.outward_id;
+    const ref = log.reference_no || `#${id}`;
+    if (!window.confirm(`Delete this ${type === 'daily' ? 'Chamber' : type === 'inward' ? 'Inward' : 'Outward'} log (${ref})?\n\nSuper Admin delete — no permission request required.`)) {
+      return;
+    }
+    setSaLogActionBusy(true);
+    try {
+      if (type === 'daily') await deleteChamberLog(id);
+      else if (type === 'inward') await deleteInwardLog(id);
+      else await deleteOutwardLog(id);
+
+      setSelectedDetailLog(null);
+      if (saEditLog) setSaEditLog(null);
+
+      if (type === 'daily') setChamberLogs((prev) => prev.filter((r) => r.id !== id));
+      else if (type === 'inward') setInwardLogs((prev) => prev.filter((r) => r.inward_id !== id));
+      else setOutwardLogs((prev) => prev.filter((r) => r.outward_id !== id));
+
+      setHistoryTotal((t) => Math.max(0, (Number(t) || 0) - 1));
+      alert('Log deleted successfully.');
+    } catch (err) {
+      alert(err.message || 'Failed to delete log.');
+    } finally {
+      setSaLogActionBusy(false);
+    }
+  };
+
+  const renderSaLogActions = (type, log) => (
+    <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+      <button
+        type="button"
+        onClick={() => {
+          setSelectedDetailLog(log);
+          setDetailType(type);
+        }}
+        title="View Data Profile & Photos"
+        style={{
+          backgroundColor: '#f1f5f9',
+          border: '1px solid #cbd5e1',
+          color: '#334155',
+          padding: '6px 10px',
+          borderRadius: 'var(--radius-sm)',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          fontSize: '0.75rem',
+          fontWeight: 700
+        }}
+      >
+        <Eye size={13} />
+        <span>Details</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => startSaEditLog(type, log)}
+        title="Edit (Super Admin — no permission required)"
+        disabled={saLogActionBusy}
+        style={{
+          backgroundColor: '#e0f2fe',
+          border: '1px solid #bae6fd',
+          color: '#0369a1',
+          padding: '6px',
+          borderRadius: 'var(--radius-sm)',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}
+      >
+        <Edit size={14} />
+      </button>
+      <button
+        type="button"
+        className="btn-delete-log"
+        onClick={() => handleSaDeleteLog(type, log)}
+        title="Delete (Super Admin — no permission required)"
+        disabled={saLogActionBusy}
+        style={{
+          backgroundColor: '#fee2e2',
+          border: '1px solid #fecaca',
+          color: '#b91c1c',
+          padding: '6px',
+          borderRadius: 'var(--radius-sm)',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}
+      >
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+
   const hasPendingRequests = permissionRequests.some(pr => pr.status === 'Pending');
+
+  const clearSaEditLog = async () => {
+    setSaEditLog(null);
+    if (activeMenu === 'history_logs' || activeMenu === 'profile_lookup') {
+      try {
+        await loadHistoryLogs();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  };
+
+  const renderSaEditPanel = () => {
+    if (!saEditLog) return null;
+    const editType = saEditLog.type;
+    return (
+      <div className="sa-edit-log-panel">
+        <div className="sa-edit-log-topbar">
+          <button type="button" className="sa-edit-log-back" onClick={() => setSaEditLog(null)}>
+            <X size={16} />
+            Cancel Edit
+          </button>
+          <span className="sa-edit-log-badge">
+            Super Admin direct edit · no permission required
+          </span>
+        </div>
+        <div className="sa-edit-log-body">
+          <Suspense
+            fallback={
+              <div className="page-lazy-loader" style={{ position: 'relative', minHeight: 280 }}>
+                <div className="page-lazy-loader-inner">
+                  <span className="page-lazy-loader-spinner" />
+                  <span>Loading editor…</span>
+                </div>
+              </div>
+            }
+          >
+            {editType === 'daily' && (
+              <TempMonitor
+                editData={saEditLog.data}
+                setEditData={(d) => {
+                  if (!d) clearSaEditLog();
+                  else setSaEditLog({ type: 'daily', data: d });
+                }}
+                forcedMenu="All"
+                onMenuChange={() => clearSaEditLog()}
+              />
+            )}
+            {editType === 'inward' && (
+              <InwardMonitor
+                editData={saEditLog.data}
+                setEditData={(d) => {
+                  if (!d) clearSaEditLog();
+                  else setSaEditLog({ type: 'inward', data: d });
+                }}
+                setActiveDOMenu={() => clearSaEditLog()}
+              />
+            )}
+            {editType === 'outward' && (
+              <OutwardMonitor
+                editData={saEditLog.data}
+                setEditData={(d) => {
+                  if (!d) clearSaEditLog();
+                  else setSaEditLog({ type: 'outward', data: d });
+                }}
+                setActiveDOMenu={() => clearSaEditLog()}
+              />
+            )}
+          </Suspense>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="app-container">
+      {(savingOp || savingSubAdmin) && (
+        <div className="account-save-overlay" role="status" aria-live="polite">
+          <div className="account-save-overlay-card">
+            <Loader2 size={28} className="spinner-icon" color="#00a2e8" />
+            <strong>{savingOp ? (opProcessStatus || 'Processing…') : (subAdminProcessStatus || 'Processing…')}</strong>
+            <span>Please wait — account save and email are in progress.</span>
+          </div>
+        </div>
+      )}
       <style>{`
         @keyframes status-pulse {
           0% {
@@ -1342,6 +1944,35 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
             </button>
 
             <button 
+              className={`clean-menu-item ${activeMenu === 'customer_reports' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('customer_reports')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'customer_reports' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'customer_reports' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <MessageSquareWarning size={18} />
+                <span>Customer Reports</span>
+              </div>
+              {customerReports.some((r) => r && r.status === 'Open') && (
+                <span className="pulsing-dot" />
+              )}
+            </button>
+
+            <button 
               className={`clean-menu-item ${activeMenu === 'activity_logs' ? 'active' : ''}`}
               onClick={() => setActiveMenu('activity_logs')}
               style={{
@@ -1420,9 +2051,21 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
           </div>
         </div>
 
-        {/* Sidebar Footer with Logout */}
+        {/* Sidebar Footer with Profile + Logout */}
         <div className="secure-sidebar-bottom">
-          <div className="secure-profile-badge">
+          <div
+            className={`secure-profile-badge secure-profile-badge--clickable${activeMenu === 'super_admin_profile' ? ' is-active' : ''}`}
+            onClick={openSuperAdminProfileWindow}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openSuperAdminProfileWindow();
+              }
+            }}
+            title="Open Super Admin Profile"
+          >
             <div className="secure-avatar">SA</div>
             <div className="secure-user-info">
               <strong>Super Admin</strong>
@@ -1431,7 +2074,10 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
             <button
               type="button"
               className="secure-logout-btn"
-              onClick={onLogout}
+              onClick={(e) => {
+                e.stopPropagation();
+                onLogout();
+              }}
               title="Log Out Session"
             >
               <LogOut size={16} />
@@ -1442,7 +2088,10 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
       {/* 2. Main Workspace Layout */}
       {/* Header */}
-      <header className="do-header secure-admin-header" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0 24px', zIndex: 110 }}>
+      <header
+        className="secure-admin-header"
+        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0 24px', zIndex: 110 }}
+      >
         {/* Left section: Mobile-only Logo */}
         <div className="secure-header-left" style={{ position: 'absolute', left: '24px', display: 'flex', alignItems: 'center' }}>
           <div className="secure-mobile-logo mobile-only">
@@ -1457,6 +2106,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               ? 'Super Admin - Control Dashboard'
               : activeMenu === 'sub_admins'
                 ? 'Super Admin - Sub-Admin Profiles'
+                : activeMenu === 'customer_reports'
+                  ? 'Super Admin - Customer Reports'
                 : activeMenu === 'data_operators' 
                   ? 'Super Admin - Operator Profiles' 
                   : activeMenu === 'history_logs' 
@@ -1465,7 +2116,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                       ? 'Super Admin - Operator Activities'
                       : activeMenu === 'profile_lookup'
                         ? 'Super Admin - Profile Lookup'
-                        : 'Super Administrator'}
+                        : activeMenu === 'super_admin_profile'
+                          ? 'Super Admin - Profile & Security'
+                          : 'Super Administrator'}
           </span>
           <div className="secure-clock-subtext" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '700' }}>
             <Clock size={12} />
@@ -1499,7 +2152,24 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
         <div className="mobile-right-drawer mobile-only">
           {/* Drawer Header */}
           <div className="right-drawer-header">
-            <div className="drawer-user-info">
+            <div
+              className="drawer-user-info"
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                openSuperAdminProfileWindow();
+                setIsMobileMenuOpen(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openSuperAdminProfileWindow();
+                  setIsMobileMenuOpen(false);
+                }
+              }}
+              style={{ cursor: 'pointer' }}
+              title="Open Super Admin Profile"
+            >
               <div className="user-avatar-circle">
                 <User size={16} color="#00a2e8" />
               </div>
@@ -1553,6 +2223,23 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               <div className="item-left">
                 <ShieldCheck size={18} className="item-icon" />
                 <span>Sub-Admins</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeMenu === 'customer_reports' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('customer_reports');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <MessageSquareWarning size={18} className="item-icon" />
+                <span>Customer Reports</span>
+                {customerReports.some((r) => r && r.status === 'Open') && (
+                  <span className="pulsing-dot" style={{ marginLeft: '8px' }} />
+                )}
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -1617,8 +2304,273 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
         </div>
       )}
 
-      {/* Body Content Viewport */}
+      {/* Body Content Viewport — sidebar stays visible; edit stays in this column only */}
       <main className="app-viewport secure-admin-viewport" style={{ display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto' }}>
+        {saEditLog ? (
+          renderSaEditPanel()
+        ) : (
+          <>
+        {activeMenu === 'super_admin_profile' && (
+          <div className="sa-profile-window">
+            <div className="sa-profile-window-top">
+              <div className="sa-profile-window-title">
+                <div className="sa-profile-window-icon">
+                  <ShieldCheck size={22} />
+                </div>
+                <div>
+                  <h2>Super Admin Profile</h2>
+                  <p>Update login email and password from this working window.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="sa-profile-window-back"
+                onClick={() => {
+                  clearProfilePasswordForm();
+                  setActiveMenu('dashboard');
+                }}
+              >
+                <X size={16} />
+                Close
+              </button>
+            </div>
+
+            <div className="sa-profile-window-grid">
+              <div className="sa-profile-info-card">
+                <h3>Account Details</h3>
+                <div className="sa-profile-info-row">
+                  <span>Role</span>
+                  <strong>Super Admin</strong>
+                </div>
+                <div className="sa-profile-info-row">
+                  <span>Name</span>
+                  <strong>{user?.full_name || 'Super Administrator'}</strong>
+                </div>
+                <div className="sa-profile-info-note">
+                  Verify with your ID and password first. After verification you can update email, password, or both.
+                </div>
+              </div>
+
+              <div className="sa-profile-security-card">
+                {!profileAccessVerified ? (
+                  <>
+                    <h3>Profile Access Verification</h3>
+                    <p className="sa-profile-security-sub">
+                      Enter your Super Admin ID and password to continue.
+                    </p>
+                    <form className="sa-profile-form" onSubmit={handleProfileAccessVerify} autoComplete="off">
+                      <label>Super Admin ID</label>
+                      <div className="sa-profile-input-wrap">
+                        <input
+                          type="email"
+                          value={profileAccessId}
+                          onChange={(e) => setProfileAccessId(e.target.value)}
+                          placeholder="Enter your Super Admin ID"
+                          autoComplete="off"
+                          name="sa-profile-access-id"
+                        />
+                      </div>
+                      <label>Password</label>
+                      <div className="sa-profile-input-wrap">
+                        <input
+                          type={showCurrentAdminPassword ? 'text' : 'password'}
+                          value={profileAccessPassword}
+                          onChange={(e) => setProfileAccessPassword(e.target.value)}
+                          placeholder="Enter your password"
+                          autoComplete="new-password"
+                          name="sa-profile-access-password"
+                        />
+                        <button
+                          type="button"
+                          className="sa-profile-eye-btn"
+                          onClick={() => setShowCurrentAdminPassword((p) => !p)}
+                          title={showCurrentAdminPassword ? 'Hide Password' : 'Show Password'}
+                        >
+                          {showCurrentAdminPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      {profileAccessErr && <div className="sa-profile-error">{profileAccessErr}</div>}
+                      <button type="submit" className="sa-profile-submit" disabled={profileAccessLoading}>
+                        {profileAccessLoading ? (
+                          <>
+                            <Loader2 size={16} className="sa-profile-spin" />
+                            Verifying…
+                          </>
+                        ) : (
+                          <>
+                            <Lock size={16} />
+                            Verify and Continue
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <>
+                    <h3>Update Email / Password</h3>
+                    <p className="sa-profile-security-sub">
+                      Update email, password, or both. Leave password fields blank if you only want to change email.
+                    </p>
+                    <form className="sa-profile-form" onSubmit={handleProfilePasswordSubmit} autoComplete="off">
+                      <div className="sa-profile-old-email">
+                        <h2>Old Email ID</h2>
+                        <h1>{oldProfileEmail || user?.email || '-'}</h1>
+                      </div>
+                      <label>New Email ID</label>
+                      <div className="sa-profile-input-wrap">
+                        <input
+                          type="email"
+                          value={profileEmail}
+                          onChange={(e) => setProfileEmail(e.target.value)}
+                          placeholder="Enter new email ID"
+                          autoComplete="off"
+                          name="sa-profile-new-email"
+                        />
+                      </div>
+                      <label>New Password</label>
+                      <div className="sa-profile-input-wrap">
+                        <input
+                          type={showNewAdminPassword ? 'text' : 'password'}
+                          value={newAdminPassword}
+                          onChange={(e) => setNewAdminPassword(e.target.value)}
+                          placeholder="Leave blank to keep current password"
+                          autoComplete="new-password"
+                          name="sa-profile-new-password"
+                        />
+                        <button
+                          type="button"
+                          className="sa-profile-eye-btn"
+                          onClick={() => setShowNewAdminPassword((p) => !p)}
+                          title={showNewAdminPassword ? 'Hide Password' : 'Show Password'}
+                        >
+                          {showNewAdminPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <label>Confirm Password</label>
+                      <div className="sa-profile-input-wrap">
+                        <input
+                          type={showConfirmAdminPassword ? 'text' : 'password'}
+                          value={confirmAdminPassword}
+                          onChange={(e) => setConfirmAdminPassword(e.target.value)}
+                          placeholder="Re-enter only if changing password"
+                          autoComplete="new-password"
+                          name="sa-profile-confirm-password"
+                        />
+                        <button
+                          type="button"
+                          className="sa-profile-eye-btn"
+                          onClick={() => setShowConfirmAdminPassword((p) => !p)}
+                          title={showConfirmAdminPassword ? 'Hide Password' : 'Show Password'}
+                        >
+                          {showConfirmAdminPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+
+                      {profilePwdErr && <div className="sa-profile-error">{profilePwdErr}</div>}
+                      {profilePwdMsg && <div className="sa-profile-success">{profilePwdMsg}</div>}
+
+                      <button type="submit" className="sa-profile-submit" disabled={profilePwdLoading}>
+                        {profilePwdLoading ? (
+                          <>
+                            <Loader2 size={16} className="sa-profile-spin" />
+                            Saving Changes…
+                          </>
+                        ) : (
+                          <>
+                            <Lock size={16} />
+                            Save Profile Changes
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {showProfileConfirm && profileConfirmSummary && (
+              <div className="sa-profile-confirm-overlay" role="dialog" aria-modal="true" aria-labelledby="sa-profile-confirm-title">
+                <div className="sa-profile-confirm-content">
+                  <div className="sa-profile-confirm-header">
+                    <h3 id="sa-profile-confirm-title" className="sa-profile-confirm-title">
+                      <CheckCircle size={20} color="#10b981" />
+                      <span>Verify Profile Update</span>
+                    </h3>
+                  </div>
+
+                  <div className="sa-profile-confirm-body">
+                    <div className="sa-profile-confirm-box">
+                      <h4>Change Summary</h4>
+
+                      <div className="sa-profile-confirm-row">
+                        <div className="sa-profile-confirm-item">
+                          <span className="sa-profile-confirm-label">Current Email</span>
+                          <strong>{profileConfirmSummary.oldEmail}</strong>
+                        </div>
+                        <div className="sa-profile-confirm-divider">→</div>
+                        <div className="sa-profile-confirm-item">
+                          <span className="sa-profile-confirm-label">
+                            {profileConfirmSummary.emailChanged ? 'New Email' : 'Email (unchanged)'}
+                          </span>
+                          <strong>{profileConfirmSummary.newEmail}</strong>
+                        </div>
+                      </div>
+
+                      <div className="sa-profile-confirm-flags">
+                        <div className="sa-profile-confirm-flag">
+                          <span>Email update</span>
+                          <strong className={profileConfirmSummary.emailChanged ? 'is-yes' : 'is-no'}>
+                            {profileConfirmSummary.emailChanged ? 'Yes' : 'No'}
+                          </strong>
+                        </div>
+                        <div className="sa-profile-confirm-flag">
+                          <span>Password update</span>
+                          <strong className={profileConfirmSummary.passwordChanged ? 'is-yes' : 'is-no'}>
+                            {profileConfirmSummary.passwordChanged ? 'Yes' : 'No'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="sa-profile-confirm-banner">
+                        Confirm to apply these Super Admin login changes. You may need to sign in again with the new credentials.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="sa-profile-confirm-actions">
+                    <button
+                      type="button"
+                      className="sa-profile-confirm-cancel"
+                      onClick={() => {
+                        setShowProfileConfirm(false);
+                        setProfileConfirmSummary(null);
+                      }}
+                      disabled={profilePwdLoading}
+                    >
+                      <span>Back to Edit Form</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sa-profile-confirm-save"
+                      onClick={handleConfirmProfileUpdate}
+                      disabled={profilePwdLoading}
+                    >
+                      {profilePwdLoading ? (
+                        <>
+                          <Loader2 size={16} className="sa-profile-spin" />
+                          <span>Saving…</span>
+                        </>
+                      ) : (
+                        <span>Confirm & Save</span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {activeMenu === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             
@@ -1878,7 +2830,10 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                 <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Warehouse Name</label>
                 <select
                   value={selectedWarehouse}
-                  onChange={(e) => setSelectedWarehouse(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedWarehouse(e.target.value);
+                    setHistoryPage(1);
+                  }}
                   style={{
                     padding: '8px 12px',
                     borderRadius: 'var(--radius-sm)',
@@ -1939,7 +2894,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                 <input
                   type="date"
                   value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
+                  max={toDate || undefined}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFromDate(val);
+                    if (val && toDate && val > toDate) {
+                      setToDate(val);
+                    }
+                  }}
                   style={{
                     padding: '8px 12px',
                     borderRadius: 'var(--radius-sm)',
@@ -1959,7 +2921,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   type="date"
                   value={toDate}
                   min={fromDate || undefined}
-                  onChange={(e) => setToDate(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setToDate(val);
+                    if (val && fromDate && val < fromDate) {
+                      setFromDate(val);
+                    }
+                  }}
                   style={{
                     padding: '8px 12px',
                     borderRadius: 'var(--radius-sm)',
@@ -1976,8 +2944,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
               <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end' }}>
                 <button
                   onClick={() => {
+                    if (fromDate && toDate && fromDate > toDate) {
+                      alert("⚠️ Date Range Error:\n'From Date' must be less than or equal to 'To Date'.");
+                      return;
+                    }
                     setAppliedFromDate(fromDate);
                     setAppliedToDate(toDate);
+                    setAppliedLogsSearch(logsSearch);
+                    setHistoryPage(1);
                   }}
                   style={{
                     padding: '9px 16px',
@@ -2003,6 +2977,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                     setToDate('');
                     setAppliedFromDate('');
                     setAppliedToDate('');
+                    setAppliedLogsSearch('');
+                    setLogsSearch('');
+                    setHistoryPage(1);
                   }}
                   style={{
                     padding: '9px 12px',
@@ -2020,22 +2997,23 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
                 <button
                   onClick={handleExportLogsExcel}
+                  disabled={logsExportLoading || loadingLogs}
                   style={{
                     padding: '9px 16px',
                     borderRadius: 'var(--radius-sm)',
                     border: 'none',
-                    backgroundColor: '#22c55e',
+                    backgroundColor: logsExportLoading ? '#94a3b8' : '#22c55e',
                     color: '#ffffff',
                     fontWeight: '700',
                     fontSize: '0.8rem',
-                    cursor: 'pointer',
+                    cursor: logsExportLoading ? 'wait' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px'
                   }}
                 >
                   <Download size={14} />
-                  Export
+                  {logsExportLoading ? 'Exporting…' : 'Export'}
                 </button>
               </div>
             </div>
@@ -2050,6 +3028,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                 <span>No logs found matching your filters.</span>
               </div>
             ) : (
+              <>
               <div className="table-responsive" style={{ maxHeight: '500px', overflowY: 'auto' }}>
                 <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
@@ -2161,30 +3140,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         </td>
                         <td style={{ padding: '12px 16px' }}>{log.monitor_supervisor_name}</td>
                         <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                          <button 
-                            onClick={() => {
-                              setSelectedDetailLog(log);
-                              setDetailType('daily');
-                            }}
-                            title="View Data Profile & Photos"
-                            style={{ 
-                              backgroundColor: '#f1f5f9', 
-                              border: '1px solid #cbd5e1', 
-                              color: '#334155', 
-                              padding: '6px 10px', 
-                              borderRadius: 'var(--radius-sm)', 
-                              cursor: 'pointer', 
-                              display: 'inline-flex', 
-                              alignItems: 'center', 
-                              justifyContent: 'center',
-                              gap: '4px',
-                              fontSize: '0.75rem',
-                              fontWeight: 700
-                            }}
-                          >
-                            <Eye size={13} />
-                            <span>Details</span>
-                          </button>
+                          {renderSaLogActions('daily', log)}
                         </td>
                       </tr>
                        )
@@ -2244,35 +3200,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             {formatDuration(log.inward_unloading_duration_hours, log.inward_unloading_duration_mins)}
                           </div>
                           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap' }}>
-                            {log.inward_unloading_start_time || '-'} to {log.inward_unloading_end_time || '-'}
+                            <div>S: {log.inward_unloading_start_time || '-'}</div>
+                            <div>E: {log.inward_unloading_end_time || '-'}</div>
                           </div>
                         </td>
                         <td style={{ padding: '12px 16px' }}>{log.inward_unloading_supervisor_name}</td>
                         <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                          <button 
-                            onClick={() => {
-                              setSelectedDetailLog(log);
-                              setDetailType('inward');
-                            }}
-                            title="View Data Profile & Photos"
-                            style={{ 
-                              backgroundColor: '#f1f5f9', 
-                              border: '1px solid #cbd5e1', 
-                              color: '#334155', 
-                              padding: '6px 10px', 
-                              borderRadius: 'var(--radius-sm)', 
-                              cursor: 'pointer', 
-                              display: 'inline-flex', 
-                              alignItems: 'center', 
-                              justifyContent: 'center',
-                              gap: '4px',
-                              fontSize: '0.75rem',
-                              fontWeight: 700
-                            }}
-                          >
-                            <Eye size={13} />
-                            <span>Details</span>
-                          </button>
+                          {renderSaLogActions('inward', log)}
                         </td>
                       </tr>
                        )
@@ -2332,35 +3266,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             {formatDuration(log.outward_loading_duration_hours, log.outward_loading_duration_mins)}
                           </div>
                           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap' }}>
-                            {log.outward_loading_start_time || '-'} to {log.outward_loading_end_time || '-'}
+                            <div>S: {log.outward_loading_start_time || '-'}</div>
+                            <div>E: {log.outward_loading_end_time || '-'}</div>
                           </div>
                         </td>
                         <td style={{ padding: '12px 16px' }}>{log.outward_loading_supervisor_name}</td>
                         <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                          <button 
-                            onClick={() => {
-                              setSelectedDetailLog(log);
-                              setDetailType('outward');
-                            }}
-                            title="View Data Profile & Photos"
-                            style={{ 
-                              backgroundColor: '#f1f5f9', 
-                              border: '1px solid #cbd5e1', 
-                              color: '#334155', 
-                              padding: '6px 10px', 
-                              borderRadius: 'var(--radius-sm)', 
-                              cursor: 'pointer', 
-                              display: 'inline-flex', 
-                              alignItems: 'center', 
-                              justifyContent: 'center',
-                              gap: '4px',
-                              fontSize: '0.75rem',
-                              fontWeight: 700
-                            }}
-                          >
-                            <Eye size={13} />
-                            <span>Details</span>
-                          </button>
+                          {renderSaLogActions('outward', log)}
                         </td>
                       </tr>
                        )
@@ -2368,6 +3280,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   </tbody>
                 </table>
               </div>
+              <PaginationBar
+                page={historyPage}
+                totalItems={historyTotal}
+                pageSize={historyPerPage}
+                onPageChange={setHistoryPage}
+                itemLabel="entries"
+              />
+              </>
             )}
           </div>
         )}
@@ -2390,7 +3310,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
             {searchedRecord ? (
               // FULL SCREEN PROFILE VIEW
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   <button 
                     onClick={() => {
                       setSearchedRecord(null);
@@ -2410,6 +3330,23 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                     }}
                   >
                     ← Back to Search Results
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startSaEditLog(searchedRecordType || 'daily', searchedRecord)}
+                    style={{ padding: '8px 12px', backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#0369a1' }}
+                  >
+                    <Edit size={14} /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleSaDeleteLog(searchedRecordType || 'daily', searchedRecord);
+                      setSearchedRecord(null);
+                    }}
+                    style={{ padding: '8px 12px', backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#b91c1c' }}
+                  >
+                    <Trash2 size={14} /> Delete
                   </button>
                 </div>
 
@@ -2442,10 +3379,18 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             </span>
                           </div>
                         )}
+                        {(Number(searchedRecord.update_count) > 0 || searchedRecord.update_details) && (
+                          <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                            <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
+                            <span className="profile-value" style={{ fontWeight: '800', color: 'var(--text-dark)' }}>
+                              Changed {Number(searchedRecord.update_count) > 0 ? searchedRecord.update_count : 1} {Number(searchedRecord.update_count) === 1 ? 'time' : 'times'}
+                            </span>
+                          </div>
+                        )}
                         {searchedRecord.remarks || searchedRecord.inward_remarks || searchedRecord.outward_remarks ? (
                           <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                             <span className="profile-label">Remarks</span>
-                            <span className="profile-value" style={{ fontWeight: 'normal', fontStyle: 'italic' }}>
+                            <span className="profile-value profile-value-remarks">
                               {searchedRecord.remarks || searchedRecord.inward_remarks || searchedRecord.outward_remarks}
                             </span>
                           </div>
@@ -2615,7 +3560,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             <span className="profile-value">
                               <strong>{formatDuration(searchedRecord.inward_unloading_duration_hours, searchedRecord.inward_unloading_duration_mins)}</strong>
                               <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                ({searchedRecord.inward_unloading_start_time || '-'} to {searchedRecord.inward_unloading_end_time || '-'})
+                                <div>S: {searchedRecord.inward_unloading_start_time || '-'}</div>
+                                <div>E: {searchedRecord.inward_unloading_end_time || '-'}</div>
                               </div>
                             </span>
                             </div>
@@ -2737,7 +3683,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             <span className="profile-value">
                               <strong>{formatDuration(searchedRecord.outward_loading_duration_hours, searchedRecord.outward_loading_duration_mins)}</strong>
                               <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                ({searchedRecord.outward_loading_start_time || '-'} to {searchedRecord.outward_loading_end_time || '-'})
+                                <div>S: {searchedRecord.outward_loading_start_time || '-'}</div>
+                                <div>E: {searchedRecord.outward_loading_end_time || '-'}</div>
                               </div>
                             </span>
                             </div>
@@ -2809,14 +3756,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
                         {searchedRecordType === 'inward' && (
                           <>
-                            {searchedRecord.inward_invoice_photos && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_invoice_photos.startsWith('data:') ? searchedRecord.inward_invoice_photos : `/${searchedRecord.inward_invoice_photos}`)}>
+                            {searchedRecord.inward_invoice_photos && searchedRecord.inward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                              <div key={`siinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_invoice_photos.startsWith('data:') ? searchedRecord.inward_invoice_photos : `/${searchedRecord.inward_invoice_photos}`} alt="Invoice" />
+                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                                 </div>
-                                <div className="profile-photo-label">Invoice Photo</div>
+                                <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                               </div>
-                            )}
+                            ))}
                             {searchedRecord.inward_pod_photo && (
                               <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_pod_photo.startsWith('data:') ? searchedRecord.inward_pod_photo : `/${searchedRecord.inward_pod_photo}`)}>
                                 <div className="profile-photo-wrapper">
@@ -2865,14 +3812,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                                 <div className="profile-photo-label">Vehicle Loaded</div>
                               </div>
                             )}
-                            {searchedRecord.inward_count_sheet_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_count_sheet_photo.startsWith('data:') ? searchedRecord.inward_count_sheet_photo : `/${searchedRecord.inward_count_sheet_photo}`)}>
+                            {searchedRecord.inward_count_sheet_photo && searchedRecord.inward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                              <div key={`sics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_count_sheet_photo.startsWith('data:') ? searchedRecord.inward_count_sheet_photo : `/${searchedRecord.inward_count_sheet_photo}`} alt="Count Sheet" />
+                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                                 </div>
-                                <div className="profile-photo-label">Count Sheet</div>
+                                <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                               </div>
-                            )}
+                            ))}
                             {searchedRecord.inward_damage_boxes_photo && searchedRecord.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                               <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                                 <div className="profile-photo-wrapper">
@@ -2886,14 +3833,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
 
                         {searchedRecordType === 'outward' && (
                           <>
-                            {searchedRecord.outward_invoice_photos && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_invoice_photos.startsWith('data:') ? searchedRecord.outward_invoice_photos : `/${searchedRecord.outward_invoice_photos}`)}>
+                            {searchedRecord.outward_invoice_photos && searchedRecord.outward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                              <div key={`soinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_invoice_photos.startsWith('data:') ? searchedRecord.outward_invoice_photos : `/${searchedRecord.outward_invoice_photos}`} alt="Invoice" />
+                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                                 </div>
-                                <div className="profile-photo-label">Invoice Photo</div>
+                                <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                               </div>
-                            )}
+                            ))}
                             {searchedRecord.outward_pod_photo && (
                               <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_pod_photo.startsWith('data:') ? searchedRecord.outward_pod_photo : `/${searchedRecord.outward_pod_photo}`)}>
                                 <div className="profile-photo-wrapper">
@@ -2950,14 +3897,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                                 <div className="profile-photo-label">Vehicle Loaded</div>
                               </div>
                             )}
-                            {searchedRecord.outward_count_sheet_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_count_sheet_photo.startsWith('data:') ? searchedRecord.outward_count_sheet_photo : `/${searchedRecord.outward_count_sheet_photo}`)}>
+                            {searchedRecord.outward_count_sheet_photo && searchedRecord.outward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                              <div key={`socs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_count_sheet_photo.startsWith('data:') ? searchedRecord.outward_count_sheet_photo : `/${searchedRecord.outward_count_sheet_photo}`} alt="Count Sheet" />
+                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                                 </div>
-                                <div className="profile-photo-label">Count Sheet</div>
+                                <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                               </div>
-                            )}
+                            ))}
                             {searchedRecord.outward_damage_boxes_photo && searchedRecord.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                               <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                                 <div className="profile-photo-wrapper">
@@ -3351,8 +4298,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         <input
                           type="date"
                           value={activitiesFromDate}
+                          max={activitiesToDate || undefined}
                           onChange={(e) => {
-                            setActivitiesFromDate(e.target.value);
+                            const val = e.target.value;
+                            setActivitiesFromDate(val);
+                            if (val && activitiesToDate && val > activitiesToDate) {
+                              setActivitiesToDate(val);
+                            }
                             setActivitiesCurrentPage(1);
                           }}
                           style={{
@@ -3374,8 +4326,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         <input
                           type="date"
                           value={activitiesToDate}
+                          min={activitiesFromDate || undefined}
                           onChange={(e) => {
-                            setActivitiesToDate(e.target.value);
+                            const val = e.target.value;
+                            setActivitiesToDate(val);
+                            if (val && activitiesFromDate && val < activitiesFromDate) {
+                              setActivitiesFromDate(val);
+                            }
                             setActivitiesCurrentPage(1);
                           }}
                           style={{
@@ -3398,9 +4355,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           style={{
                             padding: '8px 14px',
                             borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--primary)',
-                            backgroundColor: 'var(--primary-light)',
-                            color: 'var(--primary)',
+                            border: 'none',
+                            backgroundColor: '#22c55e',
+                            color: '#ffffff',
                             fontSize: '0.8rem',
                             fontWeight: '700',
                             cursor: 'pointer',
@@ -3451,7 +4408,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                             <thead>
                               <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
-                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Operator Email</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>DO Name / Email</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Warehouse</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Action</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Module/Log</th>
@@ -3541,86 +4498,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           </table>
                         </div>
 
-                        {/* Pagination controls */}
-                        <div style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '12px 4px 4px 4px',
-                          borderTop: '1px solid var(--border)',
-                          marginTop: '12px',
-                          flexWrap: 'wrap',
-                          gap: '12px'
-                        }}>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            Showing <strong style={{ color: 'var(--text-dark)' }}>{startIndex + 1}</strong> to{' '}
-                            <strong style={{ color: 'var(--text-dark)' }}>{Math.min(startIndex + paginatedActivities.length, totalItems)}</strong> of{' '}
-                            <strong style={{ color: 'var(--text-dark)' }}>{totalItems}</strong> entries
-                          </span>
-
-                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            <button
-                              disabled={currentPage === 1}
-                              onClick={() => setActivitiesCurrentPage(p => Math.max(p - 1, 1))}
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                backgroundColor: currentPage === 1 ? '#f1f5f9' : '#ffffff',
-                                color: currentPage === 1 ? 'var(--text-muted)' : 'var(--text-dark)',
-                                fontSize: '0.72rem',
-                                fontWeight: '700',
-                                cursor: currentPage === 1 ? 'default' : 'pointer'
-                              }}
-                            >
-                              Previous
-                            </button>
-
-                            {/* Page numbers */}
-                            {Array.from({ length: totalPages }, (_, i) => i + 1)
-                              .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
-                              .map((p, idx, arr) => {
-                                const showEllipsis = idx > 0 && p - arr[idx - 1] > 1;
-                                return (
-                                  <React.Fragment key={p}>
-                                    {showEllipsis && <span style={{ padding: '0 4px', color: 'var(--text-muted)', fontSize: '0.72rem' }}>...</span>}
-                                    <button
-                                      onClick={() => setActivitiesCurrentPage(p)}
-                                      style={{
-                                        padding: '4px 8px',
-                                        borderRadius: 'var(--radius-sm)',
-                                        border: '1px solid ' + (p === currentPage ? 'var(--primary)' : 'var(--border)'),
-                                        backgroundColor: p === currentPage ? 'var(--primary)' : '#ffffff',
-                                        color: p === currentPage ? '#ffffff' : 'var(--text-dark)',
-                                        fontSize: '0.72rem',
-                                        fontWeight: '700',
-                                        cursor: 'pointer'
-                                      }}
-                                    >
-                                      {p}
-                                    </button>
-                                  </React.Fragment>
-                                );
-                              })}
-
-                            <button
-                              disabled={currentPage === totalPages}
-                              onClick={() => setActivitiesCurrentPage(p => Math.min(p + 1, totalPages))}
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#ffffff',
-                                color: currentPage === totalPages ? 'var(--text-muted)' : 'var(--text-dark)',
-                                fontSize: '0.72rem',
-                                fontWeight: '700',
-                                cursor: currentPage === totalPages ? 'default' : 'pointer'
-                              }}
-                            >
-                              Next
-                            </button>
-                          </div>
-                        </div>
+                        <PaginationBar
+                          page={currentPage}
+                          totalItems={totalItems}
+                          pageSize={activitiesPerPage}
+                          onPageChange={setActivitiesCurrentPage}
+                          itemLabel="entries"
+                        />
                       </>
                     )}
                   </div>
@@ -3720,8 +4604,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         <input
                           type="date"
                           value={securityFromDate}
+                          max={securityToDate || undefined}
                           onChange={(e) => {
-                            setSecurityFromDate(e.target.value);
+                            const val = e.target.value;
+                            setSecurityFromDate(val);
+                            if (val && securityToDate && val > securityToDate) {
+                              setSecurityToDate(val);
+                            }
                             setSecurityCurrentPage(1);
                           }}
                           style={{
@@ -3743,8 +4632,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         <input
                           type="date"
                           value={securityToDate}
+                          min={securityFromDate || undefined}
                           onChange={(e) => {
-                            setSecurityToDate(e.target.value);
+                            const val = e.target.value;
+                            setSecurityToDate(val);
+                            if (val && securityFromDate && val < securityFromDate) {
+                              setSecurityFromDate(val);
+                            }
                             setSecurityCurrentPage(1);
                           }}
                           style={{
@@ -3767,9 +4661,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           style={{
                             padding: '8px 14px',
                             borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--primary)',
-                            backgroundColor: 'var(--primary-light)',
-                            color: 'var(--primary)',
+                            border: 'none',
+                            backgroundColor: '#22c55e',
+                            color: '#ffffff',
                             fontSize: '0.8rem',
                             fontWeight: '700',
                             cursor: 'pointer',
@@ -3884,86 +4778,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           </table>
                         </div>
 
-                        {/* Pagination controls */}
-                        <div style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '12px 4px 4px 4px',
-                          borderTop: '1px solid var(--border)',
-                          marginTop: '12px',
-                          flexWrap: 'wrap',
-                          gap: '12px'
-                        }}>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            Showing <strong style={{ color: 'var(--text-dark)' }}>{startIndex + 1}</strong> to{' '}
-                            <strong style={{ color: 'var(--text-dark)' }}>{Math.min(startIndex + paginatedSecurityLogs.length, totalItems)}</strong> of{' '}
-                            <strong style={{ color: 'var(--text-dark)' }}>{totalItems}</strong> entries
-                          </span>
-
-                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            <button
-                              disabled={currentPage === 1}
-                              onClick={() => setSecurityCurrentPage(p => Math.max(p - 1, 1))}
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                backgroundColor: currentPage === 1 ? '#f1f5f9' : '#ffffff',
-                                color: currentPage === 1 ? 'var(--text-muted)' : 'var(--text-dark)',
-                                fontSize: '0.72rem',
-                                fontWeight: '700',
-                                cursor: currentPage === 1 ? 'default' : 'pointer'
-                              }}
-                            >
-                              Previous
-                            </button>
-
-                            {/* Page numbers */}
-                            {Array.from({ length: totalPages }, (_, i) => i + 1)
-                              .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
-                              .map((p, idx, arr) => {
-                                const showEllipsis = idx > 0 && p - arr[idx - 1] > 1;
-                                return (
-                                  <React.Fragment key={p}>
-                                    {showEllipsis && <span style={{ padding: '0 4px', color: 'var(--text-muted)', fontSize: '0.72rem' }}>...</span>}
-                                    <button
-                                      onClick={() => setSecurityCurrentPage(p)}
-                                      style={{
-                                        padding: '4px 8px',
-                                        borderRadius: 'var(--radius-sm)',
-                                        border: '1px solid ' + (p === currentPage ? 'var(--primary)' : 'var(--border)'),
-                                        backgroundColor: p === currentPage ? 'var(--primary)' : '#ffffff',
-                                        color: p === currentPage ? '#ffffff' : 'var(--text-dark)',
-                                        fontSize: '0.72rem',
-                                        fontWeight: '700',
-                                        cursor: 'pointer'
-                                      }}
-                                    >
-                                      {p}
-                                    </button>
-                                  </React.Fragment>
-                                );
-                              })}
-
-                            <button
-                              disabled={currentPage === totalPages}
-                              onClick={() => setSecurityCurrentPage(p => Math.min(p + 1, totalPages))}
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#ffffff',
-                                color: currentPage === totalPages ? 'var(--text-muted)' : 'var(--text-dark)',
-                                fontSize: '0.72rem',
-                                fontWeight: '700',
-                                cursor: currentPage === totalPages ? 'default' : 'pointer'
-                              }}
-                            >
-                              Next
-                            </button>
-                          </div>
-                        </div>
+                        <PaginationBar
+                          page={currentPage}
+                          totalItems={totalItems}
+                          pageSize={securityPerPage}
+                          onPageChange={setSecurityCurrentPage}
+                          itemLabel="entries"
+                        />
                       </>
                     )}
                   </div>
@@ -4058,8 +4879,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         <input
                           type="date"
                           value={systemFromDate}
+                          max={systemToDate || undefined}
                           onChange={(e) => {
-                            setSystemFromDate(e.target.value);
+                            const val = e.target.value;
+                            setSystemFromDate(val);
+                            if (val && systemToDate && val > systemToDate) {
+                              setSystemToDate(val);
+                            }
                             setSystemCurrentPage(1);
                           }}
                           style={{
@@ -4081,8 +4907,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         <input
                           type="date"
                           value={systemToDate}
+                          min={systemFromDate || undefined}
                           onChange={(e) => {
-                            setSystemToDate(e.target.value);
+                            const val = e.target.value;
+                            setSystemToDate(val);
+                            if (val && systemFromDate && val < systemFromDate) {
+                              setSystemFromDate(val);
+                            }
                             setSystemCurrentPage(1);
                           }}
                           style={{
@@ -4105,9 +4936,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           style={{
                             padding: '8px 14px',
                             borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--primary)',
-                            backgroundColor: 'var(--primary-light)',
-                            color: 'var(--primary)',
+                            border: 'none',
+                            backgroundColor: '#22c55e',
+                            color: '#ffffff',
                             fontSize: '0.8rem',
                             fontWeight: '700',
                             cursor: 'pointer',
@@ -4200,7 +5031,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                                       </span>
                                     </td>
                                     <td style={{ padding: '6px 8px', fontWeight: '700', color: '#475569' }}>{act.action}</td>
-                                    <td style={{ padding: '6px 8px', color: '#334155', fontFamily: act.log_type === 'ERROR' ? 'monospace' : 'inherit', fontSize: act.log_type === 'ERROR' ? '0.74rem' : '0.78rem' }}>{act.description}</td>
+                                    <td style={{ padding: '6px 8px' }}>{renderSystemErrorDescription(act.description, act.log_type === 'ERROR')}</td>
                                     <td style={{ padding: '6px 8px', color: '#64748b', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                                       {new Date(act.created_at).toLocaleString('en-GB', {
                                         day: '2-digit',
@@ -4219,86 +5050,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           </table>
                         </div>
 
-                        {/* Pagination controls */}
-                        <div style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '12px 4px 4px 4px',
-                          borderTop: '1px solid var(--border)',
-                          marginTop: '12px',
-                          flexWrap: 'wrap',
-                          gap: '12px'
-                        }}>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            Showing <strong style={{ color: 'var(--text-dark)' }}>{startIndex + 1}</strong> to{' '}
-                            <strong style={{ color: 'var(--text-dark)' }}>{Math.min(startIndex + paginatedSystemLogs.length, totalItems)}</strong> of{' '}
-                            <strong style={{ color: 'var(--text-dark)' }}>{totalItems}</strong> entries
-                          </span>
-
-                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            <button
-                              disabled={currentPage === 1}
-                              onClick={() => setSystemCurrentPage(p => Math.max(p - 1, 1))}
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                backgroundColor: currentPage === 1 ? '#f1f5f9' : '#ffffff',
-                                color: currentPage === 1 ? 'var(--text-muted)' : 'var(--text-dark)',
-                                fontSize: '0.72rem',
-                                fontWeight: '700',
-                                cursor: currentPage === 1 ? 'default' : 'pointer'
-                              }}
-                            >
-                              Previous
-                            </button>
-
-                            {/* Page numbers */}
-                            {Array.from({ length: totalPages }, (_, i) => i + 1)
-                              .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
-                              .map((p, idx, arr) => {
-                                const showEllipsis = idx > 0 && p - arr[idx - 1] > 1;
-                                return (
-                                  <React.Fragment key={p}>
-                                    {showEllipsis && <span style={{ padding: '0 4px', color: 'var(--text-muted)', fontSize: '0.72rem' }}>...</span>}
-                                    <button
-                                      onClick={() => setSystemCurrentPage(p)}
-                                      style={{
-                                        padding: '4px 8px',
-                                        borderRadius: 'var(--radius-sm)',
-                                        border: '1px solid ' + (p === currentPage ? 'var(--primary)' : 'var(--border)'),
-                                        backgroundColor: p === currentPage ? 'var(--primary)' : '#ffffff',
-                                        color: p === currentPage ? '#ffffff' : 'var(--text-dark)',
-                                        fontSize: '0.72rem',
-                                        fontWeight: '700',
-                                        cursor: 'pointer'
-                                      }}
-                                    >
-                                      {p}
-                                    </button>
-                                  </React.Fragment>
-                                );
-                              })}
-
-                            <button
-                              disabled={currentPage === totalPages}
-                              onClick={() => setSystemCurrentPage(p => Math.min(p + 1, totalPages))}
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                backgroundColor: currentPage === totalPages ? '#f1f5f9' : '#ffffff',
-                                color: currentPage === totalPages ? 'var(--text-muted)' : 'var(--text-dark)',
-                                fontSize: '0.72rem',
-                                fontWeight: '700',
-                                cursor: currentPage === totalPages ? 'default' : 'pointer'
-                              }}
-                            >
-                              Next
-                            </button>
-                          </div>
-                        </div>
+                        <PaginationBar
+                          page={currentPage}
+                          totalItems={totalItems}
+                          pageSize={systemPerPage}
+                          onPageChange={setSystemCurrentPage}
+                          itemLabel="entries"
+                        />
                       </>
                     )}
                   </div>
@@ -4483,10 +5241,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
                     <input 
-                      type="text" 
+                      type="text"
+                      name="subadmin-full-name"
+                      inputMode="text"
+                      autoComplete="name"
                       placeholder="e.g. Jane Doe"
                       value={subAdminFullName}
-                      onChange={(e) => setSubAdminFullName(e.target.value)}
+                      onChange={(e) => setSubAdminFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
                       required
                       style={{
                         width: '100%',
@@ -4504,10 +5265,15 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
                     <input 
-                      type="text" 
-                      placeholder="e.g. +91 9998887776"
+                      type="tel"
+                      name="subadmin-phone"
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      placeholder="e.g. 9998887776"
                       value={subAdminPhoneNo}
-                      onChange={(e) => setSubAdminPhoneNo(e.target.value)}
+                      onChange={(e) => setSubAdminPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
+                      pattern="[0-9+]{7,15}"
+                      title="Enter a valid phone number (digits only)"
                       required
                       style={{
                         width: '100%',
@@ -4525,7 +5291,10 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email Address *</label>
                     <input 
-                      type="email" 
+                      type="email"
+                      name="subadmin-email"
+                      inputMode="email"
+                      autoComplete="email"
                       placeholder="e.g. jane@reeferon.com"
                       value={subAdminEmail}
                       onChange={(e) => setSubAdminEmail(e.target.value)}
@@ -4549,7 +5318,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                     </label>
                     <div style={{ position: 'relative', width: '100%' }}>
                       <input 
-                        type={showPassword ? 'text' : 'password'} 
+                        type={showPassword ? 'text' : 'password'}
+                        name="subadmin-password"
+                        autoComplete="new-password"
                         placeholder={editingSubAdmin ? 'Leave blank to retain current' : 'Enter account password'}
                         value={subAdminPassword}
                         onChange={(e) => setSubAdminPassword(e.target.value)}
@@ -4576,6 +5347,129 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   </div>
                 </div>
 
+                {/* Data Access Scope: Client & Warehouse Restrictions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                  <div>
+                    <span style={{ fontSize: '0.82rem', fontWeight: '800', color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Lock size={14} color="#ea580c" />
+                      Data Access Scope
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>
+                      Restrict which client & warehouse data this sub-admin can view. Leave empty for full access.
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                    {/* Client Names Multi-Select (options from DO monitor logs) */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Client Names</label>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val && !subAdminSelectedClients.includes(val)) {
+                            setSubAdminSelectedClients((prev) => [...prev, val]);
+                          }
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--bg-main)',
+                          fontSize: '0.85rem',
+                          color: 'var(--text-dark)',
+                          outline: 'none',
+                          minWidth: 0,
+                          cursor: 'pointer',
+                          appearance: 'auto'
+                        }}
+                      >
+                        <option value="">
+                          {(accessScopeOptions.clients || []).length === 0
+                            ? 'No client names yet — save a DO inward/outward/chamber log first'
+                            : 'Select client name from DO records…'}
+                        </option>
+                        {(accessScopeOptions.clients || [])
+                          .filter((c) => !subAdminSelectedClients.includes(c))
+                          .map((client) => (
+                            <option key={client} value={client}>
+                              {client}
+                            </option>
+                          ))}
+                      </select>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                        {subAdminSelectedClients.length === 0 ? (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No clients selected — full client access</span>
+                        ) : (
+                          subAdminSelectedClients.map((client, idx) => (
+                            <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                              {client}
+                              <button type="button" onClick={() => setSubAdminSelectedClients(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Warehouse Names Multi-Select — same theme as clients */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Warehouses</label>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val && !subAdminSelectedWarehouses.includes(val)) {
+                            setSubAdminSelectedWarehouses((prev) => [...prev, val]);
+                          }
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--bg-main)',
+                          fontSize: '0.85rem',
+                          color: 'var(--text-dark)',
+                          outline: 'none',
+                          minWidth: 0,
+                          cursor: 'pointer',
+                          appearance: 'auto'
+                        }}
+                      >
+                        <option value="">
+                          {(accessScopeOptions.warehouses || []).length === 0
+                            ? 'No warehouses yet — register a DO operator or save a log first'
+                            : 'Select warehouse from DO records…'}
+                        </option>
+                        {(accessScopeOptions.warehouses || [])
+                          .filter((w) => !subAdminSelectedWarehouses.includes(w))
+                          .map((wh) => (
+                            <option key={wh} value={wh}>
+                              {wh}
+                            </option>
+                          ))}
+                      </select>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                        {subAdminSelectedWarehouses.length === 0 ? (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No warehouses selected — full warehouse access</span>
+                        ) : (
+                          subAdminSelectedWarehouses.map((wh, idx) => (
+                            <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                              {wh}
+                              <button type="button" onClick={() => setSubAdminSelectedWarehouses(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                   {editingSubAdmin && (
                     <button 
@@ -4597,7 +5491,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   )}
                   <button 
                     type="submit"
-                    disabled={loadingSubAdmins}
+                    disabled={savingSubAdmin || loadingSubAdmins}
                     style={{
                       padding: '10px 24px',
                       borderRadius: 'var(--radius-sm)',
@@ -4606,12 +5500,21 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                       color: '#ffffff',
                       fontSize: '0.85rem',
                       fontWeight: '800',
-                      cursor: 'pointer',
+                      cursor: savingSubAdmin ? 'wait' : 'pointer',
+                      opacity: savingSubAdmin ? 0.85 : 1,
                       boxShadow: editingSubAdmin ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
-                      transition: 'all 0.2s ease'
+                      transition: 'all 0.2s ease',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px'
                     }}
                   >
-                    {loadingSubAdmins ? 'Processing...' : (editingSubAdmin ? 'Update Sub-Admin' : 'Register Sub-Admin')}
+                    {savingSubAdmin ? (
+                      <>
+                        <Loader2 size={16} className="spinner-icon" />
+                        {subAdminProcessStatus || 'Processing…'}
+                      </>
+                    ) : (editingSubAdmin ? 'Update Sub-Admin' : 'Register Sub-Admin')}
                   </button>
                 </div>
               </form>
@@ -4684,6 +5587,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Role Level</th>
+                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Data Access Scope</th>
                             <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
                             <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
                           </tr>
@@ -4698,6 +5602,28 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                                 <span className="status-badge" style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 800 }}>
                                   Sub-Admin / Customer
                                 </span>
+                              </td>
+                              <td style={{ padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {sa.allowed_clients ? (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                                      {sa.allowed_clients.split(',').map((c, i) => (
+                                        <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{c.trim()}</span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Clients</span>
+                                  )}
+                                  {sa.allowed_warehouses ? (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                                      {sa.allowed_warehouses.split(',').map((w, i) => (
+                                        <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{w.trim()}</span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Warehouses</span>
+                                  )}
+                                </div>
                               </td>
                               <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                                 {new Date(sa.created_at).toLocaleDateString('en-GB')}
@@ -4736,6 +5662,246 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
           </div>
         )}
 
+        {activeMenu === 'customer_reports' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '16px' }}>
+                <div>
+                  <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <MessageSquareWarning size={18} color="#00a2e8" />
+                    <span>Customer Reports</span>
+                  </h2>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                    Issues submitted from the Customer portal. Each row identifies the customer account, Ref No., and issue message.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadCustomerReportsData}
+                  disabled={loadingCustomerReports}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    background: '#fff',
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    cursor: loadingCustomerReports ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {loadingCustomerReports ? <Loader2 size={14} className="spinner-icon" /> : null}
+                  Refresh
+                </button>
+              </div>
+
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '12px',
+                alignItems: 'flex-end',
+                padding: '14px',
+                background: 'var(--bg-main)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border)',
+                marginBottom: '16px'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '2 1 220px' }}>
+                  <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search</label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="text"
+                      placeholder="Customer name, email, phone, Ref No., issue…"
+                      value={customerReportSearch}
+                      onChange={(e) => setCustomerReportSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') loadCustomerReportsData();
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px 8px 32px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.8rem',
+                        background: '#fff',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                    <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 140px' }}>
+                  <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Status</label>
+                  <select
+                    value={customerReportStatusFilter}
+                    onChange={(e) => setCustomerReportStatusFilter(e.target.value)}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      background: '#fff',
+                      height: 37
+                    }}
+                  >
+                    <option value="All">All</option>
+                    <option value="Open">Open</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Resolved">Resolved</option>
+                    <option value="Closed">Closed</option>
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadCustomerReportsData}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    background: 'var(--primary)',
+                    color: '#fff',
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    height: 37
+                  }}
+                >
+                  Apply
+                </button>
+              </div>
+
+              {customerReportsError && (
+                <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', fontWeight: 600 }}>
+                  {customerReportsError}
+                </div>
+              )}
+
+              {loadingCustomerReports ? (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+                  <Loader2 size={18} className="spinner-icon" />
+                  <span>Loading customer reports…</span>
+                </div>
+              ) : customerReports.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                  No customer reports found.
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                  <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg-main)', borderBottom: '2px solid var(--border)', textAlign: 'left' }}>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Customer Identity</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Access Scope</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Ref No.</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Issue</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Status</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Submitted</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Update</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customerReports.map((report) => {
+                        if (!report) return null;
+                        const statusColor =
+                          report.status === 'Open' ? '#dc2626'
+                            : report.status === 'In Progress' ? '#d97706'
+                              : report.status === 'Resolved' ? '#16a34a'
+                                : '#64748b';
+                        const statusBg =
+                          report.status === 'Open' ? '#fee2e2'
+                            : report.status === 'In Progress' ? '#ffedd5'
+                              : report.status === 'Resolved' ? '#dcfce7'
+                                : '#f1f5f9';
+                        return (
+                          <tr key={report.id} style={{ borderBottom: '1px solid var(--border)', verticalAlign: 'top' }}>
+                            <td style={{ padding: '12px' }}>
+                              <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>
+                                {report.customer_name || 'Unnamed customer'}
+                              </div>
+                              <div style={{ color: '#475569', fontWeight: 600 }}>{report.customer_email}</div>
+                              <div style={{ color: '#64748b', fontSize: '0.72rem', marginTop: 4 }}>
+                                {report.customer_id != null ? `Customer ID: ${report.customer_id}` : 'Customer ID: —'}
+                                {report.customer_phone ? ` · ${report.customer_phone}` : ''}
+                              </div>
+                            </td>
+                            <td style={{ padding: '12px', maxWidth: 180 }}>
+                              <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: 4 }}>
+                                <strong style={{ color: '#334155' }}>Clients:</strong>{' '}
+                                {report.allowed_clients || 'All / not set'}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                                <strong style={{ color: '#334155' }}>Warehouses:</strong>{' '}
+                                {report.allowed_warehouses || 'All / not set'}
+                              </div>
+                            </td>
+                            <td style={{ padding: '12px', fontWeight: 800, color: 'var(--primary)', whiteSpace: 'nowrap' }}>
+                              {report.reference_no}
+                            </td>
+                            <td style={{ padding: '12px', color: '#334155', maxWidth: 280, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {report.message}
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <span style={{
+                                display: 'inline-block',
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                fontSize: '0.68rem',
+                                fontWeight: 800,
+                                color: statusColor,
+                                background: statusBg
+                              }}>
+                                {report.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px', color: '#64748b', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                              {report.created_at
+                                ? new Date(report.created_at).toLocaleString('en-GB', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    year: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: true
+                                  })
+                                : '—'}
+                            </td>
+                            <td style={{ padding: '12px' }}>
+                              <select
+                                value={report.status}
+                                disabled={updatingReportId === report.id}
+                                onChange={(e) => handleUpdateCustomerReportStatus(report.id, e.target.value)}
+                                style={{
+                                  padding: '6px 8px',
+                                  borderRadius: 6,
+                                  border: '1px solid var(--border)',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 600,
+                                  background: '#fff',
+                                  cursor: updatingReportId === report.id ? 'wait' : 'pointer',
+                                  minWidth: 120
+                                }}
+                              >
+                                <option value="Open">Open</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Resolved">Resolved</option>
+                                <option value="Closed">Closed</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {activeMenu === 'data_operators' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             {/* Top: Register New Operator Horizontal Form */}
@@ -4756,10 +5922,13 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
                     <input 
-                      type="text" 
+                      type="text"
+                      name="op-full-name"
+                      inputMode="text"
+                      autoComplete="name"
                       placeholder="e.g. John Doe"
                       value={opFullName}
-                      onChange={(e) => setOpFullName(e.target.value)}
+                      onChange={(e) => setOpFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
                       required
                       style={{
                         width: '100%',
@@ -4777,10 +5946,15 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
                     <input 
-                      type="text" 
-                      placeholder="e.g. +91 9876543210"
+                      type="tel"
+                      name="op-phone"
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      placeholder="e.g. 9876543210"
                       value={opPhoneNo}
-                      onChange={(e) => setOpPhoneNo(e.target.value)}
+                      onChange={(e) => setOpPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
+                      pattern="[0-9+]{7,15}"
+                      title="Enter a valid phone number (digits only)"
                       required
                       style={{
                         width: '100%',
@@ -4798,7 +5972,10 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
                     <input 
-                      type="email" 
+                      type="email"
+                      name="op-email"
+                      inputMode="email"
+                      autoComplete="email"
                       placeholder="e.g. operator@reeferon.com"
                       value={opEmail}
                       onChange={(e) => setOpEmail(e.target.value)}
@@ -4822,7 +5999,9 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                     </label>
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                       <input 
-                        type={showPassword ? 'text' : 'password'} 
+                        type={showPassword ? 'text' : 'password'}
+                        name="op-password"
+                        autoComplete="new-password"
                         placeholder={editingOp ? '••••••••' : 'Enter login password'}
                         value={opPassword}
                         onChange={(e) => setOpPassword(e.target.value)}
@@ -4864,7 +6043,10 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse Name *</label>
                     <input 
-                      type="text" 
+                      type="text"
+                      name="op-warehouse"
+                      inputMode="text"
+                      autoComplete="organization"
                       placeholder="e.g. Delhi Warehouse"
                       value={opWarehouseName}
                       onChange={(e) => setOpWarehouseName(e.target.value)}
@@ -4903,7 +6085,7 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                   )}
                   <button 
                     type="submit"
-                    disabled={loadingOps}
+                    disabled={savingOp || loadingOps}
                     style={{
                       padding: '10px 24px',
                       borderRadius: 'var(--radius-sm)',
@@ -4912,12 +6094,21 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                       color: '#ffffff',
                       fontSize: '0.85rem',
                       fontWeight: '800',
-                      cursor: 'pointer',
+                      cursor: savingOp ? 'wait' : 'pointer',
+                      opacity: savingOp ? 0.85 : 1,
                       boxShadow: editingOp ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
-                      transition: 'all 0.2s ease'
+                      transition: 'all 0.2s ease',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px'
                     }}
                   >
-                    {loadingOps ? 'Processing...' : (editingOp ? 'Update Operator Profile' : 'Register Operator Profile')}
+                    {savingOp ? (
+                      <>
+                        <Loader2 size={16} className="spinner-icon" />
+                        {opProcessStatus || 'Processing…'}
+                      </>
+                    ) : (editingOp ? 'Update Operator Profile' : 'Register Operator Profile')}
                   </button>
                 </div>
               </form>
@@ -4942,23 +6133,51 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                       <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage profile credentials and warehouse configurations.</p>
                     </div>
 
-                    {/* Search / Filter Input */}
-                    <div style={{ minWidth: '240px' }}>
-                      <input 
-                        type="text" 
-                        placeholder="Search by name, warehouse..."
-                        value={operatorSearch}
-                        onChange={(e) => setOperatorSearch(e.target.value)}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ minWidth: '240px' }}>
+                        <input 
+                          type="text" 
+                          placeholder="Search by name, warehouse..."
+                          value={operatorSearch}
+                          onChange={(e) => setOperatorSearch(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.8rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)',
+                            height: '37px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleExportOperatorsDirectory}
+                        disabled={!operators || operators.length === 0}
+                        title="Export operators directory to CSV"
                         style={{
-                          width: '100%',
-                          padding: '8px 12px',
+                          padding: '8px 14px',
                           borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
+                          border: 'none',
+                          backgroundColor: !operators || operators.length === 0 ? '#94a3b8' : '#22c55e',
+                          color: '#ffffff',
                           fontSize: '0.8rem',
-                          outline: 'none',
-                          backgroundColor: 'var(--bg-main)'
+                          fontWeight: '700',
+                          cursor: !operators || operators.length === 0 ? 'not-allowed' : 'pointer',
+                          opacity: !operators || operators.length === 0 ? 0.7 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          height: '37px',
+                          whiteSpace: 'nowrap'
                         }}
-                      />
+                      >
+                        <Download size={14} />
+                        <span>Export</span>
+                      </button>
                     </div>
                   </div>
 
@@ -5062,6 +6281,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
             })()}
           </div>
         )}
+          </>
+        )}
       </main>
 
 
@@ -5075,9 +6296,27 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                 <History size={20} color="var(--primary)" />
                 <span>Log Details: {selectedDetailLog.reference_no || `ID: ${selectedDetailLog.id || selectedDetailLog.inward_id || selectedDetailLog.outward_id}`}</span>
               </h3>
-              <button className="profile-modal-close-btn" onClick={() => setSelectedDetailLog(null)}>
-                <X size={20} />
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => startSaEditLog(detailType || (selectedDetailLog.inward_id ? 'inward' : selectedDetailLog.outward_id ? 'outward' : 'daily'), selectedDetailLog)}
+                  title="Edit (Super Admin — no permission)"
+                  style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', fontWeight: 700 }}
+                >
+                  <Edit size={14} /> Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaDeleteLog(detailType || (selectedDetailLog.inward_id ? 'inward' : selectedDetailLog.outward_id ? 'outward' : 'daily'), selectedDetailLog)}
+                  title="Delete (Super Admin — no permission)"
+                  style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', fontWeight: 700 }}
+                >
+                  <Trash2 size={14} /> Delete
+                </button>
+                <button className="profile-modal-close-btn" onClick={() => setSelectedDetailLog(null)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
 
             <div className="profile-modal-body">
@@ -5109,10 +6348,18 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                         </span>
                       </div>
                     )}
+                    {(Number(selectedDetailLog.update_count) > 0 || selectedDetailLog.update_details) && (
+                      <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                        <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
+                        <span className="profile-value" style={{ fontWeight: '800', color: 'var(--text-dark)' }}>
+                          Changed {Number(selectedDetailLog.update_count) > 0 ? selectedDetailLog.update_count : 1} {Number(selectedDetailLog.update_count) === 1 ? 'time' : 'times'}
+                        </span>
+                      </div>
+                    )}
                     {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks ? (
                       <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                         <span className="profile-label">Remarks</span>
-                        <span className="profile-value" style={{ fontWeight: 'normal', fontStyle: 'italic' }}>
+                        <span className="profile-value profile-value-remarks">
                           {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks}
                         </span>
                       </div>
@@ -5262,7 +6509,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           <span className="profile-value">
                             <strong>{formatDuration(selectedDetailLog.inward_unloading_duration_hours, selectedDetailLog.inward_unloading_duration_mins)}</strong>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              ({selectedDetailLog.inward_unloading_start_time || '-'} to {selectedDetailLog.inward_unloading_end_time || '-'})
+                                <div>S: {selectedDetailLog.inward_unloading_start_time || '-'}</div>
+                                <div>E: {selectedDetailLog.inward_unloading_end_time || '-'}</div>
                             </div>
                           </span>
                         </div>
@@ -5369,7 +6617,8 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                           <span className="profile-value">
                             <strong>{formatDuration(selectedDetailLog.outward_loading_duration_hours, selectedDetailLog.outward_loading_duration_mins)}</strong>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              ({selectedDetailLog.outward_loading_start_time || '-'} to {selectedDetailLog.outward_loading_end_time || '-'})
+                                <div>S: {selectedDetailLog.outward_loading_start_time || '-'}</div>
+                                <div>E: {selectedDetailLog.outward_loading_end_time || '-'}</div>
                             </div>
                           </span>
                         </div>
@@ -5422,14 +6671,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                     {/* Render Inward Logs Photos */}
                     {detailType === 'inward' && (
                       <>
-                        {selectedDetailLog.inward_invoice_photos && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_invoice_photos.startsWith('data:') ? selectedDetailLog.inward_invoice_photos : `/${selectedDetailLog.inward_invoice_photos}`)}>
+                        {selectedDetailLog.inward_invoice_photos && selectedDetailLog.inward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`diinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_invoice_photos.startsWith('data:') ? selectedDetailLog.inward_invoice_photos : `/${selectedDetailLog.inward_invoice_photos}`} alt="Invoice" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Invoice Photo</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {selectedDetailLog.inward_pod_photo && (
                           <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`)}>
                             <div className="profile-photo-wrapper">
@@ -5478,14 +6727,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
-                        {selectedDetailLog.inward_count_sheet_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.inward_count_sheet_photo : `/${selectedDetailLog.inward_count_sheet_photo}`)}>
+                        {selectedDetailLog.inward_count_sheet_photo && selectedDetailLog.inward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`dics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.inward_count_sheet_photo : `/${selectedDetailLog.inward_count_sheet_photo}`} alt="Count Sheet" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Count Sheet</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {selectedDetailLog.inward_damage_boxes_photo && selectedDetailLog.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                           <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                             <div className="profile-photo-wrapper">
@@ -5500,14 +6749,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                     {/* Render Outward Logs Photos */}
                     {detailType === 'outward' && (
                       <>
-                        {selectedDetailLog.outward_invoice_photos && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_invoice_photos.startsWith('data:') ? selectedDetailLog.outward_invoice_photos : `/${selectedDetailLog.outward_invoice_photos}`)}>
+                        {selectedDetailLog.outward_invoice_photos && selectedDetailLog.outward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`doinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_invoice_photos.startsWith('data:') ? selectedDetailLog.outward_invoice_photos : `/${selectedDetailLog.outward_invoice_photos}`} alt="Invoice" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Invoice Photo</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {selectedDetailLog.outward_pod_photo && (
                           <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`)}>
                             <div className="profile-photo-wrapper">
@@ -5564,14 +6813,14 @@ export default function SuperAdminSecureWindow({ user, onLogout }) {
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
-                        {selectedDetailLog.outward_count_sheet_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.outward_count_sheet_photo : `/${selectedDetailLog.outward_count_sheet_photo}`)}>
+                        {selectedDetailLog.outward_count_sheet_photo && selectedDetailLog.outward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`docs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.outward_count_sheet_photo : `/${selectedDetailLog.outward_count_sheet_photo}`} alt="Count Sheet" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Count Sheet</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {selectedDetailLog.outward_damage_boxes_photo && selectedDetailLog.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                           <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                             <div className="profile-photo-wrapper">

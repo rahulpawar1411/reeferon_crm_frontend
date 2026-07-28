@@ -1,0 +1,154 @@
+/* Log profile inside Sub Admin main panel — never covers left sidebar */
+.log-profile-fullscreen {
+  position: relative;
+  inset: auto;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  background: var(--bg-main);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.log-profile-fullscreen-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.05));
+  min-width: 0;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.log-profile-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-main);
+  color: var(--text-dark);
+  font-weight: 700;
+  font-size: 0.78rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.log-profile-fullscreen-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text-dark);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.log-profile-fullscreen-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-profile-fullscreen-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 2px 16px;
+  box-sizing: border-box;
+  min-height: 0;
+}
+
+.log-profile-fullscreen-scroll .profile-modal-body {
+  max-height: none;
+  height: auto;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+@media (min-width: 900px) {
+  .log-profile-fullscreen-scroll .profile-modal-body {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .log-profile-fullscreen-scroll .profile-details-section {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .log-profile-fullscreen-scroll .profile-photos-section {
+    flex: 1;
+    min-width: 0;
+    max-width: 480px;
+  }
+}
+
+@media (max-width: 768px) {
+  .log-profile-fullscreen {
+    margin-top: 0;
+  }
+
+  .log-profile-fullscreen-header {
+    padding: 6px 8px;
+    margin-top: 0;
+    margin-bottom: 4px;
+    border-radius: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+
+  .log-profile-fullscreen-title {
+    font-size: 0.86rem;
+    gap: 6px;
+  }
+
+  .log-profile-fullscreen-scroll {
+    padding: 0 0 20px;
+  }
+
+  .log-profile-fullscreen-scroll .profile-modal-body {
+    gap: 12px;
+  }
+
+  .log-profile-fullscreen-scroll .profile-item {
+    padding: 8px 0;
+  }
+
+  .log-profile-fullscreen-scroll .profile-label {
+    font-size: 0.7rem;
+  }
+
+  .log-profile-fullscreen-scroll .profile-value {
+    font-size: 0.9rem;
+    line-height: 1.35;
+    word-break: break-word;
+  }
+
+  .log-profile-fullscreen-scroll .profile-photo-card {
+    min-height: 120px;
+  }
+
+  .log-profile-back-btn {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 0.74rem;
+  }
+}

@@ -5,25 +5,35 @@
 // Removed Bottom Menu navigation on mobile.
 // ====================================================================
 
-import React, { useState, useEffect } from 'react';
-import PortalEntry from './pages/PortalEntry/PortalEntry';
-
-// DO Window Components
-import DOHeader from './components/DOHeader/DOHeader';
-import DOSidebar from './components/DOSidebar/DOSidebar';
-import TempMonitor from './pages/TempMonitor/TempMonitor';
-import InwardMonitor from './pages/InwardMonitor/InwardMonitor';
-import OutwardMonitor from './pages/OutwardMonitor/OutwardMonitor';
-import DOHistoryView from './pages/DOHistoryView/DOHistoryView';
-import DOProfileLookup from './pages/DOProfileLookup/DOProfileLookup';
-import DONotificationsView from './pages/DONotificationsView/DONotificationsView';
-import AddTempModal from './components/AddTempModal/AddTempModal';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 import Login from './pages/Login/Login';
-import SuperAdminSecureWindow from './pages/SuperAdminSecureWindow/SuperAdminSecureWindow';
-import SubAdminWindow from './pages/SubAdminWindow/SubAdminWindow';
+import { API_BASE_URL, fetchPermissionRequests } from './services/api';
+import './App.css';
+import './styles/shell-layout.css';
 
-import { API_BASE_URL } from './services/api';
-import './App.css'; // Paired CSS file
+const PortalEntry = lazy(() => import('./pages/PortalEntry/PortalEntry'));
+const DOHeader = lazy(() => import('./components/DOHeader/DOHeader'));
+const DOSidebar = lazy(() => import('./components/DOSidebar/DOSidebar'));
+const TempMonitor = lazy(() => import('./pages/TempMonitor/TempMonitor'));
+const InwardMonitor = lazy(() => import('./pages/InwardMonitor/InwardMonitor'));
+const OutwardMonitor = lazy(() => import('./pages/OutwardMonitor/OutwardMonitor'));
+const DOHistoryView = lazy(() => import('./pages/DOHistoryView/DOHistoryView'));
+const DOProfileLookup = lazy(() => import('./pages/DOProfileLookup/DOProfileLookup'));
+const DONotificationsView = lazy(() => import('./pages/DONotificationsView/DONotificationsView'));
+const SuperAdminSecureWindow = lazy(() => import('./pages/SuperAdminSecureWindow/SuperAdminSecureWindow'));
+const SubAdminSecureWindow = lazy(() => import('./pages/SubAdminSecureWindow/SubAdminSecureWindow'));
+
+function PageLoader() {
+  return (
+    <div className="page-lazy-loader" role="status" aria-live="polite">
+      <div className="page-lazy-loader-inner">
+        <span className="page-lazy-loader-spinner" aria-hidden="true" />
+        <span>Loading…</span>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -36,10 +46,12 @@ export default function App() {
 
   const getWindowFromURL = () => {
     if (user && user.role === 'do_operator') return 'do_window';
+    if (user && user.role === 'sub_admin') return 'sub_admin';
     const path = window.location.pathname.toLowerCase();
-    if (path.includes('do-operator') || path.includes('do')) return 'do_window';
+    if (path.includes('do-operator') || path.includes('/do')) return 'do_window';
+    if (path.includes('sub-admin') || path.includes('subadmin')) return 'sub_admin';
     if (path.includes('admin')) return 'super_admin';
-    return 'portal_entry'; // Defaults to Portal Selection Entry!
+    return 'portal_entry';
   };
 
   const [selectedWindow, setSelectedWindow] = useState(getWindowFromURL());
@@ -50,12 +62,16 @@ export default function App() {
   const [editInwardData, setEditInwardData] = useState(null);
   const [editOutwardData, setEditOutwardData] = useState(null);
   const [editDailyData, setEditDailyData] = useState(null);
+  const [hasDoNotifAlert, setHasDoNotifAlert] = useState(false);
 
-  // Sync role constraints dynamically
   useEffect(() => {
     if (user && user.role === 'do_operator' && selectedWindow !== 'do_window') {
       setSelectedWindow('do_window');
       window.history.pushState({}, '', '/do-operator');
+    }
+    if (user && user.role === 'sub_admin' && selectedWindow !== 'sub_admin') {
+      setSelectedWindow('sub_admin');
+      window.history.pushState({}, '', '/sub-admin');
     }
   }, [user, selectedWindow]);
 
@@ -63,12 +79,60 @@ export default function App() {
     localStorage.setItem('activeDOMenu', activeDOMenu);
   }, [activeDOMenu]);
 
+  // DO Notifications red-dot: only when at least one Super Admin APPROVAL is waiting (not Done yet)
+  useEffect(() => {
+    const isDo = user?.role === 'do_operator' && selectedWindow === 'do_window';
+    if (!isDo) {
+      setHasDoNotifAlert(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const refreshNotifBadge = async () => {
+      try {
+        const data = await fetchPermissionRequests(`?_=${Date.now()}`);
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : [];
+        const hasOpenApproval = list.some((n) => {
+          const isApproved =
+            n.status === 'Approved' ||
+            n.raw_action === 'GRANT_PERMISSION' ||
+            n.raw_action === 'GRANT_DELETE';
+          const stillOpen = !n.do_action_completed_at;
+          return isApproved && stillOpen;
+        });
+        // Hide whenever there is zero open approval
+        setHasDoNotifAlert(Boolean(hasOpenApproval));
+      } catch {
+        // On fetch failure, hide badge (do not keep a stale red dot)
+        if (!cancelled) setHasDoNotifAlert(false);
+      }
+    };
+
+    refreshNotifBadge();
+    const intervalId = setInterval(refreshNotifBadge, 12000);
+    const onFocus = () => refreshNotifBadge();
+    const onNotifChanged = () => refreshNotifBadge();
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('do-notifications-changed', onNotifChanged);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('do-notifications-changed', onNotifChanged);
+    };
+  }, [user?.role, selectedWindow, activeDOMenu]);
+
   const navigateToWindow = (win) => {
     if (user && user.role === 'do_operator' && win !== 'do_window') return;
+    if (user && user.role === 'sub_admin' && win !== 'sub_admin') return;
     setSelectedWindow(win);
     let targetPath = '/';
     if (win === 'do_window') targetPath = '/do-operator';
     if (win === 'super_admin') targetPath = '/admin';
+    if (win === 'sub_admin') targetPath = '/sub-admin';
     window.history.pushState({}, '', targetPath);
   };
 
@@ -84,6 +148,12 @@ export default function App() {
     window.history.pushState({}, '', '/');
   };
 
+  const handleUserUpdate = (updatedUser) => {
+    if (!updatedUser) return;
+    setUser(updatedUser);
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+  };
+
   useEffect(() => {
     const handlePopState = () => {
       setSelectedWindow(getWindowFromURL());
@@ -92,7 +162,6 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [user]);
 
-  // Dynamic Titles for DO Window
   const getDOTitle = () => {
     switch (activeDOMenu) {
       case 'Inward': return 'DO Inward Temp Monitor';
@@ -104,16 +173,32 @@ export default function App() {
     }
   };
 
-
-
-  // Authentication Route Guard
   if (!user) {
-    return <Login onLoginSuccess={(u) => setUser(u)} />;
+    return (
+      <ErrorBoundary>
+        <Login onLoginSuccess={(u) => setUser(u)} />
+      </ErrorBoundary>
+    );
   }
 
-  // Super Admin Secure Area (Restricted to role: 'super_admin' only)
   if (user.role === 'super_admin') {
-    return <SuperAdminSecureWindow user={user} onLogout={handleLogout} />;
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<PageLoader />}>
+          <SuperAdminSecureWindow user={user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
+
+  if (user.role === 'sub_admin') {
+    return (
+      <ErrorBoundary>
+        <Suspense fallback={<PageLoader />}>
+          <SubAdminSecureWindow user={user} onLogout={handleLogout} />
+        </Suspense>
+      </ErrorBoundary>
+    );
   }
 
   if (selectedWindow === 'portal_entry') {
@@ -121,67 +206,77 @@ export default function App() {
       setSelectedWindow('do_window');
       window.history.pushState({}, '', '/do-operator');
     } else {
-      return <PortalEntry onSelectWindow={(win) => navigateToWindow(win)} />;
+      return (
+        <ErrorBoundary>
+          <Suspense fallback={<PageLoader />}>
+            <PortalEntry onSelectWindow={(win) => navigateToWindow(win)} />
+          </Suspense>
+        </ErrorBoundary>
+      );
     }
   }
 
   return (
-    <div className="app-container">
-      {/* URL: /do-operator -> DEDICATED DATA OPERATOR (DO) WINDOW */}
-      {selectedWindow === 'do_window' ? (
-        <>
-          <DOSidebar 
-            user={user}
-            activeDOMenu={activeDOMenu}
-            setActiveDOMenu={setActiveDOMenu}
-            onLogout={handleLogout}
-          />
+    <ErrorBoundary>
+      <div className="app-container">
+        {selectedWindow === 'do_window' ? (
+          <Suspense fallback={<PageLoader />}>
+            <div className="do-window-shell">
+              <DOSidebar
+                user={user}
+                activeDOMenu={activeDOMenu}
+                setActiveDOMenu={setActiveDOMenu}
+                onLogout={handleLogout}
+                hasNotificationAlert={hasDoNotifAlert}
+              />
 
-          <DOHeader 
-            user={user}
-            activeTitle={getDOTitle()}
-            activeDOMenu={activeDOMenu}
-            setActiveDOMenu={setActiveDOMenu}
-            onLogout={handleLogout}
-          />
+              <DOHeader
+                user={user}
+                activeTitle={getDOTitle()}
+                activeDOMenu={activeDOMenu}
+                setActiveDOMenu={setActiveDOMenu}
+                onLogout={handleLogout}
+                hasNotificationAlert={hasDoNotifAlert}
+              />
 
-          <main className="app-viewport">
-            {activeDOMenu === 'Inward' ? (
-              <InwardMonitor editData={editInwardData} setEditData={setEditInwardData} setActiveDOMenu={setActiveDOMenu} />
-            ) : activeDOMenu === 'Outward' ? (
-              <OutwardMonitor editData={editOutwardData} setEditData={setEditOutwardData} setActiveDOMenu={setActiveDOMenu} />
-            ) : activeDOMenu === 'History' ? (
-              <DOHistoryView 
-                setActiveDOMenu={setActiveDOMenu}
-                setEditInwardData={setEditInwardData}
-                setEditOutwardData={setEditOutwardData}
-                setEditDailyData={setEditDailyData}
-              />
-            ) : activeDOMenu === 'Lookup' ? (
-              <DOProfileLookup 
-                setActiveDOMenu={setActiveDOMenu}
-                setEditInwardData={setEditInwardData}
-                setEditOutwardData={setEditOutwardData}
-                setEditDailyData={setEditDailyData}
-              />
-            ) : activeDOMenu === 'Notifications' ? (
-              <DONotificationsView 
-                setActiveDOMenu={setActiveDOMenu}
-              />
-            ) : (
-              <TempMonitor 
-                forcedMenu={activeDOMenu}
-                onMenuChange={setActiveDOMenu}
-                editData={editDailyData}
-                setEditData={setEditDailyData}
-              />
-            )}
-          </main>
-        </>
-      ) : (
-        /* URL: /admin -> DEDICATED SUB ADMIN WINDOW */
-        <SubAdminWindow user={user} onLogout={handleLogout} />
-      )}
-    </div>
+              <main className="app-viewport">
+                {activeDOMenu === 'Inward' ? (
+                  <InwardMonitor editData={editInwardData} setEditData={setEditInwardData} setActiveDOMenu={setActiveDOMenu} />
+                ) : activeDOMenu === 'Outward' ? (
+                  <OutwardMonitor editData={editOutwardData} setEditData={setEditOutwardData} setActiveDOMenu={setActiveDOMenu} />
+                ) : activeDOMenu === 'History' ? (
+                  <DOHistoryView
+                    setActiveDOMenu={setActiveDOMenu}
+                    setEditInwardData={setEditInwardData}
+                    setEditOutwardData={setEditOutwardData}
+                    setEditDailyData={setEditDailyData}
+                  />
+                ) : activeDOMenu === 'Lookup' ? (
+                  <DOProfileLookup
+                    setActiveDOMenu={setActiveDOMenu}
+                    setEditInwardData={setEditInwardData}
+                    setEditOutwardData={setEditOutwardData}
+                    setEditDailyData={setEditDailyData}
+                  />
+                ) : activeDOMenu === 'Notifications' ? (
+                  <DONotificationsView setActiveDOMenu={setActiveDOMenu} />
+                ) : (
+                  <TempMonitor
+                    forcedMenu={activeDOMenu}
+                    onMenuChange={setActiveDOMenu}
+                    editData={editDailyData}
+                    setEditData={setEditDailyData}
+                  />
+                )}
+              </main>
+            </div>
+          </Suspense>
+        ) : (
+          <Suspense fallback={<PageLoader />}>
+            <PortalEntry onSelectWindow={(win) => navigateToWindow(win)} />
+          </Suspense>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }

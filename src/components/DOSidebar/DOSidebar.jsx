@@ -9,7 +9,7 @@ import { Thermometer, ArrowDownLeft, ArrowUpRight, Plus, LogOut, History, Bell, 
 import Logo from '../Logo/Logo';
 import './DOSidebar.css'; // Paired CSS file
 
-export default function DOSidebar({ user, activeDOMenu, setActiveDOMenu, onLogout }) {
+export default function DOSidebar({ user, activeDOMenu, setActiveDOMenu, onLogout, hasNotificationAlert = false }) {
   return (
     <aside className="do-sidebar desktop-only">
       <div className="do-sidebar-top">
@@ -72,9 +72,13 @@ export default function DOSidebar({ user, activeDOMenu, setActiveDOMenu, onLogou
             <button 
               className={`do-sidebar-link ${activeDOMenu === 'Notifications' ? 'active' : ''}`}
               onClick={() => setActiveDOMenu('Notifications')}
+              aria-label={hasNotificationAlert ? 'Notifications — approval waiting' : 'Notifications'}
             >
               <Bell size={19} />
               <span>Notifications</span>
+              {hasNotificationAlert ? (
+                <span className="pulsing-dot do-notif-dot" aria-hidden="true" />
+              ) : null}
             </button>
           </li>
         </ul>

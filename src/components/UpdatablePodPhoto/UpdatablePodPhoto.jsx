@@ -1,0 +1,115 @@
+// ====================================================================
+// Updatable POD Photo card — DO can replace without admin edit permission
+// ====================================================================
+
+import React, { useRef, useState } from 'react';
+import { Camera, Loader2, ImagePlus } from 'lucide-react';
+import { updateInwardPodPhoto, updateOutwardPodPhoto } from '../../services/api';
+import './UpdatablePodPhoto.css';
+
+function resolveImgSrc(path) {
+  if (!path) return null;
+  if (path.startsWith('data:') || path.startsWith('blob:') || path.startsWith('http')) return path;
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
+export default function UpdatablePodPhoto({
+  type, // 'inward' | 'outward'
+  recordId,
+  photoPath,
+  onUpdated,
+  onPreview
+}) {
+  const inputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const src = resolveImgSrc(photoPath);
+
+  const handlePick = (e) => {
+    e.stopPropagation();
+    if (uploading) return;
+    inputRef.current?.click();
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !recordId) return;
+
+    // Some phones send empty MIME — still allow common image picks
+    if (file.type && !file.type.startsWith('image/') && !/\.(jpe?g|png|gif|webp|heic|heif)$/i.test(file.name || '')) {
+      alert('Please select an image file for POD Photo.');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const res =
+        type === 'inward'
+          ? await updateInwardPodPhoto(recordId, file)
+          : await updateOutwardPodPhoto(recordId, file);
+
+      const newPath =
+        type === 'inward' ? res.inward_pod_photo : res.outward_pod_photo;
+
+      if (typeof onUpdated === 'function') {
+        onUpdated({
+          photoPath: newPath,
+          update_details: res.update_details,
+          update_count: res.update_count,
+          updated_at:
+            type === 'inward' ? res.inward_updated_at : res.outward_updated_at
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      alert(err.message || 'Failed to update POD photo.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="profile-photo-card updatable-pod-card">
+      <div
+        className="profile-photo-wrapper"
+        onClick={() => {
+          if (src && typeof onPreview === 'function') onPreview(src);
+        }}
+        role={src ? 'button' : undefined}
+        style={{ cursor: src ? 'pointer' : 'default' }}
+      >
+        {src ? (
+          <img src={src} alt="POD" />
+        ) : (
+          <div className="pod-photo-empty">
+            <ImagePlus size={28} color="#94a3b8" />
+            <span>No POD yet</span>
+          </div>
+        )}
+        {uploading && (
+          <div className="pod-photo-uploading">
+            <Loader2 size={22} className="spinner-icon" color="#fff" />
+          </div>
+        )}
+      </div>
+      <div className="profile-photo-label">POD Photo</div>
+      <button
+        type="button"
+        className="pod-update-btn"
+        onClick={handlePick}
+        disabled={uploading || !recordId}
+        title="Update POD photo without admin permission"
+      >
+        <Camera size={13} />
+        <span>{uploading ? 'Uploading…' : src ? 'Update POD' : 'Add POD'}</span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*,.jpg,.jpeg,.png,.webp,.heic"
+        style={{ display: 'none' }}
+        onChange={handleFile}
+      />
+    </div>
+  );
+}

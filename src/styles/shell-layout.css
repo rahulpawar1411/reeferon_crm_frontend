@@ -1,0 +1,153 @@
+/* ====================================================================
+   Locked shell layout (src/styles/shell-layout.css)
+   Single source of truth for sidebar / viewport spacing.
+   Pattern for ALL windows: flex-direction column + fixed sidebar +
+   content margin-left once. Never mix row flex + fixed + margin.
+   Do not reintroduce desktop position:fixed on headers.
+   ==================================================================== */
+
+/* Fixed left sidebar used by DO / Super Admin / Sub Admin */
+aside.do-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--sidebar-width);
+  height: 100vh;
+  max-height: 100vh;
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 20px 16px;
+  z-index: 120;
+  box-sizing: border-box;
+  overflow: hidden;
+  box-shadow: 4px 0 15px rgba(0, 0, 0, 0.03);
+}
+
+aside.do-sidebar .secure-sidebar-top,
+aside.do-sidebar .do-sidebar-top {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+aside.do-sidebar .secure-sidebar-bottom,
+aside.do-sidebar .do-sidebar-bottom {
+  flex-shrink: 0;
+  margin-top: auto;
+  width: 100%;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  box-sizing: border-box;
+}
+
+/* Profile row must never wrap into a second column */
+aside.do-sidebar .secure-profile-badge,
+aside.do-sidebar .do-user-badge {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+aside.do-sidebar .secure-user-info,
+aside.do-sidebar .do-user-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+aside.do-sidebar .secure-user-info strong,
+aside.do-sidebar .secure-user-info span,
+aside.do-sidebar .do-user-info strong,
+aside.do-sidebar .do-user-info span {
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  aside.do-sidebar {
+    width: var(--tablet-sidebar-width);
+    padding: 16px 8px;
+    align-items: center;
+  }
+
+  aside.do-sidebar .secure-user-info,
+  aside.do-sidebar .do-user-info,
+  aside.do-sidebar .secure-sidebar-nav span,
+  aside.do-sidebar .do-sidebar-link span,
+  aside.do-sidebar .do-add-btn span {
+    display: none;
+  }
+
+  aside.do-sidebar .secure-profile-badge,
+  aside.do-sidebar .do-user-badge {
+    justify-content: center;
+    padding: 8px;
+  }
+}
+
+/* Content column: header + viewport share the same left offset once */
+@media (min-width: 1024px) {
+  .do-window-shell > .do-header {
+    margin-left: var(--sidebar-width);
+    width: calc(100% - var(--sidebar-width));
+    max-width: calc(100% - var(--sidebar-width));
+    box-sizing: border-box;
+  }
+
+  .app-container > header.secure-admin-header {
+    margin-left: var(--sidebar-width);
+    width: calc(100% - var(--sidebar-width));
+    max-width: calc(100% - var(--sidebar-width));
+    left: auto;
+    right: auto;
+    box-sizing: border-box;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .do-window-shell > .do-header {
+    margin-left: var(--tablet-sidebar-width);
+    width: calc(100% - var(--tablet-sidebar-width));
+    max-width: calc(100% - var(--tablet-sidebar-width));
+    box-sizing: border-box;
+  }
+
+  .app-container > header.secure-admin-header {
+    margin-left: var(--tablet-sidebar-width);
+    width: calc(100% - var(--tablet-sidebar-width));
+    max-width: calc(100% - var(--tablet-sidebar-width));
+    left: auto;
+    right: auto;
+    box-sizing: border-box;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-container > header.secure-admin-header {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .do-window-shell > .do-header {
+    margin-left: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+}

@@ -15,8 +15,12 @@ import {
   fetchInwardLogs, deleteInwardLog, 
   fetchOutwardLogs, deleteOutwardLog,
   checkEditPermission, requestEditPermission,
+  fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs,
+  toApiDateParam,
   API_BASE_URL
 } from '../../services/api';
+import UpdatablePodPhoto from '../../components/UpdatablePodPhoto/UpdatablePodPhoto';
+import PaginationBar from '../../components/PaginationBar/PaginationBar';
 import './DOHistoryView.css';
 
 export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setEditOutwardData, setEditDailyData }) {
@@ -33,7 +37,9 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     return `${hours}h ${mins}m`;
   };
   const [loading, setLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [serverTotal, setServerTotal] = useState(0);
   const [copiedRef, setCopiedRef] = useState(null);
   const logsPerPage = 15;
   
@@ -159,12 +165,31 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     setCurrentPage(1);
   };
 
-  // Handler to export filtered logs to Excel (CSV format)
-  const handleExportExcel = () => {
-    if (filteredLogs.length === 0) {
-      alert("No data available to export.");
-      return;
-    }
+  // Handler to export filtered logs to Excel (CSV format) — fetches all matching pages from server
+  const handleExportExcel = async () => {
+    setExportLoading(true);
+    try {
+      const exportParams = {
+        search: appliedSearchTerm,
+        fromDate: toApiDateParam(appliedFromDate),
+        toDate: toApiDateParam(appliedToDate)
+      };
+      let filteredLogs = [];
+      if (activeTab === 'daily') {
+        const { items } = await fetchAllChamberLogs(exportParams);
+        filteredLogs = items;
+      } else if (activeTab === 'inward') {
+        const { items } = await fetchAllInwardLogs(exportParams);
+        filteredLogs = items;
+      } else {
+        const { items } = await fetchAllOutwardLogs(exportParams);
+        filteredLogs = items;
+      }
+
+      if (filteredLogs.length === 0) {
+        alert('No data available to export.');
+        return;
+      }
 
     let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
 
@@ -276,27 +301,47 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert(err.message || 'Export failed. Please try again.');
+    } finally {
+      setExportLoading(false);
+    }
   };
   
   // Photo Lightbox state
   const [lightboxImg, setLightboxImg] = useState(null);
 
-  // Load all logs on mount & tab change
+  const logListParams = () => ({
+    paginated: true,
+    page: currentPage,
+    limit: logsPerPage,
+    search: appliedSearchTerm,
+    fromDate: toApiDateParam(appliedFromDate),
+    toDate: toApiDateParam(appliedToDate)
+  });
+
+  // Load one page from server (search + date filters applied on backend)
   const loadLogs = async () => {
     setLoading(true);
     try {
+      const opts = logListParams();
       if (activeTab === 'daily') {
-        const data = await fetchChamberLogs();
-        setDailyLogs(data || []);
+        const data = await fetchChamberLogs('', opts);
+        setDailyLogs(data.items || []);
+        setServerTotal(data.total ?? 0);
       } else if (activeTab === 'inward') {
-        const data = await fetchInwardLogs();
-        setInwardLogs(data || []);
+        const data = await fetchInwardLogs('', opts);
+        setInwardLogs(data.items || []);
+        setServerTotal(data.total ?? 0);
       } else if (activeTab === 'outward') {
-        const data = await fetchOutwardLogs();
-        setOutwardLogs(data || []);
+        const data = await fetchOutwardLogs('', opts);
+        setOutwardLogs(data.items || []);
+        setServerTotal(data.total ?? 0);
       }
     } catch (err) {
-      console.error("Failed to load logs:", err);
+      console.error('Failed to load logs:', err);
+      alert(err.message || 'Failed to load logs. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -304,6 +349,9 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
 
   useEffect(() => {
     loadLogs();
+  }, [activeTab, currentPage, appliedSearchTerm, appliedFromDate, appliedToDate]);
+
+  useEffect(() => {
     setCurrentPage(1);
   }, [activeTab]);
 
@@ -457,74 +505,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     return parseInt(`${parts[0]}${parts[1]}${parts[2]}`, 10);
   };
 
-  // Filtered lists logic
-  const getFilteredLogs = () => {
-    const term = appliedSearchTerm.toLowerCase();
-    const fromNum = parseDateToNumber(appliedFromDate);
-    const toNum = parseDateToNumber(appliedToDate);
-
-    const matchDateRange = (rawDate) => {
-      const logNum = rawDateToNumber(rawDate);
-      if (!logNum) return true; // fallback if no date
-      if (fromNum && toNum) {
-        return logNum >= fromNum && logNum <= toNum;
-      }
-      if (fromNum) {
-        return logNum >= fromNum;
-      }
-      if (toNum) {
-        return logNum <= toNum;
-      }
-      return true;
-    };
-
-    if (activeTab === 'daily') {
-      return dailyLogs.filter(log => {
-        const dateStr = formatDateStr(log.formatted_date || log.entry_date).toLowerCase();
-        const matchSearch = 
-          (log.reference_no || '').toLowerCase().includes(term) ||
-          (log.client_name || '').toLowerCase().includes(term) ||
-          (log.chamber_name || '').toLowerCase().includes(term) ||
-          (log.monitor_supervisor_name || '').toLowerCase().includes(term) ||
-          dateStr.includes(term);
-        const matchDate = matchDateRange(log.entry_date);
-        return matchSearch && matchDate;
-      });
-    } else if (activeTab === 'inward') {
-      return inwardLogs.filter(log => {
-        const dateStr = formatDateStr(log.inward_entry_date).toLowerCase();
-        const matchSearch = 
-          (log.reference_no || '').toLowerCase().includes(term) ||
-          (log.inward_client_name || '').toLowerCase().includes(term) ||
-          (log.inward_vehicle_no || '').toLowerCase().includes(term) ||
-          (log.inward_unloading_supervisor_name || '').toLowerCase().includes(term) ||
-          (log.inward_transporter_name || '').toLowerCase().includes(term) ||
-          (log.inward_driver_name || '').toLowerCase().includes(term) ||
-          dateStr.includes(term);
-        const matchDate = matchDateRange(log.inward_entry_date);
-        return matchSearch && matchDate;
-      });
-    } else {
-      return outwardLogs.filter(log => {
-        const dateStr = formatDateStr(log.outward_entry_date).toLowerCase();
-        const matchSearch = 
-          (log.reference_no || '').toLowerCase().includes(term) ||
-          (log.outward_client_name || '').toLowerCase().includes(term) ||
-          (log.outward_vehicle_no || '').toLowerCase().includes(term) ||
-          (log.outward_loading_supervisor_name || '').toLowerCase().includes(term) ||
-          (log.outward_transporter_name || '').toLowerCase().includes(term) ||
-          (log.outward_driver_name || '').toLowerCase().includes(term) ||
-          dateStr.includes(term);
-        const matchDate = matchDateRange(log.outward_entry_date);
-        return matchSearch && matchDate;
-      });
-    }
-  };
-
-  const filteredLogs = getFilteredLogs();
-  const indexOfLastLog = currentPage * logsPerPage;
-  const indexOfFirstLog = indexOfLastLog - logsPerPage;
-  const currentLogs = filteredLogs.slice(indexOfFirstLog, indexOfLastLog);
+  const currentLogs =
+    activeTab === 'daily' ? dailyLogs : activeTab === 'inward' ? inwardLogs : outwardLogs;
 
   return (
     <div className="temp-monitor-page do-history-page">
@@ -638,7 +620,16 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                   return;
                 }
                 const [yyyy, mm, dd] = val.split('-');
-                setFromDate(`${dd}-${mm}-${yyyy}`);
+                const nextFrom = `${dd}-${mm}-${yyyy}`;
+                setFromDate(nextFrom);
+                // Keep From ≤ To: if From moves past To, bump To up
+                if (toDate) {
+                  const fromNum = parseDateToNumber(nextFrom);
+                  const toNum = parseDateToNumber(toDate);
+                  if (fromNum && toNum && fromNum > toNum) {
+                    setToDate(nextFrom);
+                  }
+                }
               }}
             />
             {fromDate && (
@@ -671,7 +662,16 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                   return;
                 }
                 const [yyyy, mm, dd] = val.split('-');
-                setToDate(`${dd}-${mm}-${yyyy}`);
+                const nextTo = `${dd}-${mm}-${yyyy}`;
+                setToDate(nextTo);
+                // Keep From ≤ To: if To moves before From, pull From down
+                if (fromDate) {
+                  const fromNum = parseDateToNumber(fromDate);
+                  const toNum = parseDateToNumber(nextTo);
+                  if (fromNum && toNum && fromNum > toNum) {
+                    setFromDate(nextTo);
+                  }
+                }
               }}
             />
             {toDate && (
@@ -706,15 +706,16 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           <button 
             className="btn-export" 
             onClick={handleExportExcel}
+            disabled={exportLoading || loading}
             style={{ 
-              backgroundColor: '#22c55e', 
+              backgroundColor: exportLoading ? '#94a3b8' : '#22c55e', 
               color: '#ffffff', 
               border: 'none', 
               borderRadius: 'var(--radius-sm)', 
               height: '40px', 
               padding: '0 20px', 
               fontWeight: 700, 
-              cursor: 'pointer', 
+              cursor: exportLoading ? 'wait' : 'pointer', 
               display: 'flex', 
               alignItems: 'center', 
               gap: '8px',
@@ -722,8 +723,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
             }}
             title="Export filtered records to Excel"
           >
-            <Download size={16} />
-            <span>Export</span>
+            {exportLoading ? <Loader2 size={16} className="spinner-icon" /> : <Download size={16} />}
+            <span>{exportLoading ? 'Exporting…' : 'Export'}</span>
           </button>
         </div>
       </div>
@@ -746,7 +747,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
             <Loader2 size={28} className="spinner-icon" color="#00a2e8" />
             <span>Loading history database logs...</span>
           </div>
-        ) : filteredLogs.length === 0 ? (
+        ) : serverTotal === 0 ? (
           <div className="no-logs">
             <AlertCircle size={32} color="#94a3b8" />
             <p>No temperature logs found matching the filter criteria.</p>
@@ -1102,84 +1103,13 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
             </table>
           </div>
           
-          {/* Pagination Controls */}
-          {filteredLogs.length > 0 && (
-            <div className="pagination-controls" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '12px 16px', borderTop: '1px solid var(--border)', flexWrap: 'wrap', gap: '12px' }}>
-              <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
-                Showing <strong>{indexOfFirstLog + 1}</strong> to <strong>{Math.min(indexOfLastLog, filteredLogs.length)}</strong> of <strong>{filteredLogs.length}</strong> logs
-              </div>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                <button 
-                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: currentPage === 1 ? '#f1f5f9' : '#ffffff',
-                    color: currentPage === 1 ? '#94a3b8' : '#334155',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  Previous
-                </button>
-                
-                {Array.from({ length: Math.ceil(filteredLogs.length / logsPerPage) }, (_, idx) => idx + 1)
-                  .filter(page => {
-                    const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
-                    return page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1;
-                  })
-                  .map((page, idx, arr) => {
-                    const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
-                    const showEllipsisBefore = page > 2 && idx === 1 && arr[0] === 1;
-                    const showEllipsisAfter = page < totalPages - 1 && idx === arr.length - 2 && arr[arr.length - 1] === totalPages;
-                    
-                    return (
-                      <React.Fragment key={page}>
-                        {showEllipsisBefore && <span style={{ padding: '4px 8px', color: '#94a3b8' }}>...</span>}
-                        <button
-                          onClick={() => setCurrentPage(page)}
-                          style={{
-                            padding: '6px 12px',
-                            minWidth: '32px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid',
-                            borderColor: currentPage === page ? 'var(--primary)' : 'var(--border)',
-                            backgroundColor: currentPage === page ? 'var(--primary)' : '#ffffff',
-                            color: currentPage === page ? '#ffffff' : '#334155',
-                            fontSize: '0.8rem',
-                            fontWeight: 700,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          {page}
-                        </button>
-                        {showEllipsisAfter && <span style={{ padding: '4px 8px', color: '#94a3b8' }}>...</span>}
-                      </React.Fragment>
-                    );
-                  })}
-
-                <button 
-                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil(filteredLogs.length / logsPerPage)))}
-                  disabled={currentPage === Math.ceil(filteredLogs.length / logsPerPage)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: currentPage === Math.ceil(filteredLogs.length / logsPerPage) ? '#f1f5f9' : '#ffffff',
-                    color: currentPage === Math.ceil(filteredLogs.length / logsPerPage) ? '#94a3b8' : '#334155',
-                    fontSize: '0.8rem',
-                    fontWeight: 600,
-                    cursor: currentPage === Math.ceil(filteredLogs.length / logsPerPage) ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
+          <PaginationBar
+            page={currentPage}
+            totalItems={serverTotal}
+            pageSize={logsPerPage}
+            onPageChange={setCurrentPage}
+            itemLabel="entries"
+          />
           </>
         )}
       </div>
@@ -1341,18 +1271,18 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         </span>
                       </div>
                     )}
-                    {selectedDetailLog.update_details && (
+                    {(Number(selectedDetailLog.update_count) > 0 || selectedDetailLog.update_details) && (
                       <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                         <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
-                        <span className="profile-value" style={{ fontWeight: 'normal', color: 'var(--text-dark)' }}>
-                          {selectedDetailLog.update_details}
+                        <span className="profile-value" style={{ fontWeight: '800', color: 'var(--text-dark)' }}>
+                          Changed {Number(selectedDetailLog.update_count) > 0 ? selectedDetailLog.update_count : 1} {Number(selectedDetailLog.update_count) === 1 ? 'time' : 'times'}
                         </span>
                       </div>
                     )}
                     {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks ? (
                       <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                         <span className="profile-label">Remarks</span>
-                        <span className="profile-value" style={{ fontWeight: 'normal', fontStyle: 'italic' }}>
+                        <span className="profile-value profile-value-remarks">
                           {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks}
                         </span>
                       </div>
@@ -1556,7 +1486,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                           <span className="profile-value">
                             <strong>{formatDuration(selectedDetailLog.inward_unloading_duration_hours, selectedDetailLog.inward_unloading_duration_mins)}</strong>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              ({selectedDetailLog.inward_unloading_start_time || '-'} to {selectedDetailLog.inward_unloading_end_time || '-'})
+                                <div>S: {selectedDetailLog.inward_unloading_start_time || '-'}</div>
+                                <div>E: {selectedDetailLog.inward_unloading_end_time || '-'}</div>
                             </div>
                           </span>
                         </div>
@@ -1690,7 +1621,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                           <span className="profile-value">
                             <strong>{formatDuration(selectedDetailLog.outward_loading_duration_hours, selectedDetailLog.outward_loading_duration_mins)}</strong>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              ({selectedDetailLog.outward_loading_start_time || '-'} to {selectedDetailLog.outward_loading_end_time || '-'})
+                                <div>S: {selectedDetailLog.outward_loading_start_time || '-'}</div>
+                                <div>E: {selectedDetailLog.outward_loading_end_time || '-'}</div>
                             </div>
                           </span>
                         </div>
@@ -1706,29 +1638,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                 
                 {/* Check if any photos exist */}
                 {((detailType === 'daily' && selectedDetailLog.temp_sensor_image) ||
-                  (detailType === 'inward' && (
-                    selectedDetailLog.inward_invoice_photos ||
-                    selectedDetailLog.inward_pod_photo ||
-                    selectedDetailLog.inward_vehicle_seal_photo ||
-                    selectedDetailLog.inward_vehicle_temp_photo ||
-                    selectedDetailLog.inward_material_temp_photo ||
-                    selectedDetailLog.inward_vehicle_back_side_photo ||
-                    selectedDetailLog.inward_vehicle_back_side_photo_with_material ||
-                    selectedDetailLog.inward_count_sheet_photo ||
-                    selectedDetailLog.inward_damage_boxes_photo
-                  )) ||
-                  (detailType === 'outward' && (
-                    selectedDetailLog.outward_invoice_photos ||
-                    selectedDetailLog.outward_pod_photo ||
-                    selectedDetailLog.outward_vehicle_seal_photo ||
-                    selectedDetailLog.outward_vehicle_temp_photo ||
-                    selectedDetailLog.outward_pre_vehicle_temp_photo ||
-                    selectedDetailLog.outward_material_temp_photo ||
-                    selectedDetailLog.outward_vehicle_back_side_photo ||
-                    selectedDetailLog.outward_vehicle_back_side_photo_with_material ||
-                    selectedDetailLog.outward_count_sheet_photo ||
-                    selectedDetailLog.outward_damage_boxes_photo
-                  ))) ? (
+                  detailType === 'inward' ||
+                  detailType === 'outward') ? (
                   <div className="profile-photo-grid">
                     {/* Render Chamber Logs Photo */}
                     {detailType === 'daily' && selectedDetailLog.temp_sensor_image && (
@@ -1743,22 +1654,41 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     {/* Render Inward Logs Photos */}
                     {detailType === 'inward' && (
                       <>
-                        {selectedDetailLog.inward_invoice_photos && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_invoice_photos.startsWith('data:') ? selectedDetailLog.inward_invoice_photos : `/${selectedDetailLog.inward_invoice_photos}`)}>
+                        {selectedDetailLog.inward_invoice_photos && selectedDetailLog.inward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`iinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_invoice_photos.startsWith('data:') ? selectedDetailLog.inward_invoice_photos : `/${selectedDetailLog.inward_invoice_photos}`} alt="Invoice" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Invoice Photo</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
-                        )}
-                        {selectedDetailLog.inward_pod_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`)}>
-                            <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`} alt="POD" />
-                            </div>
-                            <div className="profile-photo-label">POD Photo</div>
-                          </div>
-                        )}
+                        ))}
+                        <UpdatablePodPhoto
+                          type="inward"
+                          recordId={selectedDetailLog.inward_id}
+                          photoPath={selectedDetailLog.inward_pod_photo}
+                          onPreview={setLightboxImg}
+                          onUpdated={({ photoPath, update_details, updated_at, update_count }) => {
+                            setSelectedDetailLog((prev) => ({
+                              ...prev,
+                              inward_pod_photo: photoPath,
+                              update_details: update_details || prev.update_details,
+                              update_count: update_count ?? (Number(prev.update_count) || 0) + 1,
+                              inward_updated_at: updated_at || prev.inward_updated_at
+                            }));
+                            setInwardLogs((prev) =>
+                              prev.map((row) =>
+                                row.inward_id === selectedDetailLog.inward_id
+                                  ? {
+                                      ...row,
+                                      inward_pod_photo: photoPath,
+                                      update_details: update_details || row.update_details,
+                                      update_count: update_count ?? (Number(row.update_count) || 0) + 1
+                                    }
+                                  : row
+                              )
+                            );
+                          }}
+                        />
                         {selectedDetailLog.inward_vehicle_seal_photo && (
                           <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_seal_photo : `/${selectedDetailLog.inward_vehicle_seal_photo}`)}>
                             <div className="profile-photo-wrapper">
@@ -1799,14 +1729,14 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
-                        {selectedDetailLog.inward_count_sheet_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.inward_count_sheet_photo : `/${selectedDetailLog.inward_count_sheet_photo}`)}>
+                        {selectedDetailLog.inward_count_sheet_photo && selectedDetailLog.inward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`ics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.inward_count_sheet_photo : `/${selectedDetailLog.inward_count_sheet_photo}`} alt="Count Sheet" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Count Sheet</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {selectedDetailLog.inward_damage_boxes_photo && selectedDetailLog.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                           <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                             <div className="profile-photo-wrapper">
@@ -1821,22 +1751,41 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     {/* Render Outward Logs Photos */}
                     {detailType === 'outward' && (
                       <>
-                        {selectedDetailLog.outward_invoice_photos && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_invoice_photos.startsWith('data:') ? selectedDetailLog.outward_invoice_photos : `/${selectedDetailLog.outward_invoice_photos}`)}>
+                        {selectedDetailLog.outward_invoice_photos && selectedDetailLog.outward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`oinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_invoice_photos.startsWith('data:') ? selectedDetailLog.outward_invoice_photos : `/${selectedDetailLog.outward_invoice_photos}`} alt="Invoice" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Invoice Photo</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
-                        )}
-                        {selectedDetailLog.outward_pod_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`)}>
-                            <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`} alt="POD" />
-                            </div>
-                            <div className="profile-photo-label">POD Photo</div>
-                          </div>
-                        )}
+                        ))}
+                        <UpdatablePodPhoto
+                          type="outward"
+                          recordId={selectedDetailLog.outward_id}
+                          photoPath={selectedDetailLog.outward_pod_photo}
+                          onPreview={setLightboxImg}
+                          onUpdated={({ photoPath, update_details, updated_at, update_count }) => {
+                            setSelectedDetailLog((prev) => ({
+                              ...prev,
+                              outward_pod_photo: photoPath,
+                              update_details: update_details || prev.update_details,
+                              update_count: update_count ?? (Number(prev.update_count) || 0) + 1,
+                              outward_updated_at: updated_at || prev.outward_updated_at
+                            }));
+                            setOutwardLogs((prev) =>
+                              prev.map((row) =>
+                                row.outward_id === selectedDetailLog.outward_id
+                                  ? {
+                                      ...row,
+                                      outward_pod_photo: photoPath,
+                                      update_details: update_details || row.update_details,
+                                      update_count: update_count ?? (Number(row.update_count) || 0) + 1
+                                    }
+                                  : row
+                              )
+                            );
+                          }}
+                        />
                         {selectedDetailLog.outward_vehicle_seal_photo && (
                           <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_seal_photo : `/${selectedDetailLog.outward_vehicle_seal_photo}`)}>
                             <div className="profile-photo-wrapper">
@@ -1885,14 +1834,14 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
-                        {selectedDetailLog.outward_count_sheet_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.outward_count_sheet_photo : `/${selectedDetailLog.outward_count_sheet_photo}`)}>
+                        {selectedDetailLog.outward_count_sheet_photo && selectedDetailLog.outward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`ocs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_count_sheet_photo.startsWith('data:') ? selectedDetailLog.outward_count_sheet_photo : `/${selectedDetailLog.outward_count_sheet_photo}`} alt="Count Sheet" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Count Sheet</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {selectedDetailLog.outward_damage_boxes_photo && selectedDetailLog.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                           <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                             <div className="profile-photo-wrapper">

@@ -5,7 +5,7 @@
    ==================================================================== */
 
 .do-header {
-  min-height: 64px;
+  min-height: var(--header-height, 64px);
   height: auto;
   background-color: #ffffff !important;
   border-bottom: 1px solid #e2e8f0;
@@ -17,6 +17,7 @@
   top: 0;
   z-index: 1000;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
 }
 
 .do-header-brand-group {
@@ -81,6 +82,14 @@
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s ease;
+  position: relative;
+}
+
+.mobile-hamburger-btn .do-notif-dot--hamburger {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  margin: 0;
 }
 
 .mobile-hamburger-btn.open {
@@ -222,6 +231,11 @@
   gap: 10px;
 }
 
+.item-left .do-notif-dot {
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
 .item-icon {
   color: #00a2e8;
 }
@@ -266,15 +280,17 @@
   color: #ffffff !important;
 }
 
-/* Mobile Screen Layout & Clock Fitting */
+/* Mobile: fixed header only inside DO shell (do not use fixed on desktop) */
 @media (max-width: 768px) {
-  .do-header {
+  .do-window-shell > .do-header {
     padding: 10px 14px;
     background-color: #ffffff !important;
     position: fixed;
     top: 0;
     left: 0;
+    right: 0;
     width: 100%;
+    margin-left: 0;
     z-index: 1000;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
@@ -301,18 +317,30 @@
   }
 }
 
-/* Desktop & Tablet Layout Adjustments to prevent sidebar overlap */
+/* Desktop / tablet: DO shell only — Super Admin must not get this margin */
 @media (min-width: 1024px) {
-  .do-header {
-    margin-left: var(--sidebar-width);
+  .do-window-shell > .do-header {
+    position: sticky;
+    top: 0;
+    left: auto;
+    right: auto;
     width: calc(100% - var(--sidebar-width));
+    max-width: calc(100% - var(--sidebar-width));
+    margin-left: var(--sidebar-width);
+    box-sizing: border-box;
   }
 }
 
 @media (min-width: 768px) and (max-width: 1023px) {
-  .do-header {
-    margin-left: var(--tablet-sidebar-width);
+  .do-window-shell > .do-header {
+    position: sticky;
+    top: 0;
+    left: auto;
+    right: auto;
     width: calc(100% - var(--tablet-sidebar-width));
+    max-width: calc(100% - var(--tablet-sidebar-width));
+    margin-left: var(--tablet-sidebar-width);
+    box-sizing: border-box;
   }
 }
 

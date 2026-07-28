@@ -4,7 +4,7 @@
 // Allows Data Operators to search across all logs and view profiles with Edit/Delete workflows.
 // ====================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Search, Calendar, Trash2, X, Eye, Thermometer, ArrowDownLeft, ArrowUpRight, 
   Loader2, AlertCircle, Edit, Download, Copy, Check, History, Lock
@@ -15,6 +15,7 @@ import {
   fetchOutwardLogs, deleteOutwardLog,
   checkEditPermission, requestEditPermission
 } from '../../services/api';
+import UpdatablePodPhoto from '../../components/UpdatablePodPhoto/UpdatablePodPhoto';
 import './DOProfileLookup.css';
 
 export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, setEditOutwardData, setEditDailyData }) {
@@ -34,11 +35,6 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
   const [copiedRef, setCopiedRef] = useState(null);
   const [lightboxImg, setLightboxImg] = useState(null);
   
-  // Database logs state
-  const [chamberLogs, setChamberLogs] = useState([]);
-  const [inwardLogs, setInwardLogs] = useState([]);
-  const [outwardLogs, setOutwardLogs] = useState([]);
-
   // Selected profile details states
   const [searchedRecord, setSearchedRecord] = useState(null);
   const [searchedRecordType, setSearchedRecordType] = useState('');
@@ -55,46 +51,29 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
     proceedWithAction: null
   });
 
-  // Pre-fetch logs on mount for searching
-  const loadLogs = async () => {
-    setLoading(true);
-    try {
-      const c = await fetchChamberLogs();
-      setChamberLogs(c || []);
-      const i = await fetchInwardLogs();
-      setInwardLogs(i || []);
-      const o = await fetchOutwardLogs();
-      setOutwardLogs(o || []);
-    } catch (err) {
-      console.error("Failed to pre-fetch logs for lookup:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadLogs();
-  }, []);
-
-  const handleLookupSearch = () => {
-    const q = lookupQuery.trim().toLowerCase();
+  const handleLookupSearch = async (options = { autoOpenSingle: true }) => {
+    const q = lookupQuery.trim();
     if (!q) {
       setSearchResults([]);
       setSearchedRecord(null);
+      setSearchedRecordType('');
       return;
     }
 
-    const results = [];
+    setLoading(true);
+    try {
+      const searchOpts = { paginated: true, search: q, page: 1, limit: 100 };
+      const [chamberRes, inwardRes, outwardRes] = await Promise.all([
+        fetchChamberLogs('', searchOpts),
+        fetchInwardLogs('', searchOpts),
+        fetchOutwardLogs('', searchOpts)
+      ]);
 
-    // Search Daily logs
-    chamberLogs.forEach(log => {
-      const ref = log.reference_no ? log.reference_no.toLowerCase() : '';
-      const client = log.client_name ? log.client_name.toLowerCase() : '';
-      const chamber = log.chamber_name ? log.chamber_name.toLowerCase() : '';
-      const supervisor = log.monitor_supervisor_name ? log.monitor_supervisor_name.toLowerCase() : '';
-      const dateStr = log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '');
+      const results = [];
+      const qLower = q.toLowerCase();
 
-      if (ref.includes(q) || client.includes(q) || chamber.includes(q) || supervisor.includes(q) || dateStr.includes(q)) {
+      (chamberRes.items || []).forEach((log) => {
+        const dateStr = log.formatted_date || (log.entry_date ? String(log.entry_date).split('T')[0] : '');
         results.push({
           id: `daily-${log.id}`,
           type: 'daily',
@@ -105,18 +84,10 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
           details: `Temp: ${log.chamber_temp}°C | Supervisor: ${log.monitor_supervisor_name || '-'}`,
           original: log
         });
-      }
-    });
+      });
 
-    // Search Inward logs
-    inwardLogs.forEach(log => {
-      const ref = log.reference_no ? log.reference_no.toLowerCase() : '';
-      const client = log.inward_client_name ? log.inward_client_name.toLowerCase() : '';
-      const vehicle = log.inward_vehicle_no ? log.inward_vehicle_no.toLowerCase() : '';
-      const supervisor = log.inward_unloading_supervisor_name ? log.inward_unloading_supervisor_name.toLowerCase() : '';
-      const dateStr = log.inward_entry_date ? log.inward_entry_date.split('T')[0] : '';
-
-      if (ref.includes(q) || client.includes(q) || vehicle.includes(q) || supervisor.includes(q) || dateStr.includes(q)) {
+      (inwardRes.items || []).forEach((log) => {
+        const dateStr = log.inward_entry_date ? String(log.inward_entry_date).split('T')[0] : '';
         results.push({
           id: `inward-${log.inward_id}`,
           type: 'inward',
@@ -127,18 +98,10 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
           details: `Pallets: ${log.inward_pallets_in_qty || 0} | Supervisor: ${log.inward_unloading_supervisor_name || '-'}`,
           original: log
         });
-      }
-    });
+      });
 
-    // Search Outward logs
-    outwardLogs.forEach(log => {
-      const ref = log.reference_no ? log.reference_no.toLowerCase() : '';
-      const client = log.outward_client_name ? log.outward_client_name.toLowerCase() : '';
-      const vehicle = log.outward_vehicle_no ? log.outward_vehicle_no.toLowerCase() : '';
-      const supervisor = log.outward_loading_supervisor_name ? log.outward_loading_supervisor_name.toLowerCase() : '';
-      const dateStr = log.outward_entry_date ? log.outward_entry_date.split('T')[0] : '';
-
-      if (ref.includes(q) || client.includes(q) || vehicle.includes(q) || supervisor.includes(q) || dateStr.includes(q)) {
+      (outwardRes.items || []).forEach((log) => {
+        const dateStr = log.outward_entry_date ? String(log.outward_entry_date).split('T')[0] : '';
         results.push({
           id: `outward-${log.outward_id}`,
           type: 'outward',
@@ -149,18 +112,36 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
           details: `Pallets: ${log.outward_pallets_in_qty || 0} | Supervisor: ${log.outward_loading_supervisor_name || '-'}`,
           original: log
         });
+      });
+
+      // Stable sort: ref match first when server returns broad LIKE matches
+      results.sort((a, b) => {
+        const aRef = (a.refNo || '').toLowerCase().includes(qLower) ? 0 : 1;
+        const bRef = (b.refNo || '').toLowerCase().includes(qLower) ? 0 : 1;
+        return aRef - bRef;
+      });
+
+      setSearchResults(results);
+
+      if (options.autoOpenSingle && results.length === 1) {
+        setSearchedRecord(results[0].original);
+        setSearchedRecordType(results[0].type);
+      } else {
+        setSearchedRecord(null);
+        setSearchedRecordType('');
       }
-    });
-
-    setSearchResults(results);
-
-    // If exactly one match, view it directly
-    if (results.length === 1) {
-      setSearchedRecord(results[0].original);
-      setSearchedRecordType(results[0].type);
-    } else {
-      setSearchedRecord(null);
+    } catch (err) {
+      console.error('Lookup search failed:', err);
+      alert(err.message || 'Search failed. Please try again.');
+      setSearchResults([]);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const backToSearchResults = () => {
+    setSearchedRecord(null);
+    setSearchedRecordType('');
   };
 
   // Safe Split date formatter
@@ -241,7 +222,6 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
           await deleteOutwardLog(id);
         }
         setSearchedRecord(null);
-        await loadLogs();
         setSearchResults([]);
         setLookupQuery('');
       } else {
@@ -262,7 +242,6 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
               await deleteOutwardLog(id);
             }
             setSearchedRecord(null);
-            await loadLogs();
             setSearchResults([]);
             setLookupQuery('');
           }
@@ -362,11 +341,9 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
           /* DETAILED SINGLE PROFILE RECORD */
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              <button 
-                onClick={() => {
-                  setSearchedRecord(null);
-                  handleLookupSearch();
-                }}
+              <button
+                type="button"
+                onClick={backToSearchResults}
                 style={{ padding: '8px 16px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 'var(--radius-sm)', fontWeight: '700', fontSize: '0.8rem', cursor: 'pointer', color: 'var(--text-dark)' }}
               >
                 ← Back to Search Results
@@ -432,6 +409,14 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                         <span className="profile-label">Last Updated Time</span>
                         <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
                           {formatDateTimeStr(searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at)}
+                        </span>
+                      </div>
+                    )}
+                    {(Number(searchedRecord.update_count) > 0 || searchedRecord.update_details) && (
+                      <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                        <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
+                        <span className="profile-value" style={{ fontWeight: '800', color: 'var(--text-dark)' }}>
+                          Changed {Number(searchedRecord.update_count) > 0 ? searchedRecord.update_count : 1} {Number(searchedRecord.update_count) === 1 ? 'time' : 'times'}
                         </span>
                       </div>
                     )}
@@ -634,7 +619,8 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                           <span className="profile-value">
                             <strong>{formatDuration(searchedRecord.inward_unloading_duration_hours, searchedRecord.inward_unloading_duration_mins)}</strong>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              ({searchedRecord.inward_unloading_start_time || '-'} to {searchedRecord.inward_unloading_end_time || '-'})
+                                <div>S: {searchedRecord.inward_unloading_start_time || '-'}</div>
+                                <div>E: {searchedRecord.inward_unloading_end_time || '-'}</div>
                             </div>
                           </span>
                         </div>
@@ -764,7 +750,8 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                           <span className="profile-value">
                             <strong>{formatDuration(searchedRecord.outward_loading_duration_hours, searchedRecord.outward_loading_duration_mins)}</strong>
                             <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              ({searchedRecord.outward_loading_start_time || '-'} to {searchedRecord.outward_loading_end_time || '-'})
+                                <div>S: {searchedRecord.outward_loading_start_time || '-'}</div>
+                                <div>E: {searchedRecord.outward_loading_end_time || '-'}</div>
                             </div>
                           </span>
                         </div>
@@ -779,29 +766,8 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                 <h4>Audit Attachment Documents</h4>
                 
                 {((searchedRecordType === 'daily' && searchedRecord.temp_sensor_image) ||
-                  (searchedRecordType === 'inward' && (
-                    searchedRecord.inward_invoice_photos ||
-                    searchedRecord.inward_pod_photo ||
-                    searchedRecord.inward_vehicle_seal_photo ||
-                    searchedRecord.inward_vehicle_temp_photo ||
-                    searchedRecord.inward_material_temp_photo ||
-                    searchedRecord.inward_vehicle_back_side_photo ||
-                    searchedRecord.inward_vehicle_back_side_photo_with_material ||
-                    searchedRecord.inward_count_sheet_photo ||
-                    searchedRecord.inward_damage_boxes_photo
-                  )) ||
-                  (searchedRecordType === 'outward' && (
-                    searchedRecord.outward_invoice_photos ||
-                    searchedRecord.outward_pod_photo ||
-                    searchedRecord.outward_vehicle_seal_photo ||
-                    searchedRecord.outward_vehicle_temp_photo ||
-                    searchedRecord.outward_pre_vehicle_temp_photo ||
-                    searchedRecord.outward_material_temp_photo ||
-                    searchedRecord.outward_vehicle_back_side_photo ||
-                    searchedRecord.outward_vehicle_back_side_photo_with_material ||
-                    searchedRecord.outward_count_sheet_photo ||
-                    searchedRecord.outward_damage_boxes_photo
-                  ))) ? (
+                  searchedRecordType === 'inward' ||
+                  searchedRecordType === 'outward') ? (
                   <div className="profile-photo-grid">
                     {searchedRecordType === 'daily' && searchedRecord.temp_sensor_image && (
                       <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.temp_sensor_image.startsWith('data:') ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`)}>
@@ -814,22 +780,29 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
 
                     {searchedRecordType === 'inward' && (
                       <>
-                        {searchedRecord.inward_invoice_photos && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_invoice_photos.startsWith('data:') ? searchedRecord.inward_invoice_photos : `/${searchedRecord.inward_invoice_photos}`)}>
+                        {searchedRecord.inward_invoice_photos && searchedRecord.inward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`iinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.inward_invoice_photos.startsWith('data:') ? searchedRecord.inward_invoice_photos : `/${searchedRecord.inward_invoice_photos}`} alt="Invoice" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Invoice Photo</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
-                        )}
-                        {searchedRecord.inward_pod_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_pod_photo.startsWith('data:') ? searchedRecord.inward_pod_photo : `/${searchedRecord.inward_pod_photo}`)}>
-                            <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.inward_pod_photo.startsWith('data:') ? searchedRecord.inward_pod_photo : `/${searchedRecord.inward_pod_photo}`} alt="POD" />
-                            </div>
-                            <div className="profile-photo-label">POD Photo</div>
-                          </div>
-                        )}
+                        ))}
+                        <UpdatablePodPhoto
+                          type="inward"
+                          recordId={searchedRecord.inward_id}
+                          photoPath={searchedRecord.inward_pod_photo}
+                          onPreview={setLightboxImg}
+                          onUpdated={({ photoPath, update_details, updated_at, update_count }) => {
+                            setSearchedRecord((prev) => ({
+                              ...prev,
+                              inward_pod_photo: photoPath,
+                              update_details: update_details || prev.update_details,
+                              update_count: update_count ?? (Number(prev.update_count) || 0) + 1,
+                              inward_updated_at: updated_at || prev.inward_updated_at
+                            }));
+                          }}
+                        />
                         {searchedRecord.inward_vehicle_seal_photo && (
                           <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_vehicle_seal_photo.startsWith('data:') ? searchedRecord.inward_vehicle_seal_photo : `/${searchedRecord.inward_vehicle_seal_photo}`)}>
                             <div className="profile-photo-wrapper">
@@ -870,14 +843,14 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
-                        {searchedRecord.inward_count_sheet_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_count_sheet_photo.startsWith('data:') ? searchedRecord.inward_count_sheet_photo : `/${searchedRecord.inward_count_sheet_photo}`)}>
+                        {searchedRecord.inward_count_sheet_photo && searchedRecord.inward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`ics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.inward_count_sheet_photo.startsWith('data:') ? searchedRecord.inward_count_sheet_photo : `/${searchedRecord.inward_count_sheet_photo}`} alt="Count Sheet" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Count Sheet</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {searchedRecord.inward_damage_boxes_photo && searchedRecord.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                           <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                             <div className="profile-photo-wrapper">
@@ -891,22 +864,29 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
 
                     {searchedRecordType === 'outward' && (
                       <>
-                        {searchedRecord.outward_invoice_photos && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_invoice_photos.startsWith('data:') ? searchedRecord.outward_invoice_photos : `/${searchedRecord.outward_invoice_photos}`)}>
+                        {searchedRecord.outward_invoice_photos && searchedRecord.outward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`oinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.outward_invoice_photos.startsWith('data:') ? searchedRecord.outward_invoice_photos : `/${searchedRecord.outward_invoice_photos}`} alt="Invoice" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Invoice Photo</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
-                        )}
-                        {searchedRecord.outward_pod_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_pod_photo.startsWith('data:') ? searchedRecord.outward_pod_photo : `/${searchedRecord.outward_pod_photo}`)}>
-                            <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.outward_pod_photo.startsWith('data:') ? searchedRecord.outward_pod_photo : `/${searchedRecord.outward_pod_photo}`} alt="POD" />
-                            </div>
-                            <div className="profile-photo-label">POD Photo</div>
-                          </div>
-                        )}
+                        ))}
+                        <UpdatablePodPhoto
+                          type="outward"
+                          recordId={searchedRecord.outward_id}
+                          photoPath={searchedRecord.outward_pod_photo}
+                          onPreview={setLightboxImg}
+                          onUpdated={({ photoPath, update_details, updated_at, update_count }) => {
+                            setSearchedRecord((prev) => ({
+                              ...prev,
+                              outward_pod_photo: photoPath,
+                              update_details: update_details || prev.update_details,
+                              update_count: update_count ?? (Number(prev.update_count) || 0) + 1,
+                              outward_updated_at: updated_at || prev.outward_updated_at
+                            }));
+                          }}
+                        />
                         {searchedRecord.outward_vehicle_seal_photo && (
                           <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_vehicle_seal_photo.startsWith('data:') ? searchedRecord.outward_vehicle_seal_photo : `/${searchedRecord.outward_vehicle_seal_photo}`)}>
                             <div className="profile-photo-wrapper">
@@ -955,14 +935,14 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
-                        {searchedRecord.outward_count_sheet_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_count_sheet_photo.startsWith('data:') ? searchedRecord.outward_count_sheet_photo : `/${searchedRecord.outward_count_sheet_photo}`)}>
+                        {searchedRecord.outward_count_sheet_photo && searchedRecord.outward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
+                          <div key={`ocs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.outward_count_sheet_photo.startsWith('data:') ? searchedRecord.outward_count_sheet_photo : `/${searchedRecord.outward_count_sheet_photo}`} alt="Count Sheet" />
+                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
                             </div>
-                            <div className="profile-photo-label">Count Sheet</div>
+                            <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
-                        )}
+                        ))}
                         {searchedRecord.outward_damage_boxes_photo && searchedRecord.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
                           <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
                             <div className="profile-photo-wrapper">

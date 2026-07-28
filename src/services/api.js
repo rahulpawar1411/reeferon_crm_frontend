@@ -5,6 +5,107 @@
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
+/** Let the browser paint between heavy export/page loops. */
+export const yieldToMain = () =>
+  new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+
+/** DD-MM-YYYY or YYYY-MM-DD → YYYY-MM-DD for API query params. */
+export function toApiDateParam(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return '';
+  const trimmed = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parts = trimmed.split('-');
+  if (parts.length === 3 && parts[0].length <= 2 && parts[2].length === 4) {
+    const [dd, mm, yyyy] = parts;
+    return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+  }
+  return trimmed;
+}
+
+export function normalizeLogListResponse(data) {
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length, page: 1, limit: data.length, hasMore: false };
+  }
+  if (data && Array.isArray(data.items)) {
+    return {
+      items: data.items,
+      total: Number(data.total) || data.items.length,
+      page: Number(data.page) || 1,
+      limit: Number(data.limit) || data.items.length,
+      hasMore: Boolean(data.hasMore)
+    };
+  }
+  return { items: [], total: 0, page: 1, limit: 0, hasMore: false };
+}
+
+function buildLogListQuery(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.search) qs.set('search', params.search);
+  if (params.page != null) qs.set('page', String(params.page));
+  if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.fromDate) qs.set('fromDate', params.fromDate);
+  if (params.toDate) qs.set('toDate', params.toDate);
+  if (params.warehouse && params.warehouse !== 'All') qs.set('warehouse', params.warehouse);
+  if (params.export) qs.set('export', '1');
+  const s = qs.toString();
+  return s ? `?${s}` : '';
+}
+
+async function fetchLogListEndpoint(path, params = {}) {
+  const query = buildLogListQuery(params);
+  const res = await fetch(`${API_BASE_URL}${path}${query}`);
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || `Request failed (${res.status})`);
+  }
+  const data = await res.json();
+  return normalizeLogListResponse(data);
+}
+
+/** Fetch every page for export (chunked, yields to UI). */
+export async function fetchAllLogPages(path, params = {}, onProgress) {
+  const pageLimit = params.limit ?? 500;
+  let page = 1;
+  const all = [];
+  let total = 0;
+
+  for (;;) {
+    const chunk = await fetchLogListEndpoint(path, {
+      ...params,
+      page,
+      limit: pageLimit,
+      export: true
+    });
+    if (page === 1) total = chunk.total;
+    all.push(...chunk.items);
+    if (typeof onProgress === 'function') {
+      onProgress({ loaded: all.length, total: total || chunk.total, page });
+    }
+    if (!chunk.hasMore || chunk.items.length === 0) break;
+    page += 1;
+    await yieldToMain();
+  }
+
+  return { items: all, total: total || all.length };
+}
+
+export const fetchChamberLogsPage = (params) => fetchLogListEndpoint('/chamber-temp', params);
+export const fetchInwardLogsPage = (params) => fetchLogListEndpoint('/inward-logs', params);
+export const fetchOutwardLogsPage = (params) => fetchLogListEndpoint('/outward-logs', params);
+
+export const fetchAllChamberLogs = (params, onProgress) =>
+  fetchAllLogPages('/chamber-temp', params, onProgress);
+export const fetchAllInwardLogs = (params, onProgress) =>
+  fetchAllLogPages('/inward-logs', params, onProgress);
+export const fetchAllOutwardLogs = (params, onProgress) =>
+  fetchAllLogPages('/outward-logs', params, onProgress);
+
 // Globally override fetch to enforce HttpOnly Cookies credentials passing in development & production
 const originalFetch = window.fetch;
 window.fetch = function (url, options = {}) {
@@ -18,14 +119,22 @@ let fallbackChamberLogs = [];
 // ====================================================================
 // 1. Daily Chamber Temperature Monitoring APIs
 // ====================================================================
-export const fetchChamberLogs = async (search = '') => {
+export const fetchChamberLogs = async (search = '', options = {}) => {
+  const params = {
+    search: search || options.search || '',
+    page: options.page ?? 1,
+    limit: options.limit ?? (options.paginated ? 50 : 200),
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    warehouse: options.warehouse
+  };
   try {
-    const query = search ? `?search=${encodeURIComponent(search)}` : '';
-    const res = await fetch(`${API_BASE_URL}/chamber-temp${query}`);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {}
+    const result = await fetchChamberLogsPage(params);
+    if (options.paginated) return result;
+    return result.items;
+  } catch (err) {
+    if (options.paginated) throw err;
+  }
   let result = [...fallbackChamberLogs];
   if (search) {
     const q = search.toLowerCase();
@@ -117,12 +226,22 @@ export const deleteChamberLog = async (id) => {
 // ====================================================================
 let fallbackInwardLogs = [];
 
-export const fetchInwardLogs = async (search = '') => {
+export const fetchInwardLogs = async (search = '', options = {}) => {
+  const params = {
+    search: search || options.search || '',
+    page: options.page ?? 1,
+    limit: options.limit ?? (options.paginated ? 50 : 200),
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    warehouse: options.warehouse
+  };
   try {
-    const query = search ? `?search=${encodeURIComponent(search)}` : '';
-    const res = await fetch(`${API_BASE_URL}/inward-logs${query}`);
-    if (res.ok) return await res.json();
-  } catch (err) {}
+    const result = await fetchInwardLogsPage(params);
+    if (options.paginated) return result;
+    return result.items;
+  } catch (err) {
+    if (options.paginated) throw err;
+  }
   let list = [...fallbackInwardLogs];
   if (search) {
     const q = search.toLowerCase();
@@ -233,17 +352,56 @@ export const updateInwardLog = async (id, formData) => {
   return { message: 'Updated (local)' };
 };
 
+/** POD-only update — no admin edit permission required. */
+export const updateInwardPodPhoto = async (id, file) => {
+  const formData = new FormData();
+  formData.append('inward_pod_photo', file, file.name || 'pod-photo.jpg');
+  const res = await fetch(`${API_BASE_URL}/inward-logs/${id}/pod-photo`, {
+    method: 'PUT',
+    body: formData
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `Failed to update POD photo (${res.status}).`);
+  }
+  return data;
+};
+
+export const updateOutwardPodPhoto = async (id, file) => {
+  const formData = new FormData();
+  formData.append('outward_pod_photo', file, file.name || 'pod-photo.jpg');
+  const res = await fetch(`${API_BASE_URL}/outward-logs/${id}/pod-photo`, {
+    method: 'PUT',
+    body: formData
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `Failed to update POD photo (${res.status}).`);
+  }
+  return data;
+};
+
 // ====================================================================
 // Outward DO Logs APIs
 // ====================================================================
 let fallbackOutwardLogs = [];
 
-export const fetchOutwardLogs = async (search = '') => {
+export const fetchOutwardLogs = async (search = '', options = {}) => {
+  const params = {
+    search: search || options.search || '',
+    page: options.page ?? 1,
+    limit: options.limit ?? (options.paginated ? 50 : 200),
+    fromDate: options.fromDate,
+    toDate: options.toDate,
+    warehouse: options.warehouse
+  };
   try {
-    const query = search ? `?search=${encodeURIComponent(search)}` : '';
-    const res = await fetch(`${API_BASE_URL}/outward-logs${query}`);
-    if (res.ok) return await res.json();
-  } catch (err) {}
+    const result = await fetchOutwardLogsPage(params);
+    if (options.paginated) return result;
+    return result.items;
+  } catch (err) {
+    if (options.paginated) throw err;
+  }
   let list = [...fallbackOutwardLogs];
   if (search) {
     const q = search.toLowerCase();
@@ -550,8 +708,15 @@ export const createSubAdmin = async (data) => {
     body: JSON.stringify(data)
   });
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to create sub-admin.');
+    let err = { error: 'Failed to create sub-admin.' };
+    try {
+      err = await res.json();
+    } catch (_) {
+      if (res.status === 401) err.error = 'Session expired. Please log in again as Super Admin.';
+      else if (res.status === 403) err.error = 'Only Super Admin can create sub-admins.';
+      else if (res.status >= 500) err.error = 'Server error. Ensure the backend is running on port 5000.';
+    }
+    throw new Error(err.error || err.message || 'Failed to create sub-admin.');
   }
   return await res.json();
 };
@@ -578,6 +743,53 @@ export const deleteSubAdmin = async (id) => {
     throw new Error(err.error || 'Failed to delete sub-admin.');
   }
   return await res.json();
+};
+
+export const fetchAccessScopeOptions = async () => {
+  const res = await fetch(`${API_BASE_URL}/dashboard/access-options`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch access scope options.');
+  }
+  return await res.json();
+};
+
+export const submitCustomerReport = async ({ reference_no, message }) => {
+  const res = await fetch(`${API_BASE_URL}/customer-reports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reference_no, message })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to submit report.');
+  }
+  return data;
+};
+
+export const fetchCustomerReports = async ({ status = 'All', search = '' } = {}) => {
+  const qs = new URLSearchParams();
+  if (status && status !== 'All') qs.set('status', status);
+  if (search) qs.set('search', search);
+  const query = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/customer-reports${query}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to fetch customer reports.');
+  }
+  return Array.isArray(data) ? data : [];
+};
+
+export const updateCustomerReportStatus = async (id, status) => {
+  const res = await fetch(`${API_BASE_URL}/customer-reports/${id}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to update report status.');
+  }
+  return data;
 };
 
 export const fetchOperatorActivities = async () => {
@@ -613,8 +825,9 @@ export const requestEditPermission = async (recordType, recordId, description, a
   return await res.json();
 };
 
-export const fetchPermissionRequests = async () => {
-  const res = await fetch(`${API_BASE_URL}/permission-requests`);
+export const fetchPermissionRequests = async (cacheBustQuery = '') => {
+  const suffix = cacheBustQuery.startsWith('?') ? cacheBustQuery : '';
+  const res = await fetch(`${API_BASE_URL}/permission-requests${suffix}`);
   if (!res.ok) {
     throw new Error('Failed to fetch permission requests.');
   }
@@ -630,6 +843,17 @@ export const updatePermissionRequest = async (id, status) => {
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to update permission request.');
+  }
+  return await res.json();
+};
+
+export const markPermissionRequestComplete = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/permission-requests/${id}/complete`, {
+    method: 'PATCH'
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to mark notification complete.');
   }
   return await res.json();
 };
@@ -653,4 +877,30 @@ export const updateSystemConfig = async (configKey, configValue) => {
     throw new Error(err.error || 'Failed to update permission config.');
   }
   return await res.json();
+};
+
+export const changeSuperAdminPassword = async ({ currentPassword, newPassword, email }) => {
+  const res = await fetch(`${API_BASE_URL}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword, email })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to update profile.');
+  }
+  return data;
+};
+
+export const verifySuperAdminProfileAccess = async ({ email, password }) => {
+  const res = await fetch(`${API_BASE_URL}/auth/verify-profile-access`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Verification failed.');
+  }
+  return data;
 };

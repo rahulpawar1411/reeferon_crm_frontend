@@ -5,7 +5,7 @@
 // ====================================================================
 
 import React, { useState } from 'react';
-import { Lock, Mail, ShieldAlert, Loader2, ArrowRight } from 'lucide-react';
+import { Lock, Mail, ShieldAlert, Loader2, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
 import { API_BASE_URL } from '../../services/api';
 import './Login.css';
@@ -13,6 +13,7 @@ import './Login.css';
 export default function Login({ onLoginSuccess }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -34,6 +35,7 @@ export default function Login({ onLoginSuccess }) {
         headers: {
           'Content-Type': 'application/json'
         },
+        credentials: 'include',
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
           password: password
@@ -50,6 +52,15 @@ export default function Login({ onLoginSuccess }) {
         if (onLoginSuccess) {
           onLoginSuccess(data.user);
         }
+        if (data.user?.role === 'sub_admin') {
+          window.history.replaceState({}, '', '/sub-admin');
+        } else if (data.user?.role === 'super_admin') {
+          window.history.replaceState({}, '', '/admin');
+        } else if (data.user?.role === 'do_operator') {
+          window.history.replaceState({}, '', '/do-operator');
+        }
+      } else if (data.locked || response.status === 429) {
+        setErrorMsg(data.message || 'Account temporarily locked after too many failed attempts.');
       } else {
         setErrorMsg(data.message || 'Login failed. Please verify credentials and role.');
       }
@@ -67,7 +78,7 @@ export default function Login({ onLoginSuccess }) {
         {/* Brand Header */}
         <div className="login-brand-header">
           <Logo compact={false} />
-          <p className="login-subtitle">ReeferON CRM & Daily Operations Portal</p>
+          <p className="login-subtitle">ReeferON Daily Operations Portal</p>
         </div>
 
         {errorMsg && (
@@ -88,7 +99,7 @@ export default function Login({ onLoginSuccess }) {
               <Mail size={16} className="field-icon" />
               <input
                 type="email"
-                placeholder="e.g. operator@reeferon.com"
+                placeholder="e.g. subadmin@reeferon.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -103,13 +114,24 @@ export default function Login({ onLoginSuccess }) {
             <div className="input-field-icon-wrapper">
               <Lock size={16} className="field-icon" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
+                className="login-password-input"
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
               />
+              <button
+                type="button"
+                className="login-password-eye-btn"
+                onClick={() => setShowPassword((prev) => !prev)}
+                title={showPassword ? 'Hide Password' : 'Show Password'}
+                aria-label={showPassword ? 'Hide Password' : 'Show Password'}
+                disabled={loading}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
             </div>
           </div>
 

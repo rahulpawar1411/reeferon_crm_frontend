@@ -10,7 +10,7 @@ import { Clock, Menu, X, Thermometer, ArrowDownLeft, ArrowUpRight, ChevronRight,
 import Logo from '../Logo/Logo';
 import './DOHeader.css'; // Paired CSS file
 
-export default function DOHeader({ user, activeTitle, activeDOMenu, setActiveDOMenu, onLogout }) {
+export default function DOHeader({ user, activeTitle, activeDOMenu, setActiveDOMenu, onLogout, hasNotificationAlert = false }) {
   const [timeState, setTimeState] = useState(new Date());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -88,6 +88,9 @@ export default function DOHeader({ user, activeTitle, activeDOMenu, setActiveDOM
             title="Open Menu"
           >
             {isMobileMenuOpen ? <X size={22} color="#00a2e8" /> : <Menu size={22} color="#0f172a" />}
+            {hasNotificationAlert && !isMobileMenuOpen ? (
+              <span className="pulsing-dot do-notif-dot do-notif-dot--hamburger" aria-hidden="true" />
+            ) : null}
           </button>
         </div>
       </header>
@@ -194,10 +197,14 @@ export default function DOHeader({ user, activeTitle, activeDOMenu, setActiveDOM
               className={`clean-menu-item ${activeDOMenu === 'Notifications' ? 'active' : ''}`}
               onClick={() => handleMenuSelect('Notifications')}
               style={{ borderBottom: '1px solid var(--border)' }}
+              aria-label={hasNotificationAlert ? 'Notifications — approval waiting' : 'Notifications'}
             >
               <div className="item-left">
                 <Bell size={18} className="item-icon" />
                 <span>Notifications</span>
+                {hasNotificationAlert ? (
+                  <span className="pulsing-dot do-notif-dot" aria-hidden="true" />
+                ) : null}
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>

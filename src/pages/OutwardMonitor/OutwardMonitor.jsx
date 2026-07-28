@@ -5,6 +5,7 @@
 // ====================================================================
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowUpRight, Plus, CheckCircle, PlusCircle, Camera, Loader2, Trash2, Calendar, FileText, Truck, Thermometer, Check, RefreshCw
 } from 'lucide-react';
@@ -28,6 +29,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   const [submitting, setSubmitting] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+  const [invalidFields, setInvalidFields] = useState({});
   const [lightboxImage, setLightboxImage] = useState(null);
 
   // Form State
@@ -67,8 +69,8 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   const [driverCountryCode, setDriverCountryCode] = useState('+91');
 
   // Uploaded Files State
-  const [invoicePhoto, setInvoicePhoto] = useState(null);
-  const [invoicePreview, setInvoicePreview] = useState(null);
+  const [invoicePhotos, setInvoicePhotos] = useState([]);
+  const [invoicePreviews, setInvoicePreviews] = useState([]);
   const [podPhoto, setPodPhoto] = useState(null);
   const [podPreview, setPodPreview] = useState(null);
   const [sealPhoto, setSealPhoto] = useState(null);
@@ -81,10 +83,37 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   const [vehicleBackPreview, setVehicleBackPreview] = useState(null);
   const [vehicleBackWithMaterialPhoto, setVehicleBackWithMaterialPhoto] = useState(null);
   const [vehicleBackWithMaterialPreview, setVehicleBackWithMaterialPreview] = useState(null);
-  const [countSheetPhoto, setCountSheetPhoto] = useState(null);
-  const [countSheetPreview, setCountSheetPreview] = useState(null);
+  const [countSheetPhotos, setCountSheetPhotos] = useState([]);
+  const [countSheetPreviews, setCountSheetPreviews] = useState([]);
   const [damagePhotos, setDamagePhotos] = useState([]);
   const [damagePreviews, setDamagePreviews] = useState([]);
+
+  const clearInvalid = (field) => {
+    setInvalidFields((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const clearInvalidMany = (fields) => {
+    setInvalidFields((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      fields.forEach((f) => {
+        if (next[f]) {
+          delete next[f];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  };
+
+  const ReqStar = ({ field }) => (
+    <span className={`req-star${invalidFields[field] ? ' req-star--missing' : ''}`} aria-hidden="true">*</span>
+  );
 
   // Time Verification Modal State
   const [verificationData, setVerificationData] = useState(null);
@@ -177,14 +206,24 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         if (!path) return null;
         return path.startsWith('data:image') ? path : `/${path}`;
       };
-      setInvoicePreview(getImgUrl(editData.outward_invoice_photos));
+      setInvoicePhotos([]);
+      setInvoicePreviews(
+        editData.outward_invoice_photos
+          ? editData.outward_invoice_photos.split(',').map(getImgUrl).filter(Boolean)
+          : []
+      );
       setPodPreview(getImgUrl(editData.outward_pod_photo));
       setSealPreview(getImgUrl(editData.outward_vehicle_seal_photo));
       setVehicleTempPreview(getImgUrl(editData.outward_pre_vehicle_temp_photo || editData.outward_vehicle_temp_photo));
       setMaterialTempPreview(getImgUrl(editData.outward_material_temp_photo));
       setVehicleBackPreview(getImgUrl(editData.outward_vehicle_back_side_photo));
       setVehicleBackWithMaterialPreview(getImgUrl(editData.outward_vehicle_back_side_photo_with_material));
-      setCountSheetPreview(getImgUrl(editData.outward_count_sheet_photo));
+      setCountSheetPhotos([]);
+      setCountSheetPreviews(
+        editData.outward_count_sheet_photo
+          ? editData.outward_count_sheet_photo.split(',').map(getImgUrl).filter(Boolean)
+          : []
+      );
       if (editData.outward_damage_boxes_photo) {
         setDamagePreviews(editData.outward_damage_boxes_photo.split(',').map(getImgUrl));
       } else {
@@ -320,7 +359,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   };
 
   // Image Selection Handlers
-  const handleMultipleDamageChange = async (e) => {
+  const handleMultipleImageChange = async (e, setPhotos, setPreviews, defaultName = 'photo.jpg', fieldKey) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
 
@@ -342,7 +381,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       const res = await compressImageFile(file);
       const captureTime = originalCaptureDate || new Date(file.lastModified || Date.now());
 
-      const finalFile = new File([res.file], file.name || 'damage-photo.jpg', {
+      const finalFile = new File([res.file], file.name || defaultName, {
         type: 'image/jpeg',
         lastModified: captureTime.getTime()
       });
@@ -351,14 +390,24 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       previewList.push(res.previewUrl);
     }
 
-    setDamagePhotos(prev => [...prev, ...compressedList]);
-    setDamagePreviews(prev => [...prev, ...previewList]);
+    setPhotos(prev => [...prev, ...compressedList]);
+    setPreviews(prev => [...prev, ...previewList]);
+    if (fieldKey) clearInvalid(fieldKey);
     setCompressing(false);
 
     e.target.value = '';
   };
 
-  const handleSingleImageChange = async (e, setFile, setPreview) => {
+  const handleMultipleDamageChange = (e) =>
+    handleMultipleImageChange(e, setDamagePhotos, setDamagePreviews, 'damage-photo.jpg', 'damage_boxes_photo');
+
+  const handleMultipleInvoiceChange = (e) =>
+    handleMultipleImageChange(e, setInvoicePhotos, setInvoicePreviews, 'invoice-photo.jpg', 'invoice_photos');
+
+  const handleMultipleCountSheetChange = (e) =>
+    handleMultipleImageChange(e, setCountSheetPhotos, setCountSheetPreviews, 'count-sheet-photo.jpg', 'count_sheet_photo');
+
+  const handleSingleImageChange = async (e, setFile, setPreview, fieldKey) => {
     const file = e.target.files[0];
     if (!file) return;
 
@@ -384,6 +433,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
 
     setFile(finalFile);
     setPreview(res.previewUrl);
+    if (fieldKey) clearInvalid(fieldKey);
     setCompressing(false);
 
     e.target.value = '';
@@ -415,8 +465,9 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         endHours = hours;
         endMinutes = minutes;
         
-        if (formData.outward_entry_date) {
-          const [y, m, d] = formData.outward_entry_date.split('-').map(Number);
+        if (formData.outward_loading_end_date || formData.outward_entry_date) {
+          const dateSrc = formData.outward_loading_end_date || formData.outward_entry_date;
+          const [y, m, d] = dateSrc.split('-').map(Number);
           endYear = y;
           endMonth = m - 1;
           endDate = d;
@@ -435,30 +486,94 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   const handleFormSubmit = async (e) => {
     e.preventDefault();
 
-    const required = ['outward_entry_date', 'outward_vehicle_no', 'outward_client_name'];
-    const missing = required.filter(f => !formData[f] || !formData[f].toString().trim());
+    const isBlank = (v) => {
+      if (v === 0 || v === '0') return false;
+      return v === null || v === undefined || String(v).trim() === '';
+    };
 
-    if (missing.length > 0) {
+    const requiredFields = [
+      ['outward_entry_date', 'Entry Date'],
+      ['outward_client_name', 'Client Name'],
+      ['outward_dock_no', 'Dock No.'],
+      ['outward_material_type', 'Material Type'],
+      ['outward_vehicle_no', 'Vehicle No.'],
+      ['outward_transporter_name', 'Transporter Name'],
+      ['outward_driver_name', 'Driver Name'],
+      ['outward_driver_no', 'Driver Phone No.'],
+      ['outward_vehicle_reporting_time', 'Vehicle Reporting Time'],
+      ['outward_loading_start_date', 'Loading Start Date'],
+      ['outward_loading_start_time', 'Loading Start Time'],
+      ['outward_loading_end_date', 'Loading End Date'],
+      ['outward_loading_end_time', 'Loading End Time'],
+      ['outward_loading_duration_hours', 'Loading Duration Hours'],
+      ['outward_loading_duration_mins', 'Loading Duration Mins'],
+      ['outward_pre_vehicle_temp', 'Pre Vehicle Temp'],
+      ['outward_material_temp', 'Material Temp'],
+      ['outward_pallets_in_qty', 'Pallets Qty'],
+      ['outward_invoice_qty', 'Invoice Boxes Qty'],
+      ['outward_received_boxes_qty', 'Boxes Loaded Qty'],
+      ['outward_damage_received_boxes_qty', 'Damage Qty'],
+      ['outward_loading_supervisor_name', 'Loading Supervisor Name']
+      // Seal No. & Remarks are optional
+    ];
+
+    const missingKeys = requiredFields
+      .filter(([key]) => isBlank(formData[key]))
+      .map(([key]) => key);
+    const missing = requiredFields
+      .filter(([key]) => isBlank(formData[key]))
+      .map(([, label]) => label);
+
+    const hasInvoice = invoicePhotos.length > 0 || invoicePreviews.length > 0;
+    const hasVehicleTemp = !!(vehicleTempPhoto || vehicleTempPreview);
+    const hasMaterialTemp = !!(materialTempPhoto || materialTempPreview);
+    const hasVehicleBack = !!(vehicleBackPhoto || vehicleBackPreview);
+    const hasVehicleBackLoaded = !!(vehicleBackWithMaterialPhoto || vehicleBackWithMaterialPreview);
+    const hasCountSheet = countSheetPhotos.length > 0 || countSheetPreviews.length > 0;
+    const damageQty = parseInt(formData.outward_damage_received_boxes_qty, 10) || 0;
+    const hasDamage = damagePhotos.length > 0 || damagePreviews.length > 0;
+
+    if (!hasInvoice) { missingKeys.push('invoice_photos'); missing.push('Invoice Photo'); }
+    if (!hasVehicleTemp) { missingKeys.push('vehicle_temp_photo'); missing.push('Pre Vehicle Temp Photo'); }
+    if (!hasMaterialTemp) { missingKeys.push('material_temp_photo'); missing.push('Material Temp Photo'); }
+    if (!hasVehicleBack) { missingKeys.push('vehicle_back_photo'); missing.push('Vehicle Back Photo'); }
+    if (!hasVehicleBackLoaded) { missingKeys.push('vehicle_back_with_material_photo'); missing.push('Vehicle Back Photo With Material'); }
+    if (!hasCountSheet) { missingKeys.push('count_sheet_photo'); missing.push('Count Sheet Photo'); }
+    if (damageQty > 0 && !hasDamage) { missingKeys.push('damage_boxes_photo'); missing.push('Damage Boxes Photo'); }
+    // POD Photo & Vehicle Seal Photo optional
+
+    if (missingKeys.length > 0) {
+      setInvalidFields(Object.fromEntries(missingKeys.map((k) => [k, true])));
       alert(`⚠️ Validation Error:\nPlease fill all required fields:\n- ${missing.join('\n- ')}`);
       return;
     }
 
-    if (formData.outward_driver_no) {
-      const digits = formData.outward_driver_no.replace(/\D/g, '');
-      const expectedDigits = (driverCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverCountryCode) ? 9 : (driverCountryCode === '+65' ? 8 : 10));
-      if (digits.length < expectedDigits) {
-        alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${driverCountryCode}.`);
-        return;
-      }
+    setInvalidFields({});
+
+    const digits = (formData.outward_driver_no || '').replace(/\D/g, '');
+    const expectedDigits = (driverCountryCode === '+91') ? 10 : (['+971', '+966', '+61'].includes(driverCountryCode) ? 9 : (driverCountryCode === '+65' ? 8 : 10));
+    if (digits.length < expectedDigits) {
+      setInvalidFields({ outward_driver_no: true });
+      alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${driverCountryCode}.`);
+      return;
     }
 
     let captureDate = new Date();
     let photoDateStr = todayStr;
 
-    const refPhoto = vehicleTempPhoto || materialTempPhoto || podPhoto || sealPhoto || vehicleBackPhoto || vehicleBackWithMaterialPhoto || countSheetPhoto || invoicePhoto || damagePhotos[0];
+    const refPhoto = vehicleTempPhoto || materialTempPhoto || podPhoto || sealPhoto || vehicleBackPhoto || vehicleBackWithMaterialPhoto || countSheetPhotos[0] || invoicePhotos[0] || damagePhotos[0];
 
     if (refPhoto) {
       captureDate = new Date(refPhoto.lastModified);
+    } else if (editData?.photo_capture_time) {
+      const raw = String(editData.photo_capture_time).trim();
+      const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+      if (m) {
+        captureDate = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+      } else {
+        const parsed = new Date(raw);
+        if (!Number.isNaN(parsed.getTime())) captureDate = parsed;
+      }
     }
 
     const yyyy = captureDate.getFullYear();
@@ -472,12 +587,18 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     const formattedCapture = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
     const photoTimeStr = `${hh}:${min}`;
 
-    const variance = calculateVariance(formData.outward_loading_end_time, captureDate);
+    const endDateForVariance = formData.outward_loading_end_date || formData.outward_entry_date;
+    const endTimeCombined = endDateForVariance
+      ? `${convertYYYYMMDDToDDMMYYYY(endDateForVariance)} ${formData.outward_loading_end_time}`
+      : formData.outward_loading_end_time;
+    const variance = calculateVariance(endTimeCombined, captureDate);
 
     setVerificationData({
       photo_capture_time_str: formattedCapture,
       photo_date_str: photoDateStr,
       photo_time_str: photoTimeStr,
+      end_date_str: endDateForVariance ? convertYYYYMMDDToDDMMYYYY(endDateForVariance) : '',
+      end_time_str: formData.outward_loading_end_time || '',
       time_variance_minutes: variance
     });
   };
@@ -530,7 +651,9 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       }
     });
 
-    if (invoicePhoto) submissionData.append('outward_invoice_photos', invoicePhoto);
+    invoicePhotos.forEach(file => {
+      submissionData.append('outward_invoice_photos', file);
+    });
     if (podPhoto) submissionData.append('outward_pod_photo', podPhoto);
     if (sealPhoto) submissionData.append('outward_vehicle_seal_photo', sealPhoto);
     if (vehicleTempPhoto) {
@@ -540,7 +663,9 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     if (materialTempPhoto) submissionData.append('outward_material_temp_photo', materialTempPhoto);
     if (vehicleBackPhoto) submissionData.append('outward_vehicle_back_side_photo', vehicleBackPhoto);
     if (vehicleBackWithMaterialPhoto) submissionData.append('outward_vehicle_back_side_photo_with_material', vehicleBackWithMaterialPhoto);
-    if (countSheetPhoto) submissionData.append('outward_count_sheet_photo', countSheetPhoto);
+    countSheetPhotos.forEach(file => {
+      submissionData.append('outward_count_sheet_photo', file);
+    });
 
     damagePhotos.forEach(file => {
       submissionData.append('outward_damage_boxes_photo', file);
@@ -593,8 +718,8 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         outward_loading_supervisor_name: '',
         outward_remarks: ''
       });
-      setInvoicePhoto(null);
-      setInvoicePreview(null);
+      setInvoicePhotos([]);
+      setInvoicePreviews([]);
       setPodPhoto(null);
       setPodPreview(null);
       setSealPhoto(null);
@@ -607,10 +732,11 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       setVehicleBackPreview(null);
       setVehicleBackWithMaterialPhoto(null);
       setVehicleBackWithMaterialPreview(null);
-      setCountSheetPhoto(null);
-      setCountSheetPreview(null);
+      setCountSheetPhotos([]);
+      setCountSheetPreviews([]);
       setDamagePhotos([]);
       setDamagePreviews([]);
+      setInvalidFields({});
 
       setTimeout(() => setSuccessMsg(''), 4000);
     }
@@ -708,6 +834,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         outward_loading_start_date: value,
         outward_loading_end_date: value
       }));
+      clearInvalidMany(['outward_entry_date', 'outward_loading_start_date', 'outward_loading_end_date']);
       return;
     }
 
@@ -722,6 +849,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         outward_loading_start_date: cleanVal,
         outward_loading_end_date: cleanVal
       }));
+      clearInvalidMany(['outward_loading_start_date', 'outward_loading_end_date']);
       return;
     }
 
@@ -735,21 +863,25 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         ...prev,
         outward_loading_end_date: cleanVal
       }));
+      clearInvalid('outward_loading_end_date');
       return;
     }
 
     if (name === 'outward_vehicle_reporting_time') {
       setFormData(prev => ({ ...prev, outward_vehicle_reporting_time: value }));
+      clearInvalid('outward_vehicle_reporting_time');
       return;
     }
 
     if (name === 'outward_loading_start_time') {
       setFormData(prev => ({ ...prev, outward_loading_start_time: value }));
+      clearInvalid('outward_loading_start_time');
       return;
     }
 
     if (name === 'outward_loading_end_time') {
       setFormData(prev => ({ ...prev, outward_loading_end_time: value }));
+      clearInvalid('outward_loading_end_time');
       return;
     }
 
@@ -760,6 +892,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
+    clearInvalid(name);
   };
 
   return (
@@ -822,8 +955,8 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   outward_remarks: ''
                 });
                 setDriverCountryCode('+91');
-                setInvoicePhoto(null);
-                setInvoicePreview(null);
+                setInvoicePhotos([]);
+                setInvoicePreviews([]);
                 setPodPhoto(null);
                 setPodPreview(null);
                 setSealPhoto(null);
@@ -836,8 +969,8 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                 setVehicleBackPreview(null);
                 setVehicleBackWithMaterialPhoto(null);
                 setVehicleBackWithMaterialPreview(null);
-                setCountSheetPhoto(null);
-                setCountSheetPreview(null);
+                setCountSheetPhotos([]);
+                setCountSheetPreviews([]);
                 setDamagePhotos([]);
                 setDamagePreviews([]);
               }}
@@ -864,7 +997,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Entry Date *</label>
+                  <label>Entry Date <ReqStar field="outward_entry_date" /></label>
                   <input
                     type="date"
                     name="outward_entry_date"
@@ -875,7 +1008,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                 </div>
 
                 <div className="inward-form-group">
-                  <label>Client Name *</label>
+                  <label>Client Name <ReqStar field="outward_client_name" /></label>
                   <input
                     type="text"
                     name="outward_client_name"
@@ -887,18 +1020,19 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                 </div>
 
                 <div className="inward-form-group">
-                  <label>Dock No.</label>
+                  <label>Dock No. <ReqStar field="outward_dock_no" /></label>
                   <input
                     type="text"
                     name="outward_dock_no"
                     value={formData.outward_dock_no}
                     onChange={handleInputChange}
                     placeholder="e.g. Dock-1"
+                    required
                   />
                 </div>
 
                 <div className="inward-form-group">
-                  <label>Material Type</label>
+                  <label>Material Type <ReqStar field="outward_material_type" /></label>
                   {isMaterialCustom ? (
                     <div className="input-with-reset">
                       <input
@@ -907,6 +1041,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                         value={formData.outward_material_type}
                         onChange={handleInputChange}
                         placeholder="Enter Material Type"
+                        required
                       />
                       <button type="button" className="field-reset-btn" onClick={() => { setIsMaterialCustom(false); setFormData(p => ({ ...p, outward_material_type: 'Frozen' })); }}>Select</button>
                     </div>
@@ -914,6 +1049,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     <select
                       name="outward_material_type"
                       value={formData.outward_material_type}
+                      required
                       onChange={(e) => {
                         if (e.target.value === 'other') {
                           setIsMaterialCustom(true);
@@ -940,7 +1076,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Vehicle No. *</label>
+                  <label>Vehicle No. <ReqStar field="outward_vehicle_no" /></label>
                   <input
                     type="text"
                     name="outward_vehicle_no"
@@ -963,13 +1099,14 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                 </div>
 
                 <div className="inward-form-group">
-                  <label>Transporter Name</label>
+                  <label>Transporter Name <ReqStar field="outward_transporter_name" /></label>
                   <input
                     type="text"
                     name="outward_transporter_name"
                     value={formData.outward_transporter_name}
                     onChange={handleInputChange}
                     placeholder="e.g. BlueDart Express"
+                    required
                   />
                 </div>
               </div>
@@ -982,17 +1119,18 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Driver Name</label>
+                  <label>Driver Name <ReqStar field="outward_driver_name" /></label>
                   <input
                     type="text"
                     name="outward_driver_name"
                     value={formData.outward_driver_name}
                     onChange={handleInputChange}
                     placeholder="e.g. Rajesh kumar"
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Driver Phone No.</label>
+                  <label>Driver Phone No. <ReqStar field="outward_driver_no" /></label>
                   <div style={{ display: 'flex', gap: '6px' }}>
                     <select
                       value={driverCountryCode}
@@ -1025,54 +1163,60 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                       onChange={handleInputChange}
                       placeholder="98765 43210"
                       style={{ flex: 1 }}
+                      required
                     />
                   </div>
                 </div>
                 <div className="inward-form-group">
-                  <label>Vehicle Reporting Time</label>
+                  <label>Vehicle Reporting Time <ReqStar field="outward_vehicle_reporting_time" /></label>
                   <input
                     type="time"
                     name="outward_vehicle_reporting_time"
                     value={formData.outward_vehicle_reporting_time}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Loading Start Date</label>
+                  <label>Loading Start Date <ReqStar field="outward_loading_start_date" /></label>
                   <input
                     type="date"
                     name="outward_loading_start_date"
                     min={formData.outward_entry_date}
                     value={formData.outward_loading_start_date}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Loading Start Time</label>
+                  <label>Loading Start Time <ReqStar field="outward_loading_start_time" /></label>
                   <input
                     type="time"
                     name="outward_loading_start_time"
                     value={formData.outward_loading_start_time}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Loading End Date</label>
+                  <label>Loading End Date <ReqStar field="outward_loading_end_date" /></label>
                   <input
                     type="date"
                     name="outward_loading_end_date"
                     min={formData.outward_loading_start_date || formData.outward_entry_date}
                     value={formData.outward_loading_end_date}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Loading End Time</label>
+                  <label>Loading End Time <ReqStar field="outward_loading_end_time" /></label>
                   <input
                     type="time"
                     name="outward_loading_end_time"
                     value={formData.outward_loading_end_time ? (formData.outward_loading_end_time.includes(' ') ? formData.outward_loading_end_time.split(' ')[1] : formData.outward_loading_end_time) : '12:30'}
                     onChange={handleInputChange}
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
@@ -1105,7 +1249,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Pre Vehicle Temp. (°C)</label>
+                  <label>Pre Vehicle Temp. (°C) <ReqStar field="outward_pre_vehicle_temp" /></label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -1113,10 +1257,11 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_pre_vehicle_temp}
                     onChange={handleInputChange}
                     placeholder="-18.5"
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Outward Material Temp. (°C)</label>
+                  <label>Outward Material Temp. (°C) <ReqStar field="outward_material_temp" /></label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -1124,6 +1269,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_material_temp}
                     onChange={handleInputChange}
                     placeholder="-20.2"
+                    required
                   />
                 </div>
               </div>
@@ -1136,7 +1282,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Pallets Out Qty</label>
+                  <label>Pallets Out Qty <ReqStar field="outward_pallets_in_qty" /></label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1144,10 +1290,11 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_pallets_in_qty}
                     onChange={handleInputChange}
                     placeholder="0"
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Invoice Boxes Qty</label>
+                  <label>Invoice Boxes Qty <ReqStar field="outward_invoice_qty" /></label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1155,10 +1302,11 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_invoice_qty}
                     onChange={handleInputChange}
                     placeholder="0"
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Boxes Loaded Qty</label>
+                  <label>Boxes Loaded Qty <ReqStar field="outward_received_boxes_qty" /></label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1166,10 +1314,11 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Damage Qty</label>
+                  <label>Damage Qty <ReqStar field="outward_damage_received_boxes_qty" /></label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1177,6 +1326,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_damage_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
+                    required
                   />
                 </div>
                 <div className="inward-form-group">
@@ -1209,13 +1359,14 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
                 <div className="inward-form-group">
-                  <label>Loading Supervisor Name</label>
+                  <label>Loading Supervisor Name <ReqStar field="outward_loading_supervisor_name" /></label>
                   <input
                     type="text"
                     name="outward_loading_supervisor_name"
                     value={formData.outward_loading_supervisor_name}
                     onChange={handleInputChange}
                     placeholder="e.g. Sandeep V."
+                    required
                   />
                 </div>
                 <div className="inward-form-group span-3">
@@ -1238,46 +1389,40 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
               </h5>
               <div className="inward-form-grid">
 
-                {/* Invoice Photo */}
+                {/* Invoice Photos */}
                 <div className="inward-form-group file-field">
-                  <label>Invoice Photo</label>
-                  {!invoicePreview ? (
-                    <div className="image-uploader-btn">
-                      <Camera size={18} />
-                      <span>Choose Invoice Photo</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleSingleImageChange(e, setInvoicePhoto, setInvoicePreview)}
-                      />
-                    </div>
-                  ) : (
-                    <div className="sensor-photo-verified-card">
-                      <div className="verified-thumb-wrapper">
-                        <img src={invoicePreview} alt="Invoice Verified" />
-                        <div className="verified-check-badge">
-                          <Check size={8} />
+                  <label>Invoice Photos <ReqStar field="invoice_photos" /></label>
+                  <div className="image-uploader-btn">
+                    <Camera size={18} />
+                    <span>Choose Invoice Photos</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      onChange={handleMultipleInvoiceChange}
+                    />
+                  </div>
+                  {invoicePreviews.length > 0 && (
+                    <div className="preview-thumbnails">
+                      {invoicePreviews.map((url, idx) => (
+                        <div key={idx} className="thumb-container">
+                          <img src={url} alt={`Invoice ${idx}`} className="mini-thumb" />
+                          <button
+                            type="button"
+                            className="thumb-remove"
+                            onClick={() => {
+                              setInvoicePhotos(p => p.filter((_, i) => i !== idx));
+                              setInvoicePreviews(p => p.filter((_, i) => i !== idx));
+                            }}
+                            title="Remove Photo"
+                          >
+                            ×
+                          </button>
+                          <div className="thumb-verified-check">
+                            <Check size={6} />
+                          </div>
                         </div>
-                      </div>
-                      <div className="verified-action-group">
-                        <button
-                          type="button"
-                          className="retake-icon-btn"
-                          onClick={() => { setInvoicePhoto(null); setInvoicePreview(null); }}
-                          title="Retake Photo"
-                        >
-                          <RefreshCw size={12} />
-                          <span>Retake</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="delete-photo-btn"
-                          onClick={() => { setInvoicePhoto(null); setInvoicePreview(null); }}
-                          title="Remove Photo"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1372,7 +1517,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
 
                 {/* Vehicle Back Side Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Vehicle Back Side Photo</label>
+                  <label>Vehicle Back Side Photo <ReqStar field="vehicle_back_photo" /></label>
                   {!vehicleBackPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
@@ -1380,7 +1525,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleSingleImageChange(e, setVehicleBackPhoto, setVehicleBackPreview)}
+                        onChange={(e) => handleSingleImageChange(e, setVehicleBackPhoto, setVehicleBackPreview, 'vehicle_back_photo')}
                       />
                     </div>
                   ) : (
@@ -1416,7 +1561,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
 
                 {/* Vehicle Back Side with Material Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Vehicle Back Side Photo with Material</label>
+                  <label>Vehicle Back Side Photo with Material <ReqStar field="vehicle_back_with_material_photo" /></label>
                   {!vehicleBackWithMaterialPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
@@ -1424,7 +1569,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleSingleImageChange(e, setVehicleBackWithMaterialPhoto, setVehicleBackWithMaterialPreview)}
+                        onChange={(e) => handleSingleImageChange(e, setVehicleBackWithMaterialPhoto, setVehicleBackWithMaterialPreview, 'vehicle_back_with_material_photo')}
                       />
                     </div>
                   ) : (
@@ -1460,7 +1605,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
 
                 {/* Vehicle Temp Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Pre Vehicle Temp Photo</label>
+                  <label>Pre Vehicle Temp Photo <ReqStar field="vehicle_temp_photo" /></label>
                   {!vehicleTempPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
@@ -1468,7 +1613,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleSingleImageChange(e, setVehicleTempPhoto, setVehicleTempPreview)}
+                        onChange={(e) => handleSingleImageChange(e, setVehicleTempPhoto, setVehicleTempPreview, 'vehicle_temp_photo')}
                       />
                     </div>
                   ) : (
@@ -1504,7 +1649,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
 
                 {/* Material Temp Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Outward Material Temp Photo</label>
+                  <label>Outward Material Temp Photo <ReqStar field="material_temp_photo" /></label>
                   {!materialTempPreview ? (
                     <div className="image-uploader-btn">
                       <Camera size={18} />
@@ -1512,7 +1657,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                       <input
                         type="file"
                         accept="image/*"
-                        onChange={(e) => handleSingleImageChange(e, setMaterialTempPhoto, setMaterialTempPreview)}
+                        onChange={(e) => handleSingleImageChange(e, setMaterialTempPhoto, setMaterialTempPreview, 'material_temp_photo')}
                       />
                     </div>
                   ) : (
@@ -1546,53 +1691,47 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   )}
                 </div>
 
-                {/* Count Sheet Photo Upload */}
+                {/* Count Sheet Photos Upload */}
                 <div className="inward-form-group file-field">
-                  <label>Outward Count Sheet Photo</label>
-                  {!countSheetPreview ? (
-                    <div className="image-uploader-btn">
-                      <Camera size={18} />
-                      <span>Choose Outward Count Sheet Photo</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleSingleImageChange(e, setCountSheetPhoto, setCountSheetPreview)}
-                      />
-                    </div>
-                  ) : (
-                    <div className="sensor-photo-verified-card">
-                      <div className="verified-thumb-wrapper">
-                        <img src={countSheetPreview} alt="Count Sheet Verified" />
-                        <div className="verified-check-badge">
-                          <Check size={8} />
+                  <label>Outward Count Sheet Photos <ReqStar field="count_sheet_photo" /></label>
+                  <div className="image-uploader-btn">
+                    <Camera size={18} />
+                    <span>Choose Count Sheet Photos</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      onChange={handleMultipleCountSheetChange}
+                    />
+                  </div>
+                  {countSheetPreviews.length > 0 && (
+                    <div className="preview-thumbnails">
+                      {countSheetPreviews.map((url, idx) => (
+                        <div key={idx} className="thumb-container">
+                          <img src={url} alt={`Count Sheet ${idx}`} className="mini-thumb" />
+                          <button
+                            type="button"
+                            className="thumb-remove"
+                            onClick={() => {
+                              setCountSheetPhotos(p => p.filter((_, i) => i !== idx));
+                              setCountSheetPreviews(p => p.filter((_, i) => i !== idx));
+                            }}
+                            title="Remove Photo"
+                          >
+                            ×
+                          </button>
+                          <div className="thumb-verified-check">
+                            <Check size={6} />
+                          </div>
                         </div>
-                      </div>
-                      <div className="verified-action-group">
-                        <button
-                          type="button"
-                          className="retake-icon-btn"
-                          onClick={() => { setCountSheetPhoto(null); setCountSheetPreview(null); }}
-                          title="Retake Photo"
-                        >
-                          <RefreshCw size={12} />
-                          <span>Retake</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="delete-photo-btn"
-                          onClick={() => { setCountSheetPhoto(null); setCountSheetPreview(null); }}
-                          title="Remove Photo"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
+                      ))}
                     </div>
                   )}
                 </div>
 
                 {/* Damage Boxes Photo */}
                 <div className="inward-form-group file-field">
-                  <label>Damage Boxes Photos (Multiple allowed)</label>
+                  <label>Damage Boxes Photos <ReqStar field="damage_boxes_photo" /> (required if Damage Qty &gt; 0)</label>
                   <div
                     className={`image-uploader-btn ${((parseInt(formData.outward_damage_received_boxes_qty) || 0) <= 0) ? 'disabled' : ''}`}
                     style={((parseInt(formData.outward_damage_received_boxes_qty) || 0) <= 0) ? { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' } : {}}
@@ -1665,12 +1804,12 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
         </div>
       )}
 
-      {/* Verification Modal Popup Overlay */}
-      {verificationData && (
-        <div className="verification-modal-overlay">
+      {/* Verification Modal Popup Overlay — portaled so Super Admin edit also shows DO-style popup */}
+      {verificationData && createPortal(
+        <div className="verification-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="outward-verify-title">
           <div className="verification-modal-content">
             <div className="direct-form-header">
-              <h3 className="verify-title">
+              <h3 id="outward-verify-title" className="verify-title">
                 <CheckCircle size={20} color="#10b981" />
                 <span>Verify Outward Time Audit</span>
               </h3>
@@ -1684,8 +1823,8 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   <div className="comp-item">
                     <span className="comp-label">Calculated End Time</span>
                     <div className="comp-val-dt">
-                      <span className="comp-date">{formData.outward_loading_end_time.split(' ')[0]}</span>
-                      <span className="comp-time">{formData.outward_loading_end_time.split(' ')[1]}</span>
+                      <span className="comp-date">{verificationData.end_date_str}</span>
+                      <span className="comp-time">{verificationData.end_time_str}</span>
                     </div>
                   </div>
                   <div className="comp-divider">⚡</div>
@@ -1716,10 +1855,9 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   </div>
                 )}
 
-                {/* Show Date Discrepancy Alert */}
-                {verificationData.photo_date_str !== formData.outward_loading_end_time.split(' ')[0] && (
+                {verificationData.photo_date_str !== verificationData.end_date_str && (
                   <div className="variance-alert-banner" style={{ marginTop: '8px', border: '1.5px solid #ef4444', color: '#b91c1c', backgroundColor: '#fef2f2' }}>
-                    ⚠️ Date Alert: Inspection Photo captured on {verificationData.photo_date_str}, but loading end date is calculated as {formData.outward_loading_end_time.split(' ')[0]}!
+                    ⚠️ Date Alert: Inspection Photo captured on {verificationData.photo_date_str}, but loading end date is calculated as {verificationData.end_date_str}!
                   </div>
                 )}
               </div>
@@ -1741,11 +1879,19 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                 onClick={handleConfirmSubmit}
                 disabled={submitting}
               >
-                <span>Confirm & Save</span>
+                {submitting ? (
+                  <>
+                    <Loader2 size={16} className="spinner-icon" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <span>Confirm & Save</span>
+                )}
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>
