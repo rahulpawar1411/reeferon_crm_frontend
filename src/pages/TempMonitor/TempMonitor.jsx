@@ -32,6 +32,21 @@ function getLocalTodayStr() {
 
 function buildInitialFormState() {
   const todayStr = getLocalTodayStr();
+
+  let defaultSupervisor = '';
+  try {
+    const userJson = localStorage.getItem('user');
+    if (userJson) {
+      const parsedUser = JSON.parse(userJson);
+      defaultSupervisor = parsedUser.full_name || parsedUser.fullName || parsedUser.email || '';
+    }
+  } catch (err) {
+    console.error('Failed to parse logged-in user', err);
+  }
+
+  const now = new Date();
+  const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
   const draft = readChamberFormDraft();
   if (draft) {
     return {
@@ -39,12 +54,13 @@ function buildInitialFormState() {
         entry_date: draft.entry_date || todayStr,
         client_name: draft.client_name || '',
         chamber_name: draft.chamber_name || 'BDF-1',
-        inspection_time: draft.inspection_time || '11:00',
-        chamber_temp: draft.chamber_temp || '',
-        monitor_supervisor_name: draft.monitor_supervisor_name || ''
+        inspection_time: draft.inspection_time || currentTimeStr,
+        box_temp: draft.box_temp || '',
+        monitor_supervisor_name: defaultSupervisor || draft.monitor_supervisor_name || '',
+        box_count: draft.box_count || ''
       },
       isChamberCustom: !isPresetChamber(draft.chamber_name || 'BDF-1'),
-      isTimeCustom: !isPresetInspectionTime(draft.inspection_time || '11:00')
+      isTimeCustom: !isPresetInspectionTime(draft.inspection_time || currentTimeStr)
     };
   }
   return {
@@ -52,9 +68,10 @@ function buildInitialFormState() {
       entry_date: todayStr,
       client_name: '',
       chamber_name: 'BDF-1',
-      inspection_time: '11:00',
-      chamber_temp: '',
-      monitor_supervisor_name: ''
+      inspection_time: currentTimeStr,
+      box_temp: '',
+      monitor_supervisor_name: defaultSupervisor,
+      box_count: ''
     },
     isChamberCustom: false,
     isTimeCustom: false
@@ -134,14 +151,15 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
   useEffect(() => {
     if (editData) {
       const chamber = editData.chamber_name || 'BDF-1';
-      const time = editData.inspection_time || '11:00';
+      const time = editData.inspection_time || '';
       setFormData({
         entry_date: editData.formatted_date || (editData.entry_date ? editData.entry_date.split('T')[0] : todayStr),
         client_name: editData.client_name || '',
         chamber_name: chamber,
         inspection_time: time,
-        chamber_temp: editData.chamber_temp !== undefined && editData.chamber_temp !== null ? editData.chamber_temp.toString() : '',
-        monitor_supervisor_name: editData.monitor_supervisor_name || ''
+        box_temp: editData.box_temp !== undefined && editData.box_temp !== null ? editData.box_temp.toString() : '',
+        monitor_supervisor_name: editData.monitor_supervisor_name || '',
+        box_count: editData.box_count !== undefined && editData.box_count !== null ? editData.box_count.toString() : ''
       });
       setIsChamberCustom(!isPresetChamber(chamber));
       setIsTimeCustom(!isPresetInspectionTime(time));
@@ -301,7 +319,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
     const isClientEmpty = !formData.client_name || !formData.client_name.trim();
     const isChamberEmpty = !formData.chamber_name || !formData.chamber_name.trim();
     const isTimeEmpty = !formData.inspection_time;
-    const isTempEmpty = !formData.chamber_temp;
+    const isTempEmpty = !formData.box_temp;
     const isSupervisorEmpty = !formData.monitor_supervisor_name || !formData.monitor_supervisor_name.trim();
     const isPhotoEmpty = !(imageFile || imagePreview);
 
@@ -313,7 +331,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
       if (isClientEmpty) missingFields.push('Client Name');
       if (isChamberEmpty) missingFields.push('Chamber Name');
       if (isTimeEmpty) missingFields.push('Inspection Time');
-      if (isTempEmpty) missingFields.push('Chamber Temp');
+      if (isTempEmpty) missingFields.push('Box Temp');
       if (isSupervisorEmpty) missingFields.push('Monitor Supervisor Name');
       if (isPhotoEmpty) missingFields.push('Temp Sensor Photo');
 
@@ -351,8 +369,9 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
     submissionData.append('client_name', formData.client_name);
     submissionData.append('chamber_name', formData.chamber_name);
     submissionData.append('inspection_time', formData.inspection_time);
-    submissionData.append('chamber_temp', formData.chamber_temp);
+    submissionData.append('box_temp', formData.box_temp);
     submissionData.append('monitor_supervisor_name', formData.monitor_supervisor_name);
+    submissionData.append('box_count', formData.box_count || '');
     
     // Pass frontend-audited capture times to the backend database insert
     if (verificationData) {
@@ -389,13 +408,27 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
     if (fileInputRef.current) fileInputRef.current.value = '';
 
     clearChamberFormDraft();
+    
+    const now = new Date();
+    const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    
+    let defaultSupervisor = '';
+    try {
+      const userJson = localStorage.getItem('user');
+      if (userJson) {
+        const parsedUser = JSON.parse(userJson);
+        defaultSupervisor = parsedUser.full_name || parsedUser.fullName || parsedUser.email || '';
+      }
+    } catch (err) {}
+
     setFormData({
       entry_date: todayStr,
       client_name: '',
       chamber_name: 'BDF-1',
-      inspection_time: '11:00',
-      chamber_temp: '',
-      monitor_supervisor_name: ''
+      inspection_time: currentTimeStr,
+      box_temp: '',
+      monitor_supervisor_name: defaultSupervisor,
+      box_count: ''
     });
 
     setTimeout(() => {
@@ -543,22 +576,34 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
               )}
             </div>
 
-            {/* Field 5: Chamber Temp (°C) */}
+            {/* Field 5: Box Temp (°C) */}
             <div className="direct-form-group">
-              <label>Chamber Temp (°C) *</label>
+              <label>Box Temp (°C) *</label>
               <input 
                 type="number" 
                 step="0.1" 
                 placeholder="e.g. -18.5"
-                value={formData.chamber_temp}
+                value={formData.box_temp}
                 onChange={(e) => {
                   const val = e.target.value;
                   if (val === '' || /^-?\d*\.?\d*$/.test(val)) {
-                    setFormData({ ...formData, chamber_temp: val });
+                    setFormData({ ...formData, box_temp: val });
                   }
                 }}
                 required
-                className={showErrors && !formData.chamber_temp ? 'input-error' : ''}
+                className={showErrors && !formData.box_temp ? 'input-error' : ''}
+              />
+            </div>
+
+            {/* Field 5.5: Box Count */}
+            <div className="direct-form-group">
+              <label>Box Count</label>
+              <input 
+                type="number" 
+                min="0"
+                placeholder="e.g. 150"
+                value={formData.box_count}
+                onChange={(e) => setFormData({ ...formData, box_count: e.target.value })}
               />
             </div>
 
@@ -567,10 +612,11 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
               <label>Monitor Supervisor Name *</label>
               <input 
                 type="text" 
-                placeholder="e.g. Rajesh Kumar"
+                placeholder="Logged in supervisor"
                 value={formData.monitor_supervisor_name}
-                onChange={(e) => setFormData({ ...formData, monitor_supervisor_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+                readOnly
                 required
+                style={{ backgroundColor: '#f1f5f9', cursor: 'not-allowed' }}
                 className={showErrors && !formData.monitor_supervisor_name ? 'input-error' : ''}
               />
             </div>

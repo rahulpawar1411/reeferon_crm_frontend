@@ -1583,32 +1583,33 @@
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
 }
 
 .secure-admin-viewport .logs-table th {
   background-color: #f8fafc;
   color: #475569;
   font-weight: 800;
-  padding: 8px 10px !important;
+  padding: 4px 6px !important;
   border-bottom: 1.5px solid var(--border);
   white-space: nowrap;
-  line-height: 1.25;
+  line-height: 1.2;
   vertical-align: bottom;
-  font-size: 0.74rem;
+  font-size: 0.7rem;
 }
 
 .secure-admin-viewport .logs-table td {
-  padding: 8px 10px !important;
+  padding: 4px 6px !important;
   border-bottom: 1px solid var(--border);
   color: var(--text-dark);
   vertical-align: middle;
   white-space: nowrap;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
 }
 
 .secure-admin-viewport .logs-table .status-badge {
-  font-size: 0.7rem !important;
+  font-size: 0.65rem !important;
+  padding: 1px 4px !important;
 }
 
 /* Pagination sizing is locked in PaginationBar.css — do not override fonts here */

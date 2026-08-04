@@ -52,6 +52,8 @@ function buildLogListQuery(params = {}) {
   if (params.fromDate) qs.set('fromDate', params.fromDate);
   if (params.toDate) qs.set('toDate', params.toDate);
   if (params.warehouse && params.warehouse !== 'All') qs.set('warehouse', params.warehouse);
+  if (params.action && params.action !== 'All') qs.set('action', params.action);
+  if (params.category) qs.set('category', params.category);
   if (params.export) qs.set('export', '1');
   const s = qs.toString();
   return s ? `?${s}` : '';
@@ -68,12 +70,14 @@ async function fetchLogListEndpoint(path, params = {}) {
   return normalizeLogListResponse(data);
 }
 
-/** Fetch every page for export (chunked, yields to UI). */
+/** Fetch every page for export (chunked, yields to UI). Caps at maxRows. */
 export async function fetchAllLogPages(path, params = {}, onProgress) {
   const pageLimit = params.limit ?? 500;
+  const maxRows = params.maxRows ?? 100000;
   let page = 1;
   const all = [];
   let total = 0;
+  let warned = false;
 
   for (;;) {
     const chunk = await fetchLogListEndpoint(path, {
@@ -82,10 +86,28 @@ export async function fetchAllLogPages(path, params = {}, onProgress) {
       limit: pageLimit,
       export: true
     });
-    if (page === 1) total = chunk.total;
+    if (page === 1) {
+      total = chunk.total;
+      if (total > maxRows) {
+        throw new Error(
+          `Export too large (${Number(total).toLocaleString()} rows). Maximum is ${maxRows.toLocaleString()} rows. Please narrow the date range or filters.`
+        );
+      }
+      if (total >= 50000 && !warned) {
+        const ok = window.confirm(
+          `This export has about ${Number(total).toLocaleString()} rows and may take time.\n\nContinue?`
+        );
+        if (!ok) throw new Error('Export cancelled.');
+        warned = true;
+      }
+    }
     all.push(...chunk.items);
     if (typeof onProgress === 'function') {
       onProgress({ loaded: all.length, total: total || chunk.total, page });
+    }
+    if (all.length >= maxRows) {
+      all.length = maxRows;
+      break;
     }
     if (!chunk.hasMore || chunk.items.length === 0) break;
     page += 1;
@@ -108,9 +130,27 @@ export const fetchAllOutwardLogs = (params, onProgress) =>
 
 // Globally override fetch to enforce HttpOnly Cookies credentials passing in development & production
 const originalFetch = window.fetch;
-window.fetch = function (url, options = {}) {
+window.fetch = async function (url, options = {}) {
   options.credentials = 'include';
-  return originalFetch(url, options);
+  try {
+    const res = await originalFetch(url, options);
+    const urlStr = typeof url === 'string' ? url : (url && url.url ? url.url : '');
+    
+    // If unauthorized (401) and not a login request, clear storage and log out
+    if (
+      res.status === 401 &&
+      !urlStr.includes('/auth/login') &&
+      !urlStr.includes('/auth/verify-profile-access') &&
+      !urlStr.includes('/permission-requests/check')
+    ) {
+      console.warn('⚠️ Session expired (401). Logging out...');
+      localStorage.removeItem('user');
+      window.dispatchEvent(new Event('unauthorized-session-expired'));
+    }
+    return res;
+  } catch (err) {
+    throw err;
+  }
 };
 
 // In-memory fallback for Chamber Logs
@@ -174,7 +214,7 @@ export const addChamberLog = async (logData) => {
     client_name: logData.client_name || '',
     chamber_name: logData.chamber_name || '',
     inspection_time: logData.inspection_time || '11:00 AM',
-    chamber_temp: parseFloat(logData.chamber_temp || 0),
+    box_temp: parseFloat(logData.box_temp || 0),
     monitor_supervisor_name: logData.monitor_supervisor_name || '',
     chamber_image: null,
     created_at: new Date().toISOString()
@@ -629,7 +669,10 @@ export const deleteLead = async (id) => {
 export const fetchDashboardStats = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/dashboard`);
-    if (res.ok) return await res.json();
+    if (res.ok) {
+      const data = await res.json();
+      return data.stats || data;
+    }
   } catch (err) {}
   return {
     totalLeads: fallbackLeads.length,
@@ -638,6 +681,20 @@ export const fetchDashboardStats = async () => {
     wonLeads: fallbackLeads.filter(l => l.status === 'Won').length,
     recentLeads: fallbackLeads.slice(0, 5)
   };
+};
+
+export const fetchInventoryReconciliation = async ({ search, warehouse } = {}) => {
+  const queryParams = new URLSearchParams();
+  if (search) queryParams.append('search', search);
+  if (warehouse) queryParams.append('warehouse', warehouse);
+
+  const res = await fetch(`${API_BASE_URL}/dashboard/inventory-reconciliation?${queryParams.toString()}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch inventory reconciliation logs.');
+  }
+  const data = await res.json();
+  return data.items || [];
 };
 
 // ====================================================================
@@ -792,14 +849,13 @@ export const updateCustomerReportStatus = async (id, status) => {
   return data;
 };
 
-export const fetchOperatorActivities = async () => {
-  const res = await fetch(`${API_BASE_URL}/operator-activities`);
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to fetch operator activity logs.');
-  }
-  return await res.json();
+/** Paginated activity / security / system logs. Returns { items, total, page, limit, hasMore }. */
+export const fetchOperatorActivities = async (params = {}) => {
+  return fetchLogListEndpoint('/operator-activities', params);
 };
+
+export const fetchAllOperatorActivities = (params = {}, onProgress) =>
+  fetchAllLogPages('/operator-activities', params, onProgress);
 
 // ====================================================================
 // 6. Permission Requests APIs
@@ -903,4 +959,40 @@ export const verifySuperAdminProfileAccess = async ({ email, password }) => {
     throw new Error(data.message || data.error || 'Verification failed.');
   }
   return data;
+};
+
+// ====================================================================
+// 7. Native Mobile Inspections APIs
+// ====================================================================
+export const fetchDailyInspections = async () => {
+  const res = await fetch(`${API_BASE_URL}/chambers/inspections`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch native daily inspections.');
+  }
+  const body = await res.json();
+  return body.data || [];
+};
+
+export const deleteDailyInspection = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/chambers/inspections/${id}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to delete inspection log.');
+  }
+  return await res.json();
+};
+
+export const fetchDailyInventoryDeltas = async ({ warehouse } = {}) => {
+  const queryParams = new URLSearchParams();
+  if (warehouse) queryParams.append('warehouse', warehouse);
+
+  const res = await fetch(`${API_BASE_URL}/dashboard/daily-inventory-deltas?${queryParams.toString()}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch daily inventory comparisons.');
+  }
+  const data = await res.json();
+  return data.items || [];
 };

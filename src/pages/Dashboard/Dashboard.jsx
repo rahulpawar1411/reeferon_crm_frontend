@@ -5,7 +5,7 @@
 // ====================================================================
 
 import React, { useEffect, useState } from 'react';
-import { Users, UserPlus, Clock, Trophy } from 'lucide-react';
+import { Users, UserPlus, Clock, Trophy, AlertTriangle } from 'lucide-react';
 import StatCard from '../../components/StatCard/StatCard';
 import LeadCard from '../../components/LeadCard/LeadCard';
 import { fetchDashboardStats, fetchLeads } from '../../services/api';
@@ -17,7 +17,8 @@ export default function Dashboard({ setActiveTab, setSelectedLead }) {
     newLeads: 0,
     inProgressLeads: 0,
     wonLeads: 0,
-    totalValue: 0
+    totalValue: 0,
+    overdueInspections: 0
   });
 
   const [recentLeads, setRecentLeads] = useState([]);
@@ -54,7 +55,7 @@ export default function Dashboard({ setActiveTab, setSelectedLead }) {
         </div>
       </div>
 
-      {/* 2. Key Metrics Grid (4 columns Desktop, 2 columns Tablet/Mobile) */}
+      {/* 2. Key Metrics Grid (5 columns Desktop, 2 columns Tablet/Mobile) */}
       <div className="stats-grid">
         <StatCard 
           title="Total Leads" 
@@ -83,6 +84,13 @@ export default function Dashboard({ setActiveTab, setSelectedLead }) {
           icon={Trophy} 
           bgColor="#dcfce7" 
           color="#15803d" 
+        />
+        <StatCard 
+          title="Overdue Tasks Alert" 
+          value={stats.overdueInspections || 0} 
+          icon={AlertTriangle} 
+          bgColor={stats.overdueInspections > 0 ? '#fee2e2' : '#f1f5f9'} 
+          color={stats.overdueInspections > 0 ? '#dc2626' : '#64748b'} 
         />
       </div>
 

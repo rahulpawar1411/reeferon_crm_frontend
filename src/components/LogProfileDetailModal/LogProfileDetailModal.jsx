@@ -197,14 +197,15 @@ export default function LogProfileDetailModal({
                     <div className="profile-grid-list">
                       <ProfileField label="Date" value={formatDateStr(log.formatted_date || log.entry_date)} />
                       <ProfileField label="Reference No" value={log.reference_no || '-'} copyable />
-                      <ProfileField label="Chamber Name" value={log.chamber_name} />
+                      <ProfileField label="Chamber Name" value={`${log.chamber_name} (${log.chamber_type || 'Frozen'})`} />
                       <ProfileField label="Client Name" value={log.client_name} />
                     </div>
                   </div>
                   <div className="profile-group-card">
                     <div className="profile-group-title">Temperature & Supervisor</div>
                     <div className="profile-grid-list">
-                      <ProfileField label="Chamber Temp" value={`${log.chamber_temp}°C`} />
+                      <ProfileField label="Box Temp" value={`${log.box_temp}°C`} />
+                      <ProfileField label="Box Count" value={log.box_count !== null ? log.box_count : '-'} />
                       <ProfileField label="Inspection Time" value={log.inspection_time || '-'} />
                       <ProfileField label="Supervisor Name" value={log.monitor_supervisor_name || '-'} />
                       <ProfileField
@@ -216,6 +217,7 @@ export default function LogProfileDetailModal({
                         }
                       />
                       <ProfileField label="Photo Capture Time" value={log.photo_capture_time || '-'} />
+                      <ProfileField label="Submission Delay (Overdue)" value={log.overdue_time || 'same day'} />
                     </div>
                   </div>
                 </>

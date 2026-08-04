@@ -9,12 +9,13 @@ import {
   ShieldCheck, Clock, LogOut, Database, Lock,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
   Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard,
-  Copy, Check, Loader2, CheckCircle, MessageSquareWarning
+  Copy, Check, Loader2, CheckCircle, MessageSquareWarning, Smartphone, Package, Users, LayoutGrid
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
 import PaginationBar from '../../components/PaginationBar/PaginationBar';
 import { 
   fetchOperators, createOperator, updateOperator, deleteOperator, fetchOperatorActivities,
+  fetchAllOperatorActivities,
   fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
   fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats,
   fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs,
@@ -22,8 +23,19 @@ import {
   toApiDateParam,
   fetchSubAdmins, createSubAdmin, updateSubAdmin, deleteSubAdmin, fetchAccessScopeOptions,
   changeSuperAdminPassword, verifySuperAdminProfileAccess,
-  fetchCustomerReports, updateCustomerReportStatus
+  fetchCustomerReports, updateCustomerReportStatus,
+  fetchDailyInspections, deleteDailyInspection,
+  fetchInventoryReconciliation, fetchDailyInventoryDeltas
 } from '../../services/api';
+import {
+  requireExportDates,
+  confirmExportSize,
+  downloadCsv,
+  formatExportProgress,
+  getExportErrorMessage,
+  isRetryableExportError
+} from '../../utils/exportCsv';
+import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
 import '../../components/DOSidebar/DOSidebar.css';
 import './SuperAdminSecureWindow.css';
 
@@ -95,6 +107,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [opFullName, setOpFullName] = useState('');
   const [opPhoneNo, setOpPhoneNo] = useState('');
   const [opWarehouseName, setOpWarehouseName] = useState('');
+  const [opChamberLimit, setOpChamberLimit] = useState(4);
   const [showPassword, setShowPassword] = useState(false);
   const [newAdminPassword, setNewAdminPassword] = useState('');
   const [confirmAdminPassword, setConfirmAdminPassword] = useState('');
@@ -120,8 +133,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [opProcessStatus, setOpProcessStatus] = useState('');
   const [operatorSearch, setOperatorSearch] = useState('');
 
-  // Activity Logs States
+  // Activity Logs States (server-paginated)
   const [activities, setActivities] = useState([]);
+  const [hasNewDOChanges, setHasNewDOChanges] = useState(false);
+  const [lastCheckedDOChanges, setLastCheckedDOChanges] = useState(() => localStorage.getItem('last_checked_do_changes') || '1970-01-01T00:00:00.000Z');
+  const [activitiesTotal, setActivitiesTotal] = useState(0);
   const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState('All');
   const [logsError, setLogsError] = useState('');
   const [loadingActivities, setLoadingActivities] = useState(false);
@@ -132,7 +148,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [activitiesToDate, setActivitiesToDate] = useState('');
   const [activitiesActionFilter, setActivitiesActionFilter] = useState('All');
   const [activitiesCurrentPage, setActivitiesCurrentPage] = useState(1);
-  const [activitiesPerPage] = useState(20);
+  const [activitiesPerPage] = useState(50);
 
 
   // Super Admin History Logs States
@@ -146,6 +162,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const historyPerPage = 50;
   const [appliedLogsSearch, setAppliedLogsSearch] = useState('');
   const [logsExportLoading, setLogsExportLoading] = useState(false);
+  const [logsExportProgressLabel, setLogsExportProgressLabel] = useState('Exporting…');
+  const [exportError, setExportError] = useState(null); // { message, retryable, retryKey }
   const [logsSearch, setLogsSearch] = useState('');
   const [selectedWarehouse, setSelectedWarehouse] = useState('All');
   const [fromDate, setFromDate] = useState('');
@@ -202,7 +220,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [securityToDate, setSecurityToDate] = useState('');
   const [securityActionFilter, setSecurityActionFilter] = useState('All');
   const [securityCurrentPage, setSecurityCurrentPage] = useState(1);
-  const [securityPerPage] = useState(20);
+  const [securityPerPage] = useState(50);
 
   // System & Error Logs States
   const [systemSearch, setSystemSearch] = useState('');
@@ -210,13 +228,76 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [systemToDate, setSystemToDate] = useState('');
   const [systemActionFilter, setSystemActionFilter] = useState('All');
   const [systemCurrentPage, setSystemCurrentPage] = useState(1);
-  const [systemPerPage] = useState(20);
+  const [systemPerPage] = useState(50);
 
   const [dashboardStats, setDashboardStats] = useState({
     totalLeads: 0,
     totalSubAdmins: 0,
     totalOperators: 0
   });
+
+  // Native Mobile Daily Inspections States
+  const [inspections, setInspections] = useState([]);
+  const [loadingInspections, setLoadingInspections] = useState(false);
+  const [inspectionsError, setInspectionsError] = useState('');
+  const [inspectionsSearch, setInspectionsSearch] = useState('');
+
+  // Inventory Log States
+  const [inventoryLogs, setInventoryLogs] = useState([]);
+  const [loadingInventory, setLoadingInventory] = useState(false);
+  const [inventoryError, setInventoryError] = useState('');
+  const [inventorySearch, setInventorySearch] = useState('');
+  const [inventoryWarehouseFilter, setInventoryWarehouseFilter] = useState('All');
+  const [inventoryDiscrepancyFilter, setInventoryDiscrepancyFilter] = useState(false);
+  const [inventorySubView, setInventorySubView] = useState('main'); // 'main' | 'breakdown'
+  const [breakdownCurrentPage, setBreakdownCurrentPage] = useState(1);
+  const [breakdownPerPage] = useState(15);
+
+  // Daily Box Tracker States
+  const [dailyDeltas, setDailyDeltas] = useState([]);
+  const [loadingDeltas, setLoadingDeltas] = useState(false);
+  const [deltasError, setDeltasError] = useState('');
+  const [deltasSearch, setDeltasSearch] = useState('');
+  const [deltasWarehouseFilter, setDeltasWarehouseFilter] = useState('All');
+  const [deltasCurrentPage, setDeltasCurrentPage] = useState(1);
+  const [deltasPerPage] = useState(10);
+
+  const loadDailyInventoryDeltas = async () => {
+    setLoadingDeltas(true);
+    setDeltasError('');
+    try {
+      const data = await fetchDailyInventoryDeltas({
+        warehouse: deltasWarehouseFilter === 'All' ? '' : deltasWarehouseFilter
+      });
+      setDailyDeltas(Array.isArray(data) ? data : []);
+      setDeltasCurrentPage(1);
+    } catch (err) {
+      console.error('Failed to fetch daily deltas:', err);
+      setDeltasError(err.message || 'Failed to fetch daily inventory comparison logs.');
+      setDailyDeltas([]);
+    } finally {
+      setLoadingDeltas(false);
+    }
+  };
+
+  const loadInventoryReconciliationData = async () => {
+    setLoadingInventory(true);
+    setInventoryError('');
+    try {
+      const data = await fetchInventoryReconciliation({
+        search: inventorySearch.trim(),
+        warehouse: inventoryWarehouseFilter
+      });
+      setInventoryLogs(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to fetch inventory logs:', err);
+      setInventoryError(err.message || 'Failed to fetch inventory reconciliation logs.');
+      setInventoryLogs([]);
+    } finally {
+      setLoadingInventory(false);
+    }
+  };
+
 
   // Sub-Admins Management States
   const [subAdmins, setSubAdmins] = useState([]);
@@ -282,6 +363,34 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
+  const loadDailyInspectionsData = async () => {
+    setLoadingInspections(true);
+    setInspectionsError('');
+    try {
+      const data = await fetchDailyInspections();
+      setInspections(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to fetch native daily inspections:', err);
+      setInspectionsError(err.message || 'Failed to fetch native daily inspections.');
+      setInspections([]);
+    } finally {
+      setLoadingInspections(false);
+    }
+  };
+
+  const handleDeleteDailyInspection = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this daily inspection log?')) {
+      return;
+    }
+    setInspectionsError('');
+    try {
+      await deleteDailyInspection(id);
+      await loadDailyInspectionsData();
+    } catch (err) {
+      setInspectionsError(err.message || 'Failed to delete inspection log.');
+    }
+  };
+
   const loadOperatorsData = async () => {
     setLoadingOps(true);
     setOpError('');
@@ -296,14 +405,73 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
   const loadActivities = async () => {
+    if (auditSubTab === 'permission_log') return;
+
+    const category =
+      auditSubTab === 'security_log' ? 'security' :
+      auditSubTab === 'system_errors' ? 'system' :
+      auditSubTab === 'do_changes' ? 'do_changes' :
+      'activity';
+
+    const page =
+      category === 'security' ? securityCurrentPage :
+      category === 'system' ? systemCurrentPage :
+      activitiesCurrentPage;
+
+    const limit =
+      category === 'security' ? securityPerPage :
+      category === 'system' ? systemPerPage :
+      activitiesPerPage;
+
+    const search =
+      category === 'security' ? securitySearch :
+      category === 'system' ? systemSearch :
+      activitiesSearch;
+
+    const fromDate =
+      category === 'security' ? securityFromDate :
+      category === 'system' ? systemFromDate :
+      activitiesFromDate;
+
+    const toDate =
+      category === 'security' ? securityToDate :
+      category === 'system' ? systemToDate :
+      activitiesToDate;
+
+    const action =
+      category === 'security' ? securityActionFilter :
+      category === 'system' ? systemActionFilter :
+      activitiesActionFilter;
+
     setLoadingActivities(true);
     setLogsError('');
     try {
-      const data = await fetchOperatorActivities();
-      setActivities(Array.isArray(data) ? data : []);
+      const data = await fetchOperatorActivities({
+        paginated: true,
+        page,
+        limit,
+        category,
+        search: (search || '').trim() || undefined,
+        fromDate: toApiDateParam(fromDate) || undefined,
+        toDate: toApiDateParam(toDate) || undefined,
+        action: action !== 'All' ? action : undefined,
+        warehouse: category === 'activity' && selectedWarehouseFilter !== 'All'
+          ? selectedWarehouseFilter
+          : undefined
+      });
+      setActivities(Array.isArray(data?.items) ? data.items : []);
+      setActivitiesTotal(Number(data?.total) || 0);
+      if (category === 'do_changes') {
+        const nowStr = new Date().toISOString();
+        localStorage.setItem('last_checked_do_changes', nowStr);
+        setLastCheckedDOChanges(nowStr);
+        setHasNewDOChanges(false);
+      }
     } catch (err) {
       console.error('Failed to fetch activity logs:', err);
       setLogsError(err.message || 'Failed to fetch activity logs.');
+      setActivities([]);
+      setActivitiesTotal(0);
     } finally {
       setLoadingActivities(false);
     }
@@ -579,8 +747,34 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       if (stats) {
         setDashboardStats(stats);
       }
+      checkNewDOChanges();
     } catch (err) {
       console.error('Error loading dashboard stats:', err);
+    }
+  };
+
+  const checkNewDOChanges = async () => {
+    try {
+      const data = await fetchOperatorActivities({
+        paginated: true,
+        page: 1,
+        limit: 1,
+        category: 'do_changes'
+      });
+      const latestLog = data?.items && data.items.length > 0 ? data.items[0] : null;
+      if (latestLog && latestLog.created_at) {
+        const logTime = new Date(latestLog.created_at).getTime();
+        const lastCheckTime = new Date(localStorage.getItem('last_checked_do_changes') || '1970-01-01T00:00:00.000Z').getTime();
+        if (logTime > lastCheckTime) {
+          setHasNewDOChanges(true);
+        } else {
+          setHasNewDOChanges(false);
+        }
+      } else {
+        setHasNewDOChanges(false);
+      }
+    } catch (err) {
+      console.warn('Failed to check for new DO changes:', err);
     }
   };
 
@@ -628,6 +822,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadDashboardStatsData();
       loadSubAdminsData();
       loadCustomerReportsData();
+      checkNewDOChanges();
     } else if (activeMenu === 'sub_admins') {
       loadSubAdminsData();
       loadAccessScopeOptions();
@@ -637,13 +832,32 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadOperatorsData();
     } else if (activeMenu === 'activity_logs') {
       loadOperatorsData();
-      loadActivities();
       loadPermissionRequests();
       loadSystemConfig();
     } else if (activeMenu === 'history_logs' || activeMenu === 'profile_lookup') {
       loadOperatorsData();
+    } else if (activeMenu === 'native_inspections') {
+      loadDailyInspectionsData();
+    } else if (activeMenu === 'inventory_log') {
+      loadOperatorsData();
+      loadInventoryReconciliationData();
+    } else if (activeMenu === 'daily_box_tracker') {
+      loadDailyInventoryDeltas();
     }
   }, [activeMenu]);
+
+  useEffect(() => {
+    if (activeMenu !== 'daily_box_tracker') return;
+    loadDailyInventoryDeltas();
+  }, [activeMenu, deltasWarehouseFilter]);
+
+  useEffect(() => {
+    if (activeMenu !== 'inventory_log') return;
+    const timer = setTimeout(() => {
+      loadInventoryReconciliationData();
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [activeMenu, inventorySearch, inventoryWarehouseFilter]);
 
   useEffect(() => {
     if (activeMenu !== 'history_logs') return;
@@ -653,6 +867,42 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   useEffect(() => {
     setHistoryPage(1);
   }, [historyTab]);
+
+  useEffect(() => {
+    if (activeMenu !== 'activity_logs') return;
+    if (auditSubTab === 'permission_log') return;
+    const timer = setTimeout(() => {
+      loadActivities();
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [
+    activeMenu,
+    auditSubTab,
+    activitiesCurrentPage,
+    securityCurrentPage,
+    systemCurrentPage,
+    activitiesSearch,
+    activitiesFromDate,
+    activitiesToDate,
+    activitiesActionFilter,
+    securitySearch,
+    securityFromDate,
+    securityToDate,
+    securityActionFilter,
+    systemSearch,
+    systemFromDate,
+    systemToDate,
+    systemActionFilter,
+    selectedWarehouseFilter
+  ]);
+
+  useEffect(() => {
+    setActivitiesCurrentPage(1);
+    setSecurityCurrentPage(1);
+    setSystemCurrentPage(1);
+    setActivities([]);
+    setActivitiesTotal(0);
+  }, [auditSubTab]);
 
   const handleLookupSearch = async () => {
     const q = lookupQuery.trim();
@@ -729,238 +979,158 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
-  const getFilteredActivities = () => {
-    let list = (activities || []).filter(act => 
-      act && 
-      act.log_type !== 'PERMISSION' && 
-      act.log_type !== 'SECURITY' &&
-      act.log_type !== 'ERROR' &&
-      act.log_type !== 'SYSTEM' &&
-      act.action !== 'SYSTEM_ERROR'
-    );
-
-    // Apply warehouse filter (keep Super Admin / System rows visible with DO warehouses;
-    // "System/Admin" option shows only those without a DO warehouse mapping)
-    if (selectedWarehouseFilter !== 'All') {
-      list = list.filter(act => {
-        if (!act) return false;
-        const opEmail = act.operator_email ? act.operator_email.toLowerCase() : '';
-        const opWarehouse = operatorWarehouseMap[opEmail] || '';
-        if (selectedWarehouseFilter === 'System/Admin') {
-          return !opWarehouse;
-        }
-        // Selected DO warehouse: include that warehouse's DO logs + Super Admin/system logs
-        if (!opWarehouse) return true;
-        return opWarehouse === selectedWarehouseFilter;
-      });
-    }
-
-    // Apply Action filter
-    if (activitiesActionFilter !== 'All') {
-      list = list.filter(act => act && act.action === activitiesActionFilter);
-    }
-
-    // Apply Search filter (matches operator email, DO name, description, action type)
-    if (activitiesSearch.trim() !== '') {
-      const q = activitiesSearch.toLowerCase().trim();
-      list = list.filter(act => 
-        act && (
-          (act.operator_email && act.operator_email.toLowerCase().includes(q)) ||
-          (act.description && act.description.toLowerCase().includes(q)) ||
-          (act.action && act.action.toLowerCase().includes(q)) ||
-          ((operators || []).some(
-            (op) =>
-              op &&
-              op.email &&
-              act.operator_email &&
-              op.email.toLowerCase() === act.operator_email.toLowerCase() &&
-              op.full_name &&
-              String(op.full_name).toLowerCase().includes(q)
-          ))
-        )
-      );
-    }
-
-    // Apply Date filters
-    if (activitiesFromDate) {
-      list = list.filter(act => {
-        if (!act || !act.created_at) return false;
-        const actDate = act.created_at.split('T')[0];
-        return actDate >= activitiesFromDate;
-      });
-    }
-    if (activitiesToDate) {
-      list = list.filter(act => {
-        if (!act || !act.created_at) return false;
-        const actDate = act.created_at.split('T')[0];
-        return actDate <= activitiesToDate;
-      });
-    }
-
-    return list;
+  const setExportFailure = (err, retryKey) => {
+    const message = getExportErrorMessage(err);
+    if (!message) return;
+    setExportError({
+      message,
+      retryable: isRetryableExportError(err),
+      retryKey
+    });
   };
 
+  const retryFailedExport = () => {
+    const key = exportError?.retryKey;
+    setExportError(null);
+    if (key === 'history') handleExportLogsExcel();
+    else if (key === 'activities') handleExportActivitiesExcel();
+    else if (key === 'security') handleExportSecurityExcel();
+    else if (key === 'system') handleExportSystemExcel();
+    else if (key === 'operators') handleExportOperatorsDirectory();
+  };
 
-  const handleExportActivitiesExcel = () => {
-    const list = getFilteredActivities();
-    let csvContent = "\uFEFF"; // UTF-8 BOM
-    const headers = ["Timestamp", "DO Name / Operator", "Operator Email", "Allocated Warehouse", "Action Type", "Module Log", "Activity Description"];
-    csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
+  const handleExportActivitiesExcel = async () => {
+    setExportError(null);
+    try {
+      requireExportDates(activitiesFromDate, activitiesToDate);
+      const { items: list } = await fetchAllOperatorActivities({
+        category: 'activity',
+        search: (activitiesSearch || '').trim() || undefined,
+        fromDate: toApiDateParam(activitiesFromDate),
+        toDate: toApiDateParam(activitiesToDate),
+        action: activitiesActionFilter !== 'All' ? activitiesActionFilter : undefined,
+        warehouse: selectedWarehouseFilter !== 'All' ? selectedWarehouseFilter : undefined,
+        limit: 500
+      });
+      if (!confirmExportSize(list.length)) throw new Error('Export cancelled.');
 
-    list.forEach(act => {
-      const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
-      const opEmail = act.operator_email || '-';
-      const matchedOp = (operators || []).find(
-        (op) => op && op.email && op.email.toLowerCase() === String(opEmail).toLowerCase()
-      );
-      const opName = matchedOp?.full_name ? String(matchedOp.full_name).trim() : '-';
-      const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System / Admin';
-      const action = act.action || '-';
-      const logType = act.log_type || '-';
-      const description = act.description || '-';
+      let csvContent = "\uFEFF";
+      const headers = ["Timestamp", "DO Name / Operator", "Operator Email", "Allocated Warehouse", "Action Type", "Module Log", "Activity Description"];
+      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
-      const row = [timestamp, opName, opEmail, opWarehouse, action, logType, description];
-      csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
-    });
+      list.forEach(act => {
+        const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
+        const opEmail = act.operator_email || '-';
+        const matchedOp = (operators || []).find(
+          (op) => op && op.email && op.email.toLowerCase() === String(opEmail).toLowerCase()
+        );
+        const opName = matchedOp?.full_name ? String(matchedOp.full_name).trim() : '-';
+        const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System / Admin';
+        const action = act.action || '-';
+        const logType = act.log_type || '-';
+        const description = act.description || '-';
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Operator_Activity_Audit_Trail_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+        const row = [timestamp, opName, opEmail, opWarehouse, action, logType, description];
+        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+
+      downloadCsv(`Operator_Activity_Audit_Trail_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+    } catch (err) {
+      setExportFailure(err, 'activities');
+    }
   };
 
   const handleExportOperatorsDirectory = () => {
-    const term = (operatorSearch || '').toLowerCase().trim();
-    const list = (operators || []).filter((op) => {
-      if (!op) return false;
-      if (!term) return true;
-      return (
-        (op.full_name && op.full_name.toLowerCase().includes(term)) ||
-        (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
-        (op.email && op.email.toLowerCase().includes(term)) ||
-        (op.phone_no && String(op.phone_no).toLowerCase().includes(term))
-      );
-    });
+    setExportError(null);
+    try {
+      const term = (operatorSearch || '').toLowerCase().trim();
+      const list = (operators || []).filter((op) => {
+        if (!op) return false;
+        if (!term) return true;
+        return (
+          (op.full_name && op.full_name.toLowerCase().includes(term)) ||
+          (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
+          (op.email && op.email.toLowerCase().includes(term)) ||
+          (op.phone_no && String(op.phone_no).toLowerCase().includes(term))
+        );
+      });
+      if (!confirmExportSize(list.length)) throw new Error('Export cancelled.');
 
-    let csvContent = '\uFEFF';
-    const headers = [
-      'Operator ID',
-      'Full Name',
-      'Phone No.',
-      'Email Address',
-      'Warehouse',
-      'Data Access Scope',
-      'Registration Date'
-    ];
-    csvContent += headers.map((h) => `"${h.replace(/"/g, '""')}"`).join(',') + '\n';
-
-    list.forEach((op) => {
-      const warehouse = op.warehouse_name || 'Not Configured';
-      const accessScope = op.warehouse_name
-        ? `Access: ${op.warehouse_name} Logs Only`
-        : 'Access: All Warehouses';
-      const registered = op.created_at
-        ? new Date(op.created_at).toLocaleDateString('en-GB')
-        : '-';
-      const row = [
-        op.id ?? '-',
-        op.full_name || '-',
-        op.phone_no || '-',
-        op.email || '-',
-        warehouse,
-        accessScope,
-        registered
+      let csvContent = '\uFEFF';
+      const headers = [
+        'Operator ID',
+        'Full Name',
+        'Phone No.',
+        'Email Address',
+        'Warehouse',
+        'Data Access Scope',
+        'Registration Date'
       ];
-      csvContent += row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(',') + '\n';
-    });
+      csvContent += headers.map((h) => `"${h.replace(/"/g, '""')}"`).join(',') + '\n';
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute(
-      'download',
-      `Registered_Operators_Directory_${new Date().toISOString().split('T')[0]}.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+      list.forEach((op) => {
+        const warehouse = op.warehouse_name || 'Not Configured';
+        const accessScope = op.warehouse_name
+          ? `Access: ${op.warehouse_name} Logs Only`
+          : 'Access: All Warehouses';
+        const registered = op.created_at
+          ? new Date(op.created_at).toLocaleDateString('en-GB')
+          : '-';
+        const row = [
+          op.id ?? '-',
+          op.full_name || '-',
+          op.phone_no || '-',
+          op.email || '-',
+          warehouse,
+          accessScope,
+          registered
+        ];
+        csvContent += row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(',') + '\n';
+      });
 
-  const getFilteredSecurityLogs = () => {
-    let list = (activities || []).filter(act => 
-      act && (
-        act.log_type === 'PERMISSION' || 
-        act.log_type === 'SECURITY'
-      )
-    );
-
-    // Apply Action filter
-    if (securityActionFilter !== 'All') {
-      list = list.filter(act => act && act.action === securityActionFilter);
-    }
-
-    // Apply Search filter (matches operator email, description, action type)
-    if (securitySearch.trim() !== '') {
-      const q = securitySearch.toLowerCase().trim();
-      list = list.filter(act => 
-        act && (
-          (act.operator_email && act.operator_email.toLowerCase().includes(q)) ||
-          (act.description && act.description.toLowerCase().includes(q)) ||
-          (act.action && act.action.toLowerCase().includes(q))
-        )
+      downloadCsv(
+        `Registered_Operators_Directory_${new Date().toISOString().split('T')[0]}.csv`,
+        csvContent
       );
+    } catch (err) {
+      setExportFailure(err, 'operators');
     }
-
-    // Apply Date filters
-    if (securityFromDate) {
-      list = list.filter(act => {
-        if (!act || !act.created_at) return false;
-        const actDate = act.created_at.split('T')[0];
-        return actDate >= securityFromDate;
-      });
-    }
-    if (securityToDate) {
-      list = list.filter(act => {
-        if (!act || !act.created_at) return false;
-        const actDate = act.created_at.split('T')[0];
-        return actDate <= securityToDate;
-      });
-    }
-
-    return list;
   };
 
-  const handleExportSecurityExcel = () => {
-    const list = getFilteredSecurityLogs();
-    let csvContent = "\uFEFF"; // UTF-8 BOM
-    const headers = ["Timestamp", "Operator / Identity", "Allocated Warehouse", "Action Type", "Level", "Security Event Description"];
-    csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
+  const handleExportSecurityExcel = async () => {
+    setExportError(null);
+    try {
+      requireExportDates(securityFromDate, securityToDate);
+      const { items: list } = await fetchAllOperatorActivities({
+        category: 'security',
+        search: (securitySearch || '').trim() || undefined,
+        fromDate: toApiDateParam(securityFromDate),
+        toDate: toApiDateParam(securityToDate),
+        action: securityActionFilter !== 'All' ? securityActionFilter : undefined,
+        limit: 500
+      });
+      if (!confirmExportSize(list.length)) throw new Error('Export cancelled.');
 
-    list.forEach(act => {
-      const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
-      const opEmail = act.operator_email || 'System / Admin';
-      const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System / Admin';
-      const action = act.action || '-';
-      const level = act.log_type || '-';
-      const description = act.description || '-';
+      let csvContent = "\uFEFF";
+      const headers = ["Timestamp", "Operator / Identity", "Allocated Warehouse", "Action Type", "Level", "Security Event Description"];
+      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
-      const row = [timestamp, opEmail, opWarehouse, action, level, description];
-      csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
-    });
+      list.forEach(act => {
+        const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
+        const opEmail = act.operator_email || 'System / Admin';
+        const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System / Admin';
+        const action = act.action || '-';
+        const level = act.log_type || '-';
+        const description = act.description || '-';
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Security_Access_Logs_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+        const row = [timestamp, opEmail, opWarehouse, action, level, description];
+        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
+      });
+
+      downloadCsv(`Security_Access_Logs_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+    } catch (err) {
+      setExportFailure(err, 'security');
+    }
   };
 
 
@@ -1022,79 +1192,40 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     );
   };
 
-  const getFilteredSystemLogs = () => {
-    let list = (activities || []).filter(act => 
-      act && (
-        act.log_type === 'SYSTEM' || 
-        act.log_type === 'ERROR' ||
-        act.action === 'SYSTEM_ERROR' ||
-        (typeof act.description === 'string' && act.description.includes('[CHECKPOINT]'))
-      )
-    );
-
-    // Apply Action filter
-    if (systemActionFilter !== 'All') {
-      list = list.filter(act => act && act.action === systemActionFilter);
-    }
-
-    // Apply Search filter (matches operator email, description, action type)
-    if (systemSearch.trim() !== '') {
-      const q = systemSearch.toLowerCase().trim();
-      list = list.filter(act => 
-        act && (
-          (act.operator_email && act.operator_email.toLowerCase().includes(q)) ||
-          (act.description && act.description.toLowerCase().includes(q)) ||
-          (act.action && act.action.toLowerCase().includes(q)) ||
-          (act.log_type && act.log_type.toLowerCase().includes(q))
-        )
-      );
-    }
-
-    // Apply Date filters
-    if (systemFromDate) {
-      list = list.filter(act => {
-        if (!act || !act.created_at) return false;
-        const actDate = act.created_at.split('T')[0];
-        return actDate >= systemFromDate;
+  const handleExportSystemExcel = async () => {
+    setExportError(null);
+    try {
+      requireExportDates(systemFromDate, systemToDate);
+      const { items: list } = await fetchAllOperatorActivities({
+        category: 'system',
+        search: (systemSearch || '').trim() || undefined,
+        fromDate: toApiDateParam(systemFromDate),
+        toDate: toApiDateParam(systemToDate),
+        action: systemActionFilter !== 'All' ? systemActionFilter : undefined,
+        limit: 500
       });
-    }
-    if (systemToDate) {
-      list = list.filter(act => {
-        if (!act || !act.created_at) return false;
-        const actDate = act.created_at.split('T')[0];
-        return actDate <= systemToDate;
+      if (!confirmExportSize(list.length)) throw new Error('Export cancelled.');
+
+      let csvContent = "\uFEFF";
+      const headers = ["Timestamp", "Identity / Source", "Warehouse", "Log Type", "Action Event", "Process & Error Description"];
+      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
+
+      list.forEach(act => {
+        const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
+        const opEmail = act.operator_email || 'system';
+        const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System';
+        const logType = act.log_type || '-';
+        const action = act.action || '-';
+        const description = act.description || '-';
+
+        const row = [timestamp, opEmail, opWarehouse, logType, action, description];
+        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
+
+      downloadCsv(`System_Process_Error_Logs_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+    } catch (err) {
+      setExportFailure(err, 'system');
     }
-
-    return list;
-  };
-
-  const handleExportSystemExcel = () => {
-    const list = getFilteredSystemLogs();
-    let csvContent = "\uFEFF"; // UTF-8 BOM
-    const headers = ["Timestamp", "Identity / Source", "Warehouse", "Log Type", "Action Event", "Process & Error Description"];
-    csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
-
-    list.forEach(act => {
-      const timestamp = act.created_at ? new Date(act.created_at).toLocaleString() : '';
-      const opEmail = act.operator_email || 'system';
-      const opWarehouse = operatorWarehouseMap[opEmail.toLowerCase()] || 'System';
-      const logType = act.log_type || '-';
-      const action = act.action || '-';
-      const description = act.description || '-';
-
-      const row = [timestamp, opEmail, opWarehouse, logType, action, description];
-      csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
-    });
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `System_Process_Error_Logs_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
 
@@ -1106,28 +1237,39 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
   const handleExportLogsExcel = async () => {
     setLogsExportLoading(true);
+    setLogsExportProgressLabel('Exporting…');
+    setExportError(null);
     try {
+      // Use dates currently selected in the filters (not only after Find)
+      const { from, to } = requireExportDates(fromDate, toDate);
+      setAppliedFromDate(fromDate);
+      setAppliedToDate(toDate);
+      setAppliedLogsSearch(logsSearch);
+
       const exportParams = {
-        search: appliedLogsSearch,
-        fromDate: toApiDateParam(appliedFromDate),
-        toDate: toApiDateParam(appliedToDate),
+        search: logsSearch,
+        fromDate: from,
+        toDate: to,
         warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined
       };
+      const onProgress = (p) => setLogsExportProgressLabel(formatExportProgress(p));
+
       let allItems = [];
       if (historyTab === 'daily') {
-        ({ items: allItems } = await fetchAllChamberLogs(exportParams));
+        ({ items: allItems } = await fetchAllChamberLogs(exportParams, onProgress));
       } else if (historyTab === 'inward') {
-        ({ items: allItems } = await fetchAllInwardLogs(exportParams));
+        ({ items: allItems } = await fetchAllInwardLogs(exportParams, onProgress));
       } else {
-        ({ items: allItems } = await fetchAllOutwardLogs(exportParams));
+        ({ items: allItems } = await fetchAllOutwardLogs(exportParams, onProgress));
       }
 
       let filteredLogs = allItems;
 
     if (filteredLogs.length === 0) {
-      alert("No data available to export.");
-      return;
+      throw new Error('No data available to export.');
     }
+
+    setLogsExportProgressLabel('Building file…');
 
     let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
 
@@ -1230,23 +1372,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       });
     }
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    
     const tabLabel = historyTab === 'daily' ? 'ChamberLogs' : (historyTab === 'inward' ? 'InwardLogs' : 'OutwardLogs');
     const dateSuffix = new Date().toISOString().split('T')[0];
-    link.setAttribute("download", `ReeferON_${tabLabel}_SuperAdminExport_${dateSuffix}.csv`);
-    
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(`ReeferON_${tabLabel}_SuperAdminExport_${dateSuffix}.csv`, csvContent);
     } catch (err) {
-      console.error('Export failed:', err);
-      alert(err.message || 'Export failed. Please try again.');
+      setExportFailure(err, 'history');
     } finally {
       setLogsExportLoading(false);
+      setLogsExportProgressLabel('Exporting…');
     }
   };
 
@@ -1272,7 +1405,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         password: opPassword,
         full_name: opFullName,
         phone_no: opPhoneNo,
-        warehouse_name: opWarehouseName
+        warehouse_name: opWarehouseName,
+        chamber_limit: opChamberLimit
       };
 
       if (editingOp) {
@@ -1334,6 +1468,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpFullName(op.full_name || '');
     setOpPhoneNo(op.phone_no || '');
     setOpWarehouseName(op.warehouse_name || '');
+    setOpChamberLimit(op.chamber_limit || 4);
     setOpPassword(''); // Leave blank unless updating
     setOpError('');
     setOpSuccess('');
@@ -1345,6 +1480,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpFullName('');
     setOpPhoneNo('');
     setOpWarehouseName('');
+    setOpChamberLimit(4);
     setOpPassword('');
     setShowPassword(false);
     setOpError('');
@@ -1996,7 +2132,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 <Activity size={18} />
                 <span>Operator Activities</span>
               </div>
-              {hasPendingRequests && <span className="pulsing-dot" />}
+              {(hasPendingRequests || hasNewDOChanges) && <span className="pulsing-dot" />}
             </button> 
             <button 
               className={`clean-menu-item ${activeMenu === 'history_logs' ? 'active' : ''}`}
@@ -2046,6 +2182,57 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Search size={18} />
                 <span>Profile Lookup</span>
+              </div>
+            </button>
+            <button 
+              className={`clean-menu-item ${activeMenu === 'native_inspections' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('native_inspections')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'native_inspections' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'native_inspections' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Smartphone size={18} />
+                <span>Native App Logs</span>
+              </div>
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeMenu === 'daily_box_tracker' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('daily_box_tracker')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'daily_box_tracker' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'daily_box_tracker' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Activity size={18} />
+                <span>Daily Box Tracker</span>
               </div>
             </button>
           </div>
@@ -2116,6 +2303,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       ? 'Super Admin - Operator Activities'
                       : activeMenu === 'profile_lookup'
                         ? 'Super Admin - Profile Lookup'
+                        : activeMenu === 'native_inspections'
+                          ? 'Super Admin - Native App Logs'
+                        : activeMenu === 'inventory_log'
+                          ? 'Super Admin - Inventory Reconciliation'
                         : activeMenu === 'super_admin_profile'
                           ? 'Super Admin - Profile & Security'
                           : 'Super Administrator'}
@@ -2254,7 +2445,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <div className="item-left">
                 <Activity size={18} className="item-icon" />
                 <span>Operator Activities</span>
-                {hasPendingRequests && <span className="pulsing-dot" style={{ marginLeft: '8px' }} />}
+                {(hasPendingRequests || hasNewDOChanges) && <span className="pulsing-dot" style={{ marginLeft: '8px' }} />}
               </div>
              </button>
 
@@ -2282,6 +2473,36 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <div className="item-left">
                 <Search size={18} className="item-icon" />
                 <span>Profile Lookup</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+            <button 
+              className={`clean-menu-item ${activeMenu === 'native_inspections' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('native_inspections');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <Smartphone size={18} className="item-icon" />
+                <span>Native App Logs</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+
+
+
+            <button 
+              className={`clean-menu-item ${activeMenu === 'daily_box_tracker' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('daily_box_tracker');
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <Activity size={18} className="item-icon" />
+                <span>Daily Box Tracker</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -2698,6 +2919,37 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </button>
 
                 <button 
+                  onClick={() => {
+                    setActiveMenu('activity_logs');
+                    setAuditSubTab('do_changes');
+                  }}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px',
+                    transition: 'all 0.2s ease',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    position: 'relative'
+                  }}
+                  className="dashboard-shortcut-btn"
+                >
+                  <Activity size={16} color="var(--primary)" />
+                  <span>DO Operations Log</span>
+                  {hasNewDOChanges && <span className="pulsing-dot" style={{ marginLeft: '4px', position: 'relative', top: 'auto', right: 'auto' }} />}
+                </button>
+
+                <button 
                   onClick={() => setActiveMenu('history_logs')}
                   style={{
                     padding: '10px 14px',
@@ -2752,6 +3004,1118 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             </div>
           </div>
         )}
+
+
+
+        {activeMenu === 'native_inspections' && (
+          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* Header section */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
+                  Native App Daily Inspections
+                </h2>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                  Monitor and manage daily chamber temperature logs submitted from the mobile native application.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={loadDailyInspectionsData}
+                  disabled={loadingInspections}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border)',
+                    backgroundColor: 'var(--bg-main)',
+                    color: 'var(--text-dark)',
+                    fontWeight: '700',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Activity size={14} className={loadingInspections ? 'spin' : ''} />
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            {/* Error Banner */}
+            {inspectionsError && (
+              <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '700' }}>
+                {inspectionsError}
+              </div>
+            )}
+
+            {/* Filter / Search bar */}
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '240px' }}>
+                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search Logs</label>
+                <div style={{ position: 'relative' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input
+                    type="text"
+                    placeholder="Search by operator, chamber, or client..."
+                    value={inspectionsSearch}
+                    onChange={(e) => setInspectionsSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px 8px 34px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.8rem',
+                      outline: 'none',
+                      backgroundColor: 'var(--bg-main)',
+                      color: 'var(--text-dark)'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Inspections Table */}
+            {loadingInspections ? (
+              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <span>Loading daily inspections...</span>
+              </div>
+            ) : inspections.length === 0 ? (
+              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <span>No inspections logged yet from the native application.</span>
+              </div>
+            ) : (
+              <div className="table-responsive" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date & Time</th>
+                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Chamber</th>
+                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client</th>
+                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Temp</th>
+                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator</th>
+                      <th style={{ textAlign: 'center', padding: '12px 16px' }}>Photo</th>
+                      <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inspections
+                      .filter((insp) => {
+                        const term = inspectionsSearch.toLowerCase().trim();
+                        if (!term) return true;
+                        return (
+                          (insp.operator_name && insp.operator_name.toLowerCase().includes(term)) ||
+                          (insp.chamber_name && insp.chamber_name.toLowerCase().includes(term)) ||
+                          (insp.client_name && insp.client_name.toLowerCase().includes(term))
+                        );
+                      })
+                      .map((insp) => {
+                        const formattedDate = insp.entry_date ? new Date(insp.entry_date).toLocaleDateString('en-GB') : '-';
+                        const formattedTime = insp.inspection_time || '-';
+                        const photoUrl = insp.photo_url
+                          ? (insp.photo_url.startsWith('uploads') ? `/${insp.photo_url}` : insp.photo_url)
+                          : null;
+
+                        return (
+                          <tr key={insp.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '600' }}>
+                              {formattedDate} <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem', marginLeft: '6px' }}>{formattedTime}</span>
+                            </td>
+                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '700' }}>
+                              {insp.chamber_name || `Chamber #${insp.chamber_id}`}
+                            </td>
+                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)' }}>
+                              {insp.client_name}
+                            </td>
+                            <td style={{ padding: '12px 16px', fontSize: '0.82rem', color: 'var(--text-dark)', fontWeight: '700' }}>
+                              <span style={{
+                                padding: '4px 8px',
+                                borderRadius: 'var(--radius-sm)',
+                                backgroundColor: insp.temperature > 0 ? '#fee2e2' : '#e0f2fe',
+                                color: insp.temperature > 0 ? '#ef4444' : '#0284c7'
+                              }}>
+                                {insp.temperature}°C
+                              </span>
+                            </td>
+                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)' }}>
+                              {insp.operator_name}
+                            </td>
+                            <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                              {photoUrl ? (
+                                <div 
+                                  onClick={() => setLightboxImg(photoUrl)}
+                                  style={{
+                                    width: '36px',
+                                    height: '36px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    overflow: 'hidden',
+                                    cursor: 'pointer',
+                                    border: '1px solid var(--border)',
+                                    display: 'inline-block'
+                                  }}
+                                >
+                                  <img 
+                                    src={photoUrl} 
+                                    alt="Sensor reading" 
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                                  />
+                                </div>
+                              ) : (
+                                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>No Photo</span>
+                              )}
+                            </td>
+                            <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedDetailLog(insp);
+                                    setDetailType('daily');
+                                  }}
+                                  title="View Data Profile & Photos"
+                                  style={{
+                                    backgroundColor: '#f1f5f9',
+                                    border: '1px solid #cbd5e1',
+                                    color: '#334155',
+                                    padding: '6px 10px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700
+                                  }}
+                                >
+                                  <Eye size={13} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteDailyInspection(insp.id)}
+                                  style={{
+                                    padding: '6px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    border: 'none',
+                                    backgroundColor: 'transparent',
+                                    color: '#ef4444',
+                                    cursor: 'pointer',
+                                    transition: 'color 0.2s'
+                                  }}
+                                  title="Delete Log"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+
+
+        {activeMenu === 'inventory_log' && (
+          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {inventorySubView === 'breakdown' ? (
+              (() => {
+                const clientMap = {};
+                const filtered = inventoryLogs.filter(row => {
+                  if (inventoryWarehouseFilter !== 'All' && row.warehouse_name !== inventoryWarehouseFilter) {
+                    return false;
+                  }
+                  return true;
+                });
+
+                filtered.forEach(row => {
+                  if (!row.client_name) return;
+                  const client = row.client_name;
+                  if (!clientMap[client]) {
+                    clientMap[client] = {
+                      clientName: client,
+                      chambers: new Set(),
+                      bookBalance: 0,
+                      physicalBoxes: 0,
+                      warehouseName: row.warehouse_name || '-'
+                    };
+                  }
+                  if (row.chamber_name) clientMap[client].chambers.add(row.chamber_name);
+                  clientMap[client].bookBalance += parseInt(row.calculated_balance, 10) || 0;
+                  clientMap[client].physicalBoxes += parseInt(row.physical_audit_count, 10) || 0;
+                });
+
+                const breakdownList = Object.values(clientMap).map(item => ({
+                  ...item,
+                  chambersList: Array.from(item.chambers).join(', ') || '-'
+                }));
+
+                const totalBreakdownItems = breakdownList.length;
+                const indexOfLastItem = breakdownCurrentPage * breakdownPerPage;
+                const indexOfFirstItem = indexOfLastItem - breakdownPerPage;
+                const currentBreakdownItems = breakdownList.slice(indexOfFirstItem, indexOfLastItem);
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Header */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <button
+                          onClick={() => setInventorySubView('main')}
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: 'var(--bg-main)',
+                            color: 'var(--text-dark)',
+                            fontWeight: '700',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                        >
+                          ← Back
+                        </button>
+                        <div>
+                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
+                            Client Box Inventory Breakdown
+                          </h2>
+                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                            Warehouse: {inventoryWarehouseFilter === 'All' ? 'All Warehouses' : inventoryWarehouseFilter}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Export CSV */}
+                      <button
+                        onClick={() => {
+                          if (breakdownList.length === 0) {
+                            alert('No data to export.');
+                            return;
+                          }
+                          const headers = 'Client Name,Warehouse Name,Active Chambers,Book Balance,Physical Floor Box Count\n';
+                          const csvContent = headers + breakdownList.map(row => {
+                            return `"${row.clientName || '-'}","${row.warehouseName || '-'}","${row.chambersList || '-'}",${row.bookBalance},${row.physicalBoxes}`;
+                          }).join('\n');
+                          downloadCsv(`Client_Box_Breakdown_${inventoryWarehouseFilter}_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+                        }}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: 'var(--primary)',
+                          color: '#ffffff',
+                          fontWeight: '700',
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <Download size={14} />
+                        Export Breakdown CSV
+                      </button>
+                    </div>
+
+                    {/* Table */}
+                    {currentBreakdownItems.length === 0 ? (
+                      <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                        <span>No client stock records found.</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="table-responsive" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                          <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Client Name</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Warehouse</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Active Chambers</th>
+                                <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Book Balance</th>
+                                <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Physical Boxes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {currentBreakdownItems.map((client, idx) => (
+                                <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                                  <td style={{ padding: '12px 16px', fontSize: '0.82rem', fontWeight: 'bold', color: 'var(--text-dark)' }}>{client.clientName}</td>
+                                  <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{client.warehouseName}</td>
+                                  <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{client.chambersList}</td>
+                                  <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.82rem', color: 'var(--text-dark)' }}>{client.bookBalance.toLocaleString()}</td>
+                                  <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.82rem', fontWeight: '800', color: 'var(--primary)' }}>{client.physicalBoxes.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Pagination Bar */}
+                        <PaginationBar
+                          page={breakdownCurrentPage}
+                          totalItems={totalBreakdownItems}
+                          pageSize={breakdownPerPage}
+                          onPageChange={setBreakdownCurrentPage}
+                          itemLabel="clients"
+                        />
+                      </>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              // Main Stock Reconciliation Page
+              <>
+                {/* Header section */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
+                      Inventory Stock Reconciliation
+                    </h2>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                      Reconcile paper stock balances (Inward - Outward) with daily physical floor counts.
+                    </p>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                      onClick={loadInventoryReconciliationData}
+                      disabled={loadingInventory}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        backgroundColor: 'var(--bg-main)',
+                        color: 'var(--text-dark)',
+                        fontWeight: '700',
+                        fontSize: '0.8rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <Activity size={14} className={loadingInventory ? 'spin' : ''} />
+                      Refresh
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (inventoryLogs.length === 0) {
+                          alert('No data to export.');
+                          return;
+                        }
+                        const headers = 'Client Name,Warehouse Name,Total Inward Boxes,Total Outward Boxes,Book Balance,Physical Audit Count,Last Audit Date,Chamber Name,Discrepancy/Variance\n';
+                        const csvContent = headers + inventoryLogs.map(row => {
+                          const auditDate = row.last_audit_date ? new Date(row.last_audit_date).toLocaleDateString('en-GB') : '-';
+                          return `"${row.client_name || '-'}","${row.warehouse_name || '-'}",${row.total_inward_boxes},${row.total_outward_boxes},${row.calculated_balance},${row.physical_audit_count},"${auditDate}","${row.chamber_name || '-'}",${row.discrepancy}`;
+                        }).join('\n');
+                        downloadCsv(`ReeferON_InventoryReconciliation_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+                      }}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        backgroundColor: 'var(--primary)',
+                        color: '#ffffff',
+                        fontWeight: '700',
+                        fontSize: '0.8rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <Download size={14} />
+                      Export CSV
+                    </button>
+                  </div>
+                </div>
+
+                {/* Error Banner */}
+                {inventoryError && (
+                  <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '700' }}>
+                    {inventoryError}
+                  </div>
+                )}
+
+                {(() => {
+                  const uniqueClients = new Set(inventoryLogs.map(row => row.client_name).filter(Boolean)).size;
+                  const uniqueChambers = new Set(inventoryLogs.map(row => row.chamber_name).filter(Boolean)).size;
+                  const totalBoxes = inventoryLogs.reduce((sum, row) => sum + (parseInt(row.physical_audit_count, 10) || 0), 0);
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
+                      {/* Warehouse Top Filter */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '280px' }}>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Filter by Warehouse
+                        </label>
+                        <select
+                          value={inventoryWarehouseFilter}
+                          onChange={(e) => setInventoryWarehouseFilter(e.target.value)}
+                          style={{
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.82rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)',
+                            color: 'var(--text-dark)',
+                            cursor: 'pointer',
+                            fontWeight: '700'
+                      }}
+                    >
+                      <option value="All">All Warehouses</option>
+                      {warehousesList.map(w => (
+                        <option key={w} value={w}>{w}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Overview Stats Cards Grid */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                    {/* Card 1: Total Clients */}
+                    <div className="diagnostic-card" style={{ padding: '16px 20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Clients</span>
+                        <div style={{ backgroundColor: 'var(--primary-light)', padding: '6px', borderRadius: 'var(--radius-sm)' }}>
+                          <Users size={16} color="var(--primary)" />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '4px' }}>
+                        <div>
+                          <h3 style={{ fontSize: '1.5rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{uniqueClients}</h3>
+                          <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Unique active clients</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setInventorySubView('breakdown');
+                            setBreakdownCurrentPage(1);
+                          }}
+                          style={{
+                            padding: '6px 12px',
+                            backgroundColor: 'var(--primary)',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.72rem',
+                            fontWeight: '700',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                        >
+                          <Eye size={12} /> View Details
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Card 2: Total Physical Boxes */}
+                    <div className="diagnostic-card" style={{ padding: '16px 20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Boxes</span>
+                        <div style={{ backgroundColor: '#e0f2fe', padding: '6px', borderRadius: 'var(--radius-sm)' }}>
+                          <Package size={16} color="#0284c7" />
+                        </div>
+                      </div>
+                      <div>
+                        <h3 style={{ fontSize: '1.5rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{totalBoxes.toLocaleString()}</h3>
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Boxes stored on floor</span>
+                      </div>
+                    </div>
+
+                    {/* Card 3: Total Chambers */}
+                    <div className="diagnostic-card" style={{ padding: '16px 20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Chambers</span>
+                        <div style={{ backgroundColor: '#fef3c7', padding: '6px', borderRadius: 'var(--radius-sm)' }}>
+                          <LayoutGrid size={16} color="#d97706" />
+                        </div>
+                      </div>
+                      <div>
+                        <h3 style={{ fontSize: '1.5rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{uniqueChambers}</h3>
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Chambers with inventory</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                  );
+                })()}
+
+                {/* Filter / Search bar */}
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 2, minWidth: '240px' }}>
+                    <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search Client Name</label>
+                    <div style={{ position: 'relative' }}>
+                      <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                      <input
+                        type="text"
+                        placeholder="Search by client name..."
+                        value={inventorySearch}
+                        onChange={(e) => setInventorySearch(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px 8px 34px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          fontSize: '0.8rem',
+                          outline: 'none',
+                          backgroundColor: 'var(--bg-main)',
+                          color: 'var(--text-dark)'
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Discrepancy Only Checkbox */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }}>
+                    <input
+                      type="checkbox"
+                      id="inventoryDiscrepancyOnly"
+                      checked={inventoryDiscrepancyFilter}
+                      onChange={(e) => setInventoryDiscrepancyFilter(e.target.checked)}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    <label htmlFor="inventoryDiscrepancyOnly" style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-dark)', cursor: 'pointer' }}>
+                      Discrepancy Only (Mismatch Stock)
+                    </label>
+                  </div>
+                </div>
+
+                {/* Inventory Table */}
+                {loadingInventory ? (
+                  <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <span>Calculating inventory stock reconciliation...</span>
+                  </div>
+                ) : inventoryLogs.length === 0 ? (
+                  <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <span>No stock records found matching filters.</span>
+                  </div>
+                ) : (
+                  <div className="table-responsive" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                    <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Client</th>
+                          <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Warehouse</th>
+                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Total Inward (+)</th>
+                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Total Outward (-)</th>
+                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Book Balance</th>
+                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Physical Floor Audit</th>
+                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Variance / Discrepancy</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {inventoryLogs
+                          .filter(row => {
+                            if (inventoryDiscrepancyFilter) {
+                              return Number(row.discrepancy) !== 0;
+                            }
+                            return true;
+                          })
+                          .map((row, idx) => {
+                            const hasDiscrepancy = Number(row.discrepancy) !== 0;
+                            const formattedDate = row.last_audit_date ? new Date(row.last_audit_date).toLocaleDateString('en-GB') : '-';
+                            return (
+                              <tr key={idx} style={{ borderBottom: '1px solid var(--border)', backgroundColor: hasDiscrepancy ? 'rgba(239, 68, 68, 0.03)' : 'transparent' }}>
+                                <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '700' }}>
+                                  {row.client_name}
+                                </td>
+                                <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                  {row.warehouse_name || '-'}
+                                </td>
+                                <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-dark)' }}>
+                                  {row.total_inward_boxes.toLocaleString()}
+                                </td>
+                                <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-dark)' }}>
+                                  {row.total_outward_boxes.toLocaleString()}
+                                </td>
+                                <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '700', color: 'var(--primary)' }}>
+                                  {row.calculated_balance.toLocaleString()}
+                                </td>
+                                <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem' }}>
+                                  <span style={{ fontWeight: '700', color: 'var(--text-dark)' }}>{row.physical_audit_count.toLocaleString()}</span>
+                                  {row.chamber_name && (
+                                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                                      {row.chamber_name} ({formattedDate})
+                                    </div>
+                                  )}
+                                </td>
+                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                  {hasDiscrepancy ? (
+                                    <span style={{
+                                      padding: '4px 8px',
+                                      borderRadius: 'var(--radius-sm)',
+                                      backgroundColor: '#fee2e2',
+                                      color: '#ef4444',
+                                      fontWeight: '800',
+                                      fontSize: '0.74rem',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px'
+                                    }}>
+                                      ⚠️ {row.discrepancy > 0 ? `+${row.discrepancy} Excess` : `${row.discrepancy} Shortage`}
+                                    </span>
+                                  ) : (
+                                    <span style={{
+                                      padding: '4px 8px',
+                                      borderRadius: 'var(--radius-sm)',
+                                      backgroundColor: '#dcfce7',
+                                      color: '#15803d',
+                                      fontWeight: '800',
+                                      fontSize: '0.74rem'
+                                    }}>
+                                      ✓ Matched
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+          </div>
+        )}
+
+        {activeMenu === 'daily_box_tracker' && (() => {
+          const filtered = dailyDeltas.filter(row => {
+            if (!row.client_name) return false;
+            if (deltasSearch.trim() !== '') {
+              return row.client_name.toLowerCase().includes(deltasSearch.toLowerCase());
+            }
+            return true;
+          });
+
+          const handleExportDeltasCSV = () => {
+            if (!filtered || filtered.length === 0) return;
+            const headers = 'Client Name,Warehouse Name,Chamber Name,Previous Audit Date,Previous Box Count,Latest Audit Date,Latest Box Count,Change (Delta),Trend Status\n';
+            const csvContent = headers + filtered.map(row => {
+              const prevDate = row.prev_date ? new Date(row.prev_date).toLocaleDateString('en-GB') : '-';
+              const latestDate = row.latest_date ? new Date(row.latest_date).toLocaleDateString('en-GB') : '-';
+              const trend = row.delta > 0 ? 'Inward Increase' : row.delta < 0 ? 'Outward Decrease' : 'No Change';
+              return `"${row.client_name || '-'}","${row.warehouse_name || '-'}","${row.chamber_name || '-'}","${prevDate}",${row.prev_count},"${latestDate}",${row.latest_count},${row.delta},"${trend}"`;
+            }).join('\n');
+            downloadCsv(`ReeferON_DailyBoxDeltas_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+          };
+
+          const chartData = filtered.slice(0, 8);
+          const maxVal = Math.max(...chartData.map(d => Math.max(d.latest_count, d.prev_count)), 10);
+
+          const startIndex = (deltasCurrentPage - 1) * deltasPerPage;
+          const endIndex = startIndex + deltasPerPage;
+          const paginatedRows = filtered.slice(startIndex, endIndex);
+
+          return (
+            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              
+              {/* Header section */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
+                    Daily Box Inventory Tracker
+                  </h2>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                    Track and visualize daily changes in client box counts across physical inspections.
+                  </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    onClick={handleExportDeltasCSV}
+                    disabled={filtered.length === 0}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--primary)',
+                      color: '#ffffff',
+                      fontWeight: '700',
+                      fontSize: '0.8rem',
+                      cursor: filtered.length === 0 ? 'not-allowed' : 'pointer',
+                      opacity: filtered.length === 0 ? 0.6 : 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <Download size={14} />
+                    Export CSV
+                  </button>
+
+                  <button
+                    onClick={loadDailyInventoryDeltas}
+                    disabled={loadingDeltas}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-main)',
+                      color: 'var(--text-dark)',
+                      fontWeight: '700',
+                      fontSize: '0.8rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <Activity size={14} className={loadingDeltas ? 'spin' : ''} />
+                    Refresh
+                  </button>
+                </div>
+              </div>
+
+              {/* Error Banner */}
+              {deltasError && (
+                <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '700' }}>
+                  {deltasError}
+                </div>
+              )}
+
+              {/* Top Filter and Search Bar */}
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                {/* Warehouse Filter */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '220px' }}>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Filter by Warehouse
+                  </label>
+                  <select
+                    value={deltasWarehouseFilter}
+                    onChange={(e) => {
+                      setDeltasWarehouseFilter(e.target.value);
+                      setDeltasCurrentPage(1);
+                    }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.82rem',
+                      outline: 'none',
+                      backgroundColor: 'var(--bg-main)',
+                      color: 'var(--text-dark)',
+                      cursor: 'pointer',
+                      fontWeight: '700',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="All">All Warehouses</option>
+                    {warehousesList.map(w => (
+                      <option key={w} value={w}>{w}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Client Search */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '280px' }}>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Search Client Name
+                  </label>
+                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <Search size={14} style={{ position: 'absolute', left: '12px', color: 'var(--text-muted)' }} />
+                    <input
+                      type="text"
+                      placeholder="Search client lot..."
+                      value={deltasSearch}
+                      onChange={(e) => {
+                        setDeltasSearch(e.target.value);
+                        setDeltasCurrentPage(1);
+                      }}
+                      style={{
+                        padding: '10px 14px 10px 34px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.82rem',
+                        outline: 'none',
+                        backgroundColor: 'var(--bg-main)',
+                        color: 'var(--text-dark)',
+                        width: '100%',
+                        fontWeight: '600'
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Visual Chart Section */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {/* Chart Card */}
+                {chartData.length > 0 ? (
+                  <div style={{ 
+                    padding: '28px', 
+                    background: 'linear-gradient(135deg, var(--surface) 0%, var(--bg-main) 100%)', 
+                    borderRadius: 'var(--radius-lg)', 
+                    border: '1px solid var(--border)',
+                    boxShadow: '0 8px 30px -4px rgba(0, 0, 0, 0.03)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '24px',
+                    position: 'relative',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ width: '3px', height: '16px', backgroundColor: 'var(--primary)', borderRadius: '2px' }} />
+                        <span style={{ fontSize: '0.9rem', fontWeight: '850', color: 'var(--text-dark)', letterSpacing: '-0.01em' }}>
+                          Client Box Audit Reconciliation Chart
+                        </span>
+                      </div>
+                      
+                      <div style={{ display: 'flex', gap: '16px', alignItems: 'center', fontSize: '0.76rem', fontWeight: '800' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ width: '14px', height: '14px', background: 'linear-gradient(180deg, #cbd5e1 0%, #94a3b8 100%)', borderRadius: '4px' }} />
+                          <span style={{ color: 'var(--text-muted)' }}>Previous Count</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ width: '14px', height: '14px', background: 'linear-gradient(180deg, var(--primary) 0%, #1d4ed8 100%)', borderRadius: '4px' }} />
+                          <span style={{ color: 'var(--text-dark)' }}>Latest Count</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Chart Grid Wrapper */}
+                    <div style={{ 
+                      position: 'relative', 
+                      height: '240px', 
+                      paddingTop: '20px',
+                      backgroundImage: 'linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px)',
+                      backgroundSize: '20px 20px',
+                      borderRadius: 'var(--radius-sm)'
+                    }}>
+                      {/* Horizontal Grid lines */}
+                      <div style={{ position: 'absolute', top: '20px', left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
+                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
+                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
+                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
+                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
+                        <div style={{ borderBottom: '2px solid var(--border)', width: '100%', height: 0 }} />
+                      </div>
+
+                      {/* Bars Container */}
+                      <div style={{ 
+                        display: 'grid', 
+                        gridTemplateColumns: `repeat(${chartData.length}, 1fr)`, 
+                        gap: '24px', 
+                        height: '100%', 
+                        alignItems: 'end',
+                        position: 'relative',
+                        zIndex: 2
+                      }}>
+                        {chartData.map((d, index) => {
+                          const prevHeight = (d.prev_count / maxVal) * 150;
+                          const latestHeight = (d.latest_count / maxVal) * 150;
+                          const isGreen = d.delta > 0;
+                          const isRed = d.delta < 0;
+
+                          return (
+                            <div key={index} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', position: 'relative' }}>
+                              
+                              {/* Hoverable Count Indicators */}
+                              <div style={{ 
+                                display: 'flex', 
+                                alignItems: 'center',
+                                gap: '6px', 
+                                position: 'absolute', 
+                                bottom: `${Math.max(prevHeight, latestHeight) + 12}px`, 
+                                fontSize: '0.74rem', 
+                                fontWeight: '850',
+                                backgroundColor: '#1e293b', // Solid dark slate background
+                                color: '#ffffff',
+                                padding: '4px 10px',
+                                borderRadius: '12px',
+                                border: '1px solid #334155',
+                                whiteSpace: 'nowrap',
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                                zIndex: 10
+                              }}>
+                                <span style={{ color: '#cbd5e1' }} title="Previous Count">{d.prev_count}</span>
+                                <span style={{ color: '#64748b', fontSize: '0.65rem' }}>➔</span>
+                                <span style={{ color: '#38bdf8', fontWeight: '900' }} title="Latest Count">{d.latest_count}</span>
+                              </div>
+
+                              {/* Bars Container */}
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'end', width: '100%', justifyContent: 'center' }}>
+                                {/* Previous Bar */}
+                                <div 
+                                  title={`Previous: ${d.prev_count} boxes`}
+                                  style={{ 
+                                    width: '18px', 
+                                    height: `${Math.max(prevHeight, 4)}px`, 
+                                    background: 'linear-gradient(180deg, #e2e8f0 0%, #cbd5e1 100%)', 
+                                    borderRadius: '4px 4px 0 0',
+                                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4)',
+                                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                    cursor: 'pointer'
+                                  }} 
+                                />
+                                {/* Latest Bar */}
+                                <div 
+                                  title={`Latest: ${d.latest_count} boxes`}
+                                  style={{ 
+                                    width: '18px', 
+                                    height: `${Math.max(latestHeight, 4)}px`, 
+                                    background: 'linear-gradient(180deg, var(--primary) 0%, #1d4ed8 100%)', 
+                                    borderRadius: '4px 4px 0 0',
+                                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.15), inset 0 1px 0 rgba(255,255,255,0.3)',
+                                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                    cursor: 'pointer'
+                                  }} 
+                                />
+                              </div>
+
+                              {/* Client Name Label */}
+                              <div style={{ 
+                                marginTop: '10px', 
+                                fontSize: '0.74rem', 
+                                fontWeight: '800', 
+                                color: 'var(--text-dark)', 
+                                textAlign: 'center',
+                                width: '100%',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap'
+                              }} title={d.client_name}>
+                                {d.client_name}
+                              </div>
+
+                              {/* Delta Pill Tag */}
+                              <div style={{
+                                fontSize: '0.64rem',
+                                fontWeight: '850',
+                                color: isGreen ? '#16a34a' : isRed ? '#dc2626' : '#64748b',
+                                marginTop: '4px',
+                                backgroundColor: isGreen ? '#f0fdf4' : isRed ? '#fef2f2' : '#f8fafc',
+                                padding: '2px 6px',
+                                borderRadius: '10px',
+                                border: `1px solid ${isGreen ? '#dcfce7' : isRed ? '#fee2e2' : '#f1f5f9'}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '2px'
+                              }}>
+                                {isGreen ? `▲ +${d.delta}` : isRed ? `▼ ${d.delta}` : `● 0`}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: '40px', textAlign: 'center', backgroundColor: 'var(--bg-main)', borderRadius: 'var(--radius-lg)', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                    Add temperature audit logs in native app to display comparative metrics.
+                  </div>
+                )}
+
+                {/* Main Grid Table */}
+                <div className="table-responsive" style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                  <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                        <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Client Name</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Warehouse</th>
+                        <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Chamber Name</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Previous Audit Date</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Previous Count</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>In / Out Flow</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Audit Date</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Final Count (In Chamber)</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Trend Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                            No records found matching filters.
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedRows.map((row, idx) => {
+                          const isGreen = row.delta > 0;
+                          const isRed = row.delta < 0;
+                          const formattedPrevDate = row.prev_date ? new Date(row.prev_date).toLocaleDateString('en-GB') : '-';
+                          const formattedLatestDate = row.latest_date ? new Date(row.latest_date).toLocaleDateString('en-GB') : '-';
+                          
+                          const absDelta = Math.abs(row.delta);
+                          const flowText = row.delta > 0 ? `+${absDelta} In` : row.delta < 0 ? `-${absDelta} Out` : `0`;
+                          const flowColor = row.delta > 0 ? '#16a34a' : row.delta < 0 ? '#dc2626' : 'var(--text-muted)';
+
+                          return (
+                            <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
+                              <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '700' }}>
+                                {row.client_name}
+                              </td>
+                              <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {row.warehouse_name}
+                              </td>
+                              <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {row.chamber_name}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {formattedPrevDate}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-dark)' }}>
+                                {row.prev_date ? row.prev_count.toLocaleString() : '-'}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.82rem', fontWeight: '800', color: flowColor }}>
+                                {flowText}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {formattedLatestDate}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-dark)' }}>
+                                {row.latest_count.toLocaleString()}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                <span style={{
+                                  padding: '4px 8px',
+                                  borderRadius: 'var(--radius-sm)',
+                                  backgroundColor: isGreen ? '#dcfce7' : isRed ? '#fee2e2' : '#f1f5f9',
+                                  color: isGreen ? '#15803d' : isRed ? '#b91c1c' : '#475569',
+                                  fontWeight: '800',
+                                  fontSize: '0.72rem'
+                                }}>
+                                  {isGreen ? '▲ Inward Increase' : isRed ? '▼ Outward Decrease' : '● No Change'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Bar */}
+                {filtered.length > 0 && (
+                  <PaginationBar
+                    page={deltasCurrentPage}
+                    totalItems={filtered.length}
+                    pageSize={deltasPerPage}
+                    onPageChange={setDeltasCurrentPage}
+                    itemLabel="records"
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
 
 
@@ -3013,10 +4377,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   }}
                 >
                   <Download size={14} />
-                  {logsExportLoading ? 'Exporting…' : 'Export'}
+                  {logsExportLoading ? logsExportProgressLabel : 'Export'}
                 </button>
               </div>
             </div>
+
+            {exportError?.retryKey === 'history' && (
+              <ExportErrorBanner
+                message={exportError.message}
+                retryable={exportError.retryable}
+                onRetry={retryFailedExport}
+                onDismiss={() => setExportError(null)}
+              />
+            )}
 
             {/* Logs Table */}
             {loadingLogs ? (
@@ -3087,7 +4460,22 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                        return (
                       <tr key={log.id}>
                         <td style={{ padding: '12px 16px', fontWeight: '600' }}>
-                          {log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '')}
+                          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '6px' }}>
+                            <span>{log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : '')}</span>
+                            {log.overdue_time && log.overdue_time !== 'same day' && (
+                              <span style={{ 
+                                backgroundColor: '#fee2e2', 
+                                color: '#dc2626', 
+                                fontSize: '9px', 
+                                fontWeight: 'bold', 
+                                padding: '1px 4px', 
+                                borderRadius: '4px', 
+                                border: '0.5px solid #fca5a5'
+                              }}>
+                                ⚠️ Late ({log.overdue_time})
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: '12px 16px' }}>
                           <span 
@@ -4047,12 +5435,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   {auditSubTab === 'activity_log' ? 'Operator Activity Audit Logs' : 
                    auditSubTab === 'security_log' ? 'System Security & Access Logs' :
                    auditSubTab === 'system_errors' ? 'System Process & Error Logs' :
+                   auditSubTab === 'do_changes' ? 'DO Client & Chamber Actions Log' :
                    'Role & Permission Requests'}
                 </h2>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
                   {auditSubTab === 'activity_log' ? 'Real-time database operations audit trail' : 
                    auditSubTab === 'security_log' ? 'Authentication events & security access logs' :
                    auditSubTab === 'system_errors' ? 'All application system processes and runtime exception logs' :
+                   auditSubTab === 'do_changes' ? 'DO operator custom client additions, soft-deletions and updates' :
                    'Role authorizations, edit/delete permission settings & approvals'}
                 </p>
               </div>
@@ -4119,6 +5509,27 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   Activity Audit Trail
                 </button>
                 <button 
+                  onClick={() => setAuditSubTab('do_changes')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid ' + (auditSubTab === 'do_changes' ? 'var(--primary)' : 'var(--border)'),
+                    backgroundColor: auditSubTab === 'do_changes' ? 'var(--primary-light)' : '#ffffff',
+                    color: auditSubTab === 'do_changes' ? 'var(--primary)' : 'var(--text-dark)',
+                    fontSize: '0.82rem',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    position: 'relative'
+                  }}
+                >
+                  <span>DO Operations Log</span>
+                  {hasNewDOChanges && <span className="pulsing-dot" style={{ display: 'inline-block', position: 'relative', top: 'auto', right: 'auto', marginLeft: '2px' }} />}
+                </button>
+                <button 
                   onClick={() => setAuditSubTab('security_log')}
                   style={{
                     padding: '8px 16px',
@@ -4176,7 +5587,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 <span style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse:</span>
                 <select
                   value={selectedWarehouseFilter}
-                  onChange={(e) => setSelectedWarehouseFilter(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedWarehouseFilter(e.target.value);
+                    setActivitiesCurrentPage(1);
+                  }}
                   style={{
                     padding: '6px 12px',
                     borderRadius: 'var(--radius-sm)',
@@ -4198,25 +5612,18 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               </div>
             </div>
 
-            {loadingActivities ? (
-              <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-muted)' }}>
-                <span>Loading activity history logs...</span>
-              </div>
-            ) : auditSubTab === 'activity_log' ? (
-              // Tab 1: Operator Activity History Audit Logs
+            { (auditSubTab === 'activity_log' || auditSubTab === 'do_changes') ? (
+              // Tab 1: Operator Activity History Audit Logs & DO Operations Log
               (() => {
-                const filteredActivities = getFilteredActivities();
-
-                // Pagination calculations
-                const totalItems = filteredActivities.length;
-                const totalPages = Math.ceil(totalItems / activitiesPerPage) || 1;
-                const currentPage = Math.min(Math.max(activitiesCurrentPage, 1), totalPages);
-                const startIndex = (currentPage - 1) * activitiesPerPage;
-                const paginatedActivities = filteredActivities.slice(startIndex, startIndex + activitiesPerPage);
+                const paginatedActivities = activities || [];
+                const totalItems = activitiesTotal;
+                const currentPage = activitiesCurrentPage;
 
                 return (
                   <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                    <h3 style={{ fontSize: '0.9rem', fontWeight: 800, margin: '0 0 12px 0', color: 'var(--text-dark)' }}>Operator Activity History Audit Logs</h3>
+                    <h3 style={{ fontSize: '0.9rem', fontWeight: 800, margin: '0 0 12px 0', color: 'var(--text-dark)' }}>
+                      {auditSubTab === 'do_changes' ? 'DO Client & Chamber Actions Log' : 'Operator Activity History Audit Logs'}
+                    </h3>
                     
                     {/* Search & Filter Controls */}
                     <div style={{
@@ -4398,7 +5805,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </div>
                     </div>
 
-                    {paginatedActivities.length === 0 ? (
+                    {exportError?.retryKey === 'activities' && (
+                      <ExportErrorBanner
+                        message={exportError.message}
+                        retryable={exportError.retryable}
+                        onRetry={retryFailedExport}
+                        onDismiss={() => setExportError(null)}
+                      />
+                    )}
+
+                    {loadingActivities ? (
+                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                        <span>Loading activity history logs...</span>
+                      </div>
+                    ) : paginatedActivities.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                         <span>No operator activities found matching the filters.</span>
                       </div>
@@ -4513,14 +5933,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             ) : auditSubTab === 'security_log' ? (
               // Tab 2: System Security & Permission Logs
               (() => {
-                const filteredSecurityLogs = getFilteredSecurityLogs();
-
-                // Pagination calculations
-                const totalItems = filteredSecurityLogs.length;
-                const totalPages = Math.ceil(totalItems / securityPerPage) || 1;
-                const currentPage = Math.min(Math.max(securityCurrentPage, 1), totalPages);
-                const startIndex = (currentPage - 1) * securityPerPage;
-                const paginatedSecurityLogs = filteredSecurityLogs.slice(startIndex, startIndex + securityPerPage);
+                const paginatedSecurityLogs = activities || [];
+                const totalItems = activitiesTotal;
+                const currentPage = securityCurrentPage;
 
                 return (
                   <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
@@ -4704,7 +6119,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </div>
                     </div>
 
-                    {paginatedSecurityLogs.length === 0 ? (
+                    {exportError?.retryKey === 'security' && (
+                      <ExportErrorBanner
+                        message={exportError.message}
+                        retryable={exportError.retryable}
+                        onRetry={retryFailedExport}
+                        onDismiss={() => setExportError(null)}
+                      />
+                    )}
+
+                    {loadingActivities ? (
+                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                        <span>Loading security logs...</span>
+                      </div>
+                    ) : paginatedSecurityLogs.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                         <span>No permission or security logs found matching the filters.</span>
                       </div>
@@ -4793,14 +6221,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             ) : auditSubTab === 'system_errors' ? (
               // Tab 3: System & Error Logs
               (() => {
-                const filteredSystemLogs = getFilteredSystemLogs();
-
-                // Pagination calculations
-                const totalItems = filteredSystemLogs.length;
-                const totalPages = Math.ceil(totalItems / systemPerPage) || 1;
-                const currentPage = Math.min(Math.max(systemCurrentPage, 1), totalPages);
-                const startIndex = (currentPage - 1) * systemPerPage;
-                const paginatedSystemLogs = filteredSystemLogs.slice(startIndex, startIndex + systemPerPage);
+                const paginatedSystemLogs = activities || [];
+                const totalItems = activitiesTotal;
+                const currentPage = systemCurrentPage;
 
                 return (
                   <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
@@ -4979,7 +6402,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </div>
                     </div>
 
-                    {paginatedSystemLogs.length === 0 ? (
+                    {exportError?.retryKey === 'system' && (
+                      <ExportErrorBanner
+                        message={exportError.message}
+                        retryable={exportError.retryable}
+                        onRetry={retryFailedExport}
+                        onDismiss={() => setExportError(null)}
+                      />
+                    )}
+
+                    {loadingActivities ? (
+                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                        <span>Loading system logs...</span>
+                      </div>
+                    ) : paginatedSystemLogs.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                         <span>No system or error logs found matching the filters.</span>
                       </div>
@@ -6062,6 +7498,29 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       }}
                     />
                   </div>
+
+                  {/* Assigned Chambers Limit */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Total Chambers Assigned *</label>
+                    <input 
+                      type="number"
+                      min="1"
+                      max="100"
+                      placeholder="e.g. 4"
+                      value={opChamberLimit}
+                      onChange={(e) => setOpChamberLimit(e.target.value)}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)',
+                        fontSize: '0.85rem',
+                        outline: 'none',
+                        backgroundColor: 'var(--bg-main)'
+                      }}
+                    />
+                  </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
@@ -6181,6 +7640,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </div>
                   </div>
 
+                  {exportError?.retryKey === 'operators' && (
+                    <ExportErrorBanner
+                      message={exportError.message}
+                      retryable={exportError.retryable}
+                      onRetry={retryFailedExport}
+                      onDismiss={() => setExportError(null)}
+                    />
+                  )}
+
                   {opSuccess && (
                     <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
                       {opSuccess}
@@ -6244,6 +7712,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     borderRadius: '100px'
                                   }}>
                                     {op.warehouse_name ? `Access: ${op.warehouse_name} Logs Only` : 'Access: All Warehouses'}
+                                  </span>
+                                  <span className="status-badge" style={{ 
+                                    backgroundColor: '#f1f5f9', 
+                                    color: '#475569', 
+                                    fontWeight: 800,
+                                    fontSize: '0.64rem',
+                                    display: 'inline-block',
+                                    width: 'max-content',
+                                    padding: '2px 8px',
+                                    borderRadius: '100px',
+                                    marginTop: '2px'
+                                  }}>
+                                    Chambers: 1 to {op.chamber_limit || 4}
                                   </span>
                                 </div>
                               </td>
@@ -6382,11 +7863,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </div>
                         <div className="profile-item">
                           <span className="profile-label">Chamber Name</span>
-                          <span className="profile-value">{selectedDetailLog.chamber_name}</span>
+                          <span className="profile-value">{selectedDetailLog.chamber_name} ({selectedDetailLog.chamber_type || 'Frozen'})</span>
                         </div>
                         <div className="profile-item">
                           <span className="profile-label">Client Name</span>
                           <span className="profile-value">{selectedDetailLog.client_name}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Box Count</span>
+                          <span className="profile-value">{selectedDetailLog.box_count !== undefined && selectedDetailLog.box_count !== null ? `${selectedDetailLog.box_count} Boxes` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Warehouse</span>
+                          <span className="profile-value">{selectedDetailLog.warehouse_name || 'Generic'}</span>
                         </div>
                       </div>
                     </div>
@@ -6403,12 +7892,22 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           <span className="profile-value">{selectedDetailLog.inspection_time || '-'}</span>
                         </div>
                         <div className="profile-item">
+                          <span className="profile-label">Photo Capture Time</span>
+                          <span className="profile-value">{selectedDetailLog.photo_capture_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
                           <span className="profile-label">Supervisor Name</span>
                           <span className="profile-value">{selectedDetailLog.monitor_supervisor_name || '-'}</span>
                         </div>
                         <div className="profile-item">
-                          <span className="profile-label">Recorded Time variance</span>
+                          <span className="profile-label">Time Variance</span>
                           <span className="profile-value">{selectedDetailLog.time_variance_minutes !== undefined ? `${selectedDetailLog.time_variance_minutes} mins` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Submission Delay (Overdue)</span>
+                          <span className="profile-value" style={{ color: selectedDetailLog.overdue_time && selectedDetailLog.overdue_time !== 'same day' ? '#dc2626' : 'inherit', fontWeight: selectedDetailLog.overdue_time && selectedDetailLog.overdue_time !== 'same day' ? 'bold' : 'normal' }}>
+                            {selectedDetailLog.overdue_time || 'same day'}
+                          </span>
                         </div>
                       </div>
                     </div>

@@ -21,6 +21,14 @@ import {
 } from '../../services/api';
 import UpdatablePodPhoto from '../../components/UpdatablePodPhoto/UpdatablePodPhoto';
 import PaginationBar from '../../components/PaginationBar/PaginationBar';
+import {
+  requireExportDates,
+  downloadCsv,
+  formatExportProgress,
+  getExportErrorMessage,
+  isRetryableExportError
+} from '../../utils/exportCsv';
+import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
 import './DOHistoryView.css';
 
 export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setEditOutwardData, setEditDailyData }) {
@@ -38,6 +46,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
   };
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [exportProgressLabel, setExportProgressLabel] = useState('Exporting…');
+  const [exportError, setExportError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [serverTotal, setServerTotal] = useState(0);
   const [copiedRef, setCopiedRef] = useState(null);
@@ -86,7 +96,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
       if (log) {
         if (recordType === 'Chamber') {
           const client = log.client_name || 'N/A';
-          extraDetails = ` | Client: ${client} | Chamber: ${log.chamber_name || 'N/A'} | Temp: ${log.chamber_temp || 'N/A'}°C`;
+          extraDetails = ` | Client: ${client} | Chamber: ${log.chamber_name || 'N/A'} | Temp: ${log.box_temp || 'N/A'}°C`;
         } else if (recordType === 'Inward') {
           const client = log.inward_client_name || 'N/A';
           extraDetails = ` | Client: ${client} | Vehicle: ${log.inward_vehicle_no || 'N/A'} | Temp: ${log.inward_material_temp || 'N/A'}°C`;
@@ -168,33 +178,44 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
   // Handler to export filtered logs to Excel (CSV format) — fetches all matching pages from server
   const handleExportExcel = async () => {
     setExportLoading(true);
+    setExportProgressLabel('Exporting…');
+    setExportError(null);
     try {
+      // Use dates currently selected in the filters (not only after Find)
+      const { from, to } = requireExportDates(fromDate, toDate);
+      setAppliedFromDate(fromDate);
+      setAppliedToDate(toDate);
+      setAppliedSearchTerm(searchTerm);
+
       const exportParams = {
-        search: appliedSearchTerm,
-        fromDate: toApiDateParam(appliedFromDate),
-        toDate: toApiDateParam(appliedToDate)
+        search: searchTerm,
+        fromDate: from,
+        toDate: to
       };
+      const onProgress = (p) => setExportProgressLabel(formatExportProgress(p));
+
       let filteredLogs = [];
       if (activeTab === 'daily') {
-        const { items } = await fetchAllChamberLogs(exportParams);
+        const { items } = await fetchAllChamberLogs(exportParams, onProgress);
         filteredLogs = items;
       } else if (activeTab === 'inward') {
-        const { items } = await fetchAllInwardLogs(exportParams);
+        const { items } = await fetchAllInwardLogs(exportParams, onProgress);
         filteredLogs = items;
       } else {
-        const { items } = await fetchAllOutwardLogs(exportParams);
+        const { items } = await fetchAllOutwardLogs(exportParams, onProgress);
         filteredLogs = items;
       }
 
       if (filteredLogs.length === 0) {
-        alert('No data available to export.');
-        return;
+        throw new Error('No data available to export.');
       }
+
+      setExportProgressLabel('Building file…');
 
     let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
 
     if (activeTab === 'daily') {
-      const headers = ["Date", "Chamber", "Client Name", "Inspection Time", "Temperature (°C)", "Supervisor", "Last Updated"];
+      const headers = ["Date", "Chamber", "Client Name", "Inspection Time", "Box Temp (°C)", "Supervisor", "Last Updated"];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
       filteredLogs.forEach(log => {
@@ -203,7 +224,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           log.chamber_name || '',
           log.client_name || '',
           log.inspection_time || '',
-          log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : '',
+          log.box_temp !== undefined ? `${log.box_temp}°C` : '',
           log.monitor_supervisor_name || '',
           getUpdateDiff(log.created_at, log.updated_at) ? formatDateTimeStr(log.updated_at) : ''
         ];
@@ -289,23 +310,20 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
       });
     }
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
     const tabLabel = activeTab === 'daily' ? 'Daily_Chamber' : activeTab === 'inward' ? 'Inward_Logs' : 'Outward_Logs';
     const dateSuffix = new Date().toLocaleDateString('en-GB').replace(/\//g, '-');
-
-    link.setAttribute("href", url);
-    link.setAttribute("download", `ReeferON_${tabLabel}_Export_${dateSuffix}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(`ReeferON_${tabLabel}_Export_${dateSuffix}.csv`, csvContent);
     } catch (err) {
-      console.error('Export failed:', err);
-      alert(err.message || 'Export failed. Please try again.');
+      const message = getExportErrorMessage(err);
+      if (message) {
+        setExportError({
+          message,
+          retryable: isRetryableExportError(err)
+        });
+      }
     } finally {
       setExportLoading(false);
+      setExportProgressLabel('Exporting…');
     }
   };
   
@@ -724,10 +742,20 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
             title="Export filtered records to Excel"
           >
             {exportLoading ? <Loader2 size={16} className="spinner-icon" /> : <Download size={16} />}
-            <span>{exportLoading ? 'Exporting…' : 'Export'}</span>
+            <span>{exportLoading ? exportProgressLabel : 'Export'}</span>
           </button>
         </div>
       </div>
+
+      <ExportErrorBanner
+        message={exportError?.message}
+        retryable={exportError?.retryable}
+        onRetry={() => {
+          setExportError(null);
+          handleExportExcel();
+        }}
+        onDismiss={() => setExportError(null)}
+      />
 
       {/* 3. History Logs List Table */}
       <div className="inward-history-card">
@@ -764,7 +792,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     <th>Chamber</th>
                     <th>Client Name</th>
                     <th>Inspection Time</th>
-                    <th>Temp (°C)</th>
+                    <th>Box Temp (°C)</th>
                     <th>Supervisor</th>
                     <th>Warehouse / Operator</th>
                     <th>Actions</th>
@@ -850,11 +878,12 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                     <td>{log.inspection_time || '-'}</td>
                     <td>
                       <span className="status-badge" style={{ 
-                        backgroundColor: log.chamber_temp <= -18 ? '#dcfce7' : '#fee2e2', 
-                        color: log.chamber_temp <= -18 ? '#15803d' : '#b91c1c', 
-                        fontWeight: 800 
+                        backgroundColor: log.box_temp <= -18 ? '#dcfce7' : '#fee2e2', 
+                        color: log.box_temp <= -18 ? '#15803d' : '#b91c1c', 
+                        fontWeight: 800,
+                        fontSize: '0.78rem'
                       }}>
-                        {log.chamber_temp}°C
+                        {log.box_temp}°C
                       </span>
                     </td>
                     <td>{log.monitor_supervisor_name || '-'}</td>
@@ -1332,11 +1361,15 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         </div>
                         <div className="profile-item">
                           <span className="profile-label">Chamber Name</span>
-                          <span className="profile-value">{selectedDetailLog.chamber_name}</span>
+                          <span className="profile-value">{selectedDetailLog.chamber_name} ({selectedDetailLog.chamber_type || 'Frozen'})</span>
                         </div>
                         <div className="profile-item">
                           <span className="profile-label">Client Name</span>
                           <span className="profile-value">{selectedDetailLog.client_name}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Box Count</span>
+                          <span className="profile-value">{selectedDetailLog.box_count !== undefined && selectedDetailLog.box_count !== null ? `${selectedDetailLog.box_count} Boxes` : '-'}</span>
                         </div>
                       </div>
                     </div>
@@ -1345,12 +1378,16 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       <div className="profile-group-title">Temperature & Supervisor</div>
                       <div className="profile-grid-list">
                         <div className="profile-item">
-                          <span className="profile-label">Chamber Temp</span>
-                          <span className="profile-value">{selectedDetailLog.chamber_temp}°C</span>
+                          <span className="profile-label">Box Temp</span>
+                          <span className="profile-value">{selectedDetailLog.box_temp || selectedDetailLog.chamber_temp}°C</span>
                         </div>
                         <div className="profile-item">
                           <span className="profile-label">Inspection Time</span>
                           <span className="profile-value">{selectedDetailLog.inspection_time || '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Photo Capture Time</span>
+                          <span className="profile-value">{selectedDetailLog.photo_capture_time || '-'}</span>
                         </div>
                         <div className="profile-item">
                           <span className="profile-label">Supervisor Name</span>
@@ -1359,6 +1396,12 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                         <div className="profile-item">
                           <span className="profile-label">Recorded Time variance</span>
                           <span className="profile-value">{selectedDetailLog.time_variance_minutes !== undefined ? `${selectedDetailLog.time_variance_minutes} mins` : '-'}</span>
+                        </div>
+                        <div className="profile-item">
+                          <span className="profile-label">Submission Delay (Overdue)</span>
+                          <span className="profile-value" style={{ color: selectedDetailLog.overdue_time && selectedDetailLog.overdue_time !== 'same day' ? '#dc2626' : 'inherit', fontWeight: selectedDetailLog.overdue_time && selectedDetailLog.overdue_time !== 'same day' ? 'bold' : 'normal' }}>
+                            {selectedDetailLog.overdue_time || 'same day'}
+                          </span>
                         </div>
                       </div>
                     </div>

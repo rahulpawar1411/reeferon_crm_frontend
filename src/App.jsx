@@ -8,6 +8,7 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 import Login from './pages/Login/Login';
+import Logo from './components/Logo/Logo';
 import { API_BASE_URL, fetchPermissionRequests } from './services/api';
 import './App.css';
 import './styles/shell-layout.css';
@@ -78,6 +79,19 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('activeDOMenu', activeDOMenu);
   }, [activeDOMenu]);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      localStorage.removeItem('user');
+      setUser(null);
+      setSelectedWindow('portal_entry');
+      window.history.pushState({}, '', '/');
+    };
+    window.addEventListener('unauthorized-session-expired', handleSessionExpired);
+    return () => {
+      window.removeEventListener('unauthorized-session-expired', handleSessionExpired);
+    };
+  }, []);
 
   // DO Notifications red-dot: only when at least one Super Admin APPROVAL is waiting (not Done yet)
   useEffect(() => {
@@ -191,12 +205,56 @@ export default function App() {
     );
   }
 
+  /*
+  // Commented out Sub-Admin / Customer web window access
   if (user.role === 'sub_admin') {
     return (
       <ErrorBoundary>
         <Suspense fallback={<PageLoader />}>
           <SubAdminSecureWindow user={user} onLogout={handleLogout} />
         </Suspense>
+      </ErrorBoundary>
+    );
+  }
+  */
+
+  // Block mobile application roles (do_operator, sub_admin) from accessing the web app views
+  if (user.role === 'do_operator' || user.role === 'sub_admin') {
+    return (
+      <ErrorBoundary>
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          backgroundColor: '#ffffff',
+          color: '#0f172a',
+          textAlign: 'center',
+          padding: '24px',
+          fontFamily: 'system-ui'
+        }}>
+          <Logo />
+          <h2 style={{ marginTop: '24px', fontSize: '1.5rem', fontWeight: 800, color: '#0f172a' }}>Mobile Access Required</h2>
+          <p style={{ marginTop: '8px', color: '#475569', fontSize: '0.9rem', maxWidth: '400px', lineHeight: 1.5 }}>
+            Data Operators and Customers must log in using the official **ReeferON Mobile Application**.
+          </p>
+          <button 
+            onClick={handleLogout}
+            style={{
+              marginTop: '24px',
+              padding: '10px 20px',
+              borderRadius: '6px',
+              border: 'none',
+              backgroundColor: '#ef4444',
+              color: '#ffffff',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            Log Out
+          </button>
+        </div>
       </ErrorBoundary>
     );
   }
@@ -219,6 +277,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="app-container">
+        {/* Commented out Operator Web Shell Layout
         {selectedWindow === 'do_window' ? (
           <Suspense fallback={<PageLoader />}>
             <div className="do-window-shell">
@@ -272,10 +331,13 @@ export default function App() {
             </div>
           </Suspense>
         ) : (
+        */}
           <Suspense fallback={<PageLoader />}>
             <PortalEntry onSelectWindow={(win) => navigateToWindow(win)} />
           </Suspense>
+        {/*
         )}
+        */}
       </div>
     </ErrorBoundary>
   );

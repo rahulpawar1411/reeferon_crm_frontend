@@ -416,7 +416,27 @@ export default function SubAdminSecureWindow({ user, onLogout }) {
                     onClick={() => openLogProfile(row, 'daily')}
                   >
                     <td><CopyableRef value={row.reference_no || row.id} /></td>
-                    <td>{row.formatted_date || row.entry_date}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <span>{row.formatted_date || row.entry_date}</span>
+                        {row.overdue_time && row.overdue_time !== 'same day' && (
+                          <span style={{ 
+                            alignSelf: 'flex-start',
+                            backgroundColor: '#fee2e2', 
+                            color: '#dc2626', 
+                            fontSize: '9px', 
+                            fontWeight: 'bold', 
+                            padding: '1px 4px', 
+                            borderRadius: '3px', 
+                            border: '0.5px solid #fca5a5',
+                            marginTop: '2px',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            ⚠️ Late ({row.overdue_time})
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td>{row.client_name}</td>
                     <td>{row.chamber_name}</td>
                     <td>{row.chamber_temp}°C</td>

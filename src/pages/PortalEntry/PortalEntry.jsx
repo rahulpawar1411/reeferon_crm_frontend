@@ -26,7 +26,7 @@ export default function PortalEntry({ onSelectWindow }) {
 
         {/* 2 Window Option Cards */}
         <div className="portal-windows-grid">
-          {/* Option 1: Data Operator (DO) Window */}
+          {/* Commented out Option 1: Data Operator (DO) Window
           <div 
             className="window-option-card do-card" 
             onClick={() => onSelectWindow('do_window')}
@@ -43,6 +43,7 @@ export default function PortalEntry({ onSelectWindow }) {
               <ArrowRight size={14} />
             </span>
           </div>
+          */}
 
           {/* Option 2: Super Admin Window */}
           <div 

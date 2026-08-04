@@ -512,9 +512,8 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
       ['outward_pallets_in_qty', 'Pallets Qty'],
       ['outward_invoice_qty', 'Invoice Boxes Qty'],
       ['outward_received_boxes_qty', 'Boxes Loaded Qty'],
-      ['outward_damage_received_boxes_qty', 'Damage Qty'],
       ['outward_loading_supervisor_name', 'Loading Supervisor Name']
-      // Seal No. & Remarks are optional
+      // Seal No., Remarks & Damage Qty are optional
     ];
 
     const missingKeys = requiredFields
@@ -1318,7 +1317,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Damage Qty <ReqStar field="outward_damage_received_boxes_qty" /></label>
+                  <label>Damage Qty</label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1326,7 +1325,6 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                     value={formData.outward_damage_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
-                    required
                   />
                 </div>
                 <div className="inward-form-group">
@@ -1392,37 +1390,64 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
                 {/* Invoice Photos */}
                 <div className="inward-form-group file-field">
                   <label>Invoice Photos <ReqStar field="invoice_photos" /></label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>Choose Invoice Photos</span>
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*"
-                      onChange={handleMultipleInvoiceChange}
-                    />
-                  </div>
-                  {invoicePreviews.length > 0 && (
-                    <div className="preview-thumbnails">
+                  {invoicePreviews.length === 0 ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Invoice Photos</span>
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={handleMultipleInvoiceChange}
+                      />
+                    </div>
+                  ) : (
+                    <div className="multi-photo-verified-list">
                       {invoicePreviews.map((url, idx) => (
-                        <div key={idx} className="thumb-container">
-                          <img src={url} alt={`Invoice ${idx}`} className="mini-thumb" />
-                          <button
-                            type="button"
-                            className="thumb-remove"
-                            onClick={() => {
-                              setInvoicePhotos(p => p.filter((_, i) => i !== idx));
-                              setInvoicePreviews(p => p.filter((_, i) => i !== idx));
-                            }}
-                            title="Remove Photo"
-                          >
-                            ×
-                          </button>
-                          <div className="thumb-verified-check">
-                            <Check size={6} />
+                        <div key={`invoice-${idx}-${url}`} className="sensor-photo-verified-card">
+                          <div className="verified-thumb-wrapper">
+                            <img src={url} alt={`Invoice ${idx + 1}`} />
+                            <div className="verified-check-badge">
+                              <Check size={8} />
+                            </div>
+                          </div>
+                          <div className="verified-action-group">
+                            <button
+                              type="button"
+                              className="retake-icon-btn"
+                              onClick={() => {
+                                setInvoicePhotos((p) => p.filter((_, i) => i !== idx));
+                                setInvoicePreviews((p) => p.filter((_, i) => i !== idx));
+                              }}
+                              title="Retake Photo"
+                            >
+                              <RefreshCw size={12} />
+                              <span>Retake</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="delete-photo-btn"
+                              onClick={() => {
+                                setInvoicePhotos((p) => p.filter((_, i) => i !== idx));
+                                setInvoicePreviews((p) => p.filter((_, i) => i !== idx));
+                              }}
+                              title="Remove Photo"
+                            >
+                              <Trash2 size={12} />
+                            </button>
                           </div>
                         </div>
                       ))}
+                      <div className="image-uploader-btn">
+                        <Camera size={18} />
+                        <span>Add Invoice Photos</span>
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          onChange={handleMultipleInvoiceChange}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>

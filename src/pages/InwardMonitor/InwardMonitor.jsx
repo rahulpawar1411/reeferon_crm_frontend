@@ -307,6 +307,71 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     formData.inward_entry_date
   ]);
 
+  const cleanTimePart = (t) => {
+    if (!t) return '';
+    const s = String(t).trim();
+    return s.includes(' ') ? s.split(/\s+/).pop() : s;
+  };
+
+  /** Build Date from YYYY-MM-DD + HH:MM (optionally with embedded date in time). */
+  const buildUnloadingDateTime = (dateStr, timeStr) => {
+    const t = cleanTimePart(timeStr);
+    if (!dateStr || !t) return null;
+    const normalized = t.length === 5 ? `${t}:00` : t;
+    const d = new Date(`${dateStr}T${normalized}`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  /**
+   * Unloading End must be strictly after Unloading Start.
+   * Same end/start date → End Time must be greater than Start Time.
+   */
+  const validateUnloadingEndAfterStart = () => {
+    const startDate = formData.inward_unloading_start_date || formData.inward_entry_date;
+    const endDate = formData.inward_unloading_end_date || formData.inward_entry_date;
+    const start = buildUnloadingDateTime(startDate, formData.inward_unloading_start_time);
+    const end = buildUnloadingDateTime(endDate, formData.inward_unloading_end_time);
+    if (!start || !end) return true;
+
+    if (end.getTime() <= start.getTime()) {
+      const startT = cleanTimePart(formData.inward_unloading_start_time);
+      const endT = cleanTimePart(formData.inward_unloading_end_time);
+      if (endDate === startDate) {
+        alert(
+          `Unloading End Time must be later than Unloading Start Time.\n\nStart: ${startT}\nEnd: ${endT}`
+        );
+      } else {
+        alert('Unloading End Date/Time must be later than Unloading Start Date/Time.');
+      }
+      setInvalidFields((prev) => ({ ...prev, inward_unloading_end_time: true }));
+      return false;
+    }
+    return true;
+  };
+
+  /**
+   * Same Unloading Start Date as Entry Date →
+   * Unloading Start Time must be later than Vehicle Reporting Time.
+   */
+  const validateUnloadingStartAfterReporting = () => {
+    const startDate = formData.inward_unloading_start_date || formData.inward_entry_date;
+    const entryDate = formData.inward_entry_date;
+    if (!startDate || !entryDate || startDate !== entryDate) return true;
+
+    const repT = cleanTimePart(formData.inward_vehicle_reporting_time);
+    const startT = cleanTimePart(formData.inward_unloading_start_time);
+    if (!repT || !startT) return true;
+
+    if (startT <= repT) {
+      alert(
+        `Unloading Start Time must be later than Vehicle Reporting Time.\n\nReporting: ${repT}\nStart: ${startT}`
+      );
+      setInvalidFields((prev) => ({ ...prev, inward_unloading_start_time: true }));
+      return false;
+    }
+    return true;
+  };
+
   // Client-Side Canvas Image Compressor
   const compressImageFile = (file) => {
     return new Promise((resolve) => {
@@ -514,9 +579,8 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       ['inward_pallets_in_qty', 'Pallets In Qty'],
       ['inward_invoice_qty', 'Invoice Boxes Qty'],
       ['inward_received_boxes_qty', 'Boxes Received Qty'],
-      ['inward_damage_received_boxes_qty', 'Damage Qty'],
       ['inward_unloading_supervisor_name', 'Unloading Supervisor Name']
-      // Seal No. & Remarks are optional
+      // Seal No., Remarks & Damage Qty are optional
     ];
 
     const missingKeys = requiredFields
@@ -557,6 +621,14 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     if (digits.length < expectedDigits) {
       setInvalidFields({ inward_driver_no: true });
       alert(`⚠️ Invalid Phone Number:\nPlease enter a valid ${expectedDigits}-digit mobile number for country code ${driverCountryCode}.`);
+      return;
+    }
+
+    if (!validateUnloadingStartAfterReporting()) {
+      return;
+    }
+
+    if (!validateUnloadingEndAfterStart()) {
       return;
     }
 
@@ -607,28 +679,12 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   };
 
   const handleConfirmSubmit = async () => {
-    const cleanTime = (t) => t && t.includes(' ') ? t.split(' ')[1] : (t || '');
-    
-    // Validate same-day unloading start vs reporting time
-    const startDate = formData.inward_unloading_start_date || formData.inward_entry_date;
-    if (startDate === formData.inward_entry_date) {
-      const repT = cleanTime(formData.inward_vehicle_reporting_time);
-      const startT = cleanTime(formData.inward_unloading_start_time);
-      if (startT < repT) {
-        alert(`Unloading Start Time (${startT}) cannot be earlier than Vehicle Reporting Time (${repT}).`);
-        return;
-      }
+    if (!validateUnloadingStartAfterReporting()) {
+      return;
     }
-    
-    // Validate same-day unloading end vs start time
-    const endDate = formData.inward_unloading_end_date || formData.inward_entry_date;
-    if (endDate === startDate) {
-      const startT = cleanTime(formData.inward_unloading_start_time);
-      const endT = cleanTime(formData.inward_unloading_end_time);
-      if (endT < startT) {
-        alert(`Unloading End Time (${endT}) cannot be earlier than Unloading Start Time (${startT}).`);
-        return;
-      }
+
+    if (!validateUnloadingEndAfterStart()) {
+      return;
     }
 
     setSubmitting(true);
@@ -851,7 +907,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         inward_unloading_start_date: cleanVal,
         inward_unloading_end_date: cleanVal
       }));
-      clearInvalidMany(['inward_unloading_start_date', 'inward_unloading_end_date']);
+      clearInvalidMany(['inward_unloading_start_date', 'inward_unloading_end_date', 'inward_unloading_start_time']);
       return;
     }
 
@@ -865,19 +921,19 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
         ...prev,
         inward_unloading_end_date: cleanVal
       }));
-      clearInvalid('inward_unloading_end_date');
+      clearInvalidMany(['inward_unloading_end_date', 'inward_unloading_end_time']);
       return;
     }
 
     if (name === 'inward_vehicle_reporting_time') {
       setFormData(prev => ({ ...prev, inward_vehicle_reporting_time: value }));
-      clearInvalid('inward_vehicle_reporting_time');
+      clearInvalidMany(['inward_vehicle_reporting_time', 'inward_unloading_start_time']);
       return;
     }
 
     if (name === 'inward_unloading_start_time') {
       setFormData(prev => ({ ...prev, inward_unloading_start_time: value }));
-      clearInvalid('inward_unloading_start_time');
+      clearInvalidMany(['inward_unloading_start_time', 'inward_unloading_end_time']);
       return;
     }
 
@@ -1318,7 +1374,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                   />
                 </div>
                 <div className="inward-form-group">
-                  <label>Damage Qty <ReqStar field="inward_damage_received_boxes_qty" /></label>
+                  <label>Damage Qty</label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1326,7 +1382,6 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                     value={formData.inward_damage_received_boxes_qty}
                     onChange={handleInputChange}
                     placeholder="0"
-                    required
                   />
                 </div>
                 <div className="inward-form-group">
@@ -1392,37 +1447,64 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
                 {/* Invoice Photos */}
                 <div className="inward-form-group file-field">
                   <label>Invoice Photos <ReqStar field="invoice_photos" /></label>
-                  <div className="image-uploader-btn">
-                    <Camera size={18} />
-                    <span>Choose Invoice Photos</span>
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*"
-                      onChange={handleMultipleInvoiceChange}
-                    />
-                  </div>
-                  {invoicePreviews.length > 0 && (
-                    <div className="preview-thumbnails">
+                  {invoicePreviews.length === 0 ? (
+                    <div className="image-uploader-btn">
+                      <Camera size={18} />
+                      <span>Choose Invoice Photos</span>
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={handleMultipleInvoiceChange}
+                      />
+                    </div>
+                  ) : (
+                    <div className="multi-photo-verified-list">
                       {invoicePreviews.map((url, idx) => (
-                        <div key={idx} className="thumb-container">
-                          <img src={url} alt={`Invoice ${idx}`} className="mini-thumb" />
-                          <button
-                            type="button"
-                            className="thumb-remove"
-                            onClick={() => {
-                              setInvoicePhotos(p => p.filter((_, i) => i !== idx));
-                              setInvoicePreviews(p => p.filter((_, i) => i !== idx));
-                            }}
-                            title="Remove Photo"
-                          >
-                            ×
-                          </button>
-                          <div className="thumb-verified-check">
-                            <Check size={6} />
+                        <div key={`invoice-${idx}-${url}`} className="sensor-photo-verified-card">
+                          <div className="verified-thumb-wrapper">
+                            <img src={url} alt={`Invoice ${idx + 1}`} />
+                            <div className="verified-check-badge">
+                              <Check size={8} />
+                            </div>
+                          </div>
+                          <div className="verified-action-group">
+                            <button
+                              type="button"
+                              className="retake-icon-btn"
+                              onClick={() => {
+                                setInvoicePhotos((p) => p.filter((_, i) => i !== idx));
+                                setInvoicePreviews((p) => p.filter((_, i) => i !== idx));
+                              }}
+                              title="Retake Photo"
+                            >
+                              <RefreshCw size={12} />
+                              <span>Retake</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="delete-photo-btn"
+                              onClick={() => {
+                                setInvoicePhotos((p) => p.filter((_, i) => i !== idx));
+                                setInvoicePreviews((p) => p.filter((_, i) => i !== idx));
+                              }}
+                              title="Remove Photo"
+                            >
+                              <Trash2 size={12} />
+                            </button>
                           </div>
                         </div>
                       ))}
+                      <div className="image-uploader-btn">
+                        <Camera size={18} />
+                        <span>Add Invoice Photos</span>
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          onChange={handleMultipleInvoiceChange}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
