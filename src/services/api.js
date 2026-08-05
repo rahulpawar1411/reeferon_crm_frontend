@@ -984,9 +984,11 @@ export const deleteDailyInspection = async (id) => {
   return await res.json();
 };
 
-export const fetchDailyInventoryDeltas = async ({ warehouse } = {}) => {
+export const fetchDailyInventoryDeltas = async ({ warehouse, fromDate, toDate } = {}) => {
   const queryParams = new URLSearchParams();
   if (warehouse) queryParams.append('warehouse', warehouse);
+  if (fromDate) queryParams.append('fromDate', fromDate);
+  if (toDate) queryParams.append('toDate', toDate);
 
   const res = await fetch(`${API_BASE_URL}/dashboard/daily-inventory-deltas?${queryParams.toString()}`);
   if (!res.ok) {

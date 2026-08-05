@@ -39,6 +39,56 @@ import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBan
 import '../../components/DOSidebar/DOSidebar.css';
 import './SuperAdminSecureWindow.css';
 
+const Sparkline = ({ data }) => {
+  if (!data || data.length < 2) {
+    return <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>No trend</span>;
+  }
+  
+  const values = data.map(d => Number(d.count) || 0);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min === 0 ? 1 : max - min;
+  
+  const width = 70;
+  const height = 20;
+  const padding = 2;
+  
+  const points = values.map((val, idx) => {
+    const x = padding + (idx * (width - 2 * padding)) / (values.length - 1);
+    const y = padding + (height - 2 * padding) - ((val - min) * (height - 2 * padding)) / range;
+    return `${x},${y}`;
+  }).join(' ');
+  
+  const lastX = padding + ((values.length - 1) * (width - 2 * padding)) / (values.length - 1);
+  const lastY = padding + (height - 2 * padding) - ((values[values.length - 1] - min) * (height - 2 * padding)) / range;
+  
+  const overallDelta = values[values.length - 1] - values[0];
+  const strokeColor = overallDelta > 0 ? '#10b981' : overallDelta < 0 ? '#ef4444' : '#94a3b8';
+  
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', verticalAlign: 'middle' }}>
+      <svg width={width} height={height} style={{ overflow: 'visible' }}>
+        <polyline
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={points}
+        />
+        <circle
+          cx={lastX}
+          cy={lastY}
+          r="2.5"
+          fill={strokeColor}
+          stroke="#ffffff"
+          strokeWidth="1"
+        />
+      </svg>
+    </div>
+  );
+};
+
 const TempMonitor = lazy(() => import('../TempMonitor/TempMonitor'));
 const InwardMonitor = lazy(() => import('../InwardMonitor/InwardMonitor'));
 const OutwardMonitor = lazy(() => import('../OutwardMonitor/OutwardMonitor'));
@@ -46,7 +96,18 @@ const OutwardMonitor = lazy(() => import('../OutwardMonitor/OutwardMonitor'));
 export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate }) {
   const [time, setTime] = useState(new Date());
   const [activeMenu, setActiveMenu] = useState(() => {
-    return localStorage.getItem('super_admin_active_menu') || 'dashboard';
+    const saved = localStorage.getItem('super_admin_active_menu');
+    if (saved === 'sub_admins' || saved === 'data_operators') {
+      return 'user_management';
+    }
+    return saved || 'dashboard';
+  });
+  const [userTab, setUserTab] = useState(() => {
+    const savedMenu = localStorage.getItem('super_admin_active_menu');
+    if (savedMenu === 'sub_admins' || savedMenu === 'data_operators') {
+      return savedMenu;
+    }
+    return localStorage.getItem('super_admin_user_tab') || 'sub_admins';
   });
   const [auditSubTab, setAuditSubTab] = useState(() => {
     return localStorage.getItem('super_admin_audit_sub_tab') || 'activity_log';
@@ -56,6 +117,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   useEffect(() => {
     localStorage.setItem('super_admin_active_menu', activeMenu);
   }, [activeMenu]);
+
+  useEffect(() => {
+    localStorage.setItem('super_admin_user_tab', userTab);
+  }, [userTab]);
 
   useEffect(() => {
     localStorage.setItem('super_admin_audit_sub_tab', auditSubTab);
@@ -236,11 +301,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     totalOperators: 0
   });
 
-  // Native Mobile Daily Inspections States
-  const [inspections, setInspections] = useState([]);
-  const [loadingInspections, setLoadingInspections] = useState(false);
-  const [inspectionsError, setInspectionsError] = useState('');
-  const [inspectionsSearch, setInspectionsSearch] = useState('');
+
 
   // Inventory Log States
   const [inventoryLogs, setInventoryLogs] = useState([]);
@@ -259,6 +320,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [deltasError, setDeltasError] = useState('');
   const [deltasSearch, setDeltasSearch] = useState('');
   const [deltasWarehouseFilter, setDeltasWarehouseFilter] = useState('All');
+  const [deltasClientFilter, setDeltasClientFilter] = useState('All');
+  const [deltasChamberFilter, setDeltasChamberFilter] = useState('All');
+  const [deltasFromDate, setDeltasFromDate] = useState('');
+  const [deltasToDate, setDeltasToDate] = useState('');
   const [deltasCurrentPage, setDeltasCurrentPage] = useState(1);
   const [deltasPerPage] = useState(10);
 
@@ -267,7 +332,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setDeltasError('');
     try {
       const data = await fetchDailyInventoryDeltas({
-        warehouse: deltasWarehouseFilter === 'All' ? '' : deltasWarehouseFilter
+        warehouse: deltasWarehouseFilter === 'All' ? '' : deltasWarehouseFilter,
+        fromDate: deltasFromDate || undefined,
+        toDate: deltasToDate || undefined
       });
       setDailyDeltas(Array.isArray(data) ? data : []);
       setDeltasCurrentPage(1);
@@ -363,33 +430,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
-  const loadDailyInspectionsData = async () => {
-    setLoadingInspections(true);
-    setInspectionsError('');
-    try {
-      const data = await fetchDailyInspections();
-      setInspections(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error('Failed to fetch native daily inspections:', err);
-      setInspectionsError(err.message || 'Failed to fetch native daily inspections.');
-      setInspections([]);
-    } finally {
-      setLoadingInspections(false);
-    }
-  };
 
-  const handleDeleteDailyInspection = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this daily inspection log?')) {
-      return;
-    }
-    setInspectionsError('');
-    try {
-      await deleteDailyInspection(id);
-      await loadDailyInspectionsData();
-    } catch (err) {
-      setInspectionsError(err.message || 'Failed to delete inspection log.');
-    }
-  };
 
   const loadOperatorsData = async () => {
     setLoadingOps(true);
@@ -830,18 +871,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadCustomerReportsData();
     } else if (activeMenu === 'data_operators') {
       loadOperatorsData();
+    } else if (activeMenu === 'user_management') {
+      loadSubAdminsData();
+      loadAccessScopeOptions();
+      loadOperatorsData();
     } else if (activeMenu === 'activity_logs') {
       loadOperatorsData();
       loadPermissionRequests();
       loadSystemConfig();
     } else if (activeMenu === 'history_logs' || activeMenu === 'profile_lookup') {
       loadOperatorsData();
-    } else if (activeMenu === 'native_inspections') {
-      loadDailyInspectionsData();
     } else if (activeMenu === 'inventory_log') {
       loadOperatorsData();
       loadInventoryReconciliationData();
     } else if (activeMenu === 'daily_box_tracker') {
+      loadOperatorsData();
       loadDailyInventoryDeltas();
     }
   }, [activeMenu]);
@@ -849,7 +893,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   useEffect(() => {
     if (activeMenu !== 'daily_box_tracker') return;
     loadDailyInventoryDeltas();
-  }, [activeMenu, deltasWarehouseFilter]);
+  }, [activeMenu, deltasWarehouseFilter, deltasFromDate, deltasToDate]);
 
   useEffect(() => {
     if (activeMenu !== 'inventory_log') return;
@@ -1271,102 +1315,198 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
     setLogsExportProgressLabel('Building file…');
 
+    const extractFilenames = (pathStr) => {
+      if (!pathStr) return '';
+      return String(pathStr)
+        .split(',')
+        .map(p => {
+          const parts = p.trim().split(/[/\\]/);
+          return parts[parts.length - 1];
+        })
+        .join(', ');
+    };
+
+    const formatDateDisplay = (dateStr) => {
+      if (!dateStr) return '';
+      const cleaned = dateStr.split('T')[0];
+      const parts = cleaned.split('-');
+      if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+      return dateStr;
+    };
+
+    const formatDateTimeDisplay = (dtStr) => {
+      if (!dtStr) return '';
+      try {
+        const dt = new Date(dtStr);
+        if (isNaN(dt.getTime())) return dtStr;
+        const day = String(dt.getDate()).padStart(2, '0');
+        const month = String(dt.getMonth() + 1).padStart(2, '0');
+        const year = dt.getFullYear();
+        let hours = dt.getHours();
+        const minutes = String(dt.getMinutes()).padStart(2, '0');
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12;
+        hours = hours ? hours : 12; // the hour '0' should be '12'
+        return `${day}/${month}/${year} ${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+      } catch {
+        return dtStr;
+      }
+    };
+
     let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
 
     if (historyTab === 'daily') {
-      const headers = ["Date", "Warehouse", "Operator Email", "Chamber", "Client Name", "Inspection Time", "Temperature (°C)", "Supervisor"];
+      const headers = [
+        "Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Chamber Name", 
+        "Client Name", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
+        "Sensor Photo Name", "Photo Capture Time", "Time Variance (minutes)", "Box Count", 
+        "Chamber Type", "Overdue Status/Time", "Edit Details Log", "Edit Count", "Created At", "Updated At"
+      ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
       filteredLogs.forEach(log => {
         const row = [
-          log.formatted_date || (log.entry_date ? log.entry_date.split('T')[0] : ''),
+          log.id || '',
+          log.reference_no || '',
+          formatDateDisplay(log.formatted_date || log.entry_date),
           log.warehouse_name || 'Generic',
           log.operator_email || '-',
           log.chamber_name || '',
           log.client_name || '',
           log.inspection_time || '',
-          log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : '',
-          log.monitor_supervisor_name || ''
+          log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : (log.box_temp !== undefined ? `${log.box_temp}°C` : ''),
+          log.monitor_supervisor_name || '',
+          extractFilenames(log.temp_sensor_image),
+          log.photo_capture_time || '',
+          log.time_variance_minutes !== undefined ? log.time_variance_minutes : '',
+          log.box_count !== undefined ? log.box_count : '',
+          log.chamber_type || '',
+          log.overdue_time || '',
+          log.update_details || '',
+          log.update_count !== undefined ? log.update_count : 0,
+          formatDateTimeDisplay(log.created_at),
+          formatDateTimeDisplay(log.updated_at)
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
     } else if (historyTab === 'inward') {
       const headers = [
-        "Date", "Warehouse", "Operator Email", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
-        "Reporting Time", "Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
-        "Invoice Qty", "Received Pallets", "Received Boxes", "Short Boxes", "Excess Boxes", "Damage Boxes", 
-        "Unloading Start", "Unloading End", "Unloading Duration", "Supervisor", "Remarks"
+        "Inward Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
+        "Vehicle Temp (°C)", "Material Temp (°C)", "Transporter Name", "Driver Name", "Driver Contact No.", 
+        "Client Name", "Dock No", "Vehicle Reporting Time", "Unloading Start Time", "Unloading Duration", 
+        "Unloading End Time", "Pallets Qty", "Invoice Qty", "Received Pallets", 
+        "Received Boxes", "Short Received Boxes", "Excess Received Boxes", "Damage Received Boxes", "Material Type", 
+        "Supervisor Name", "Remarks", "Invoice Photos", "POD Photo", "Vehicle Seal Photo", "Vehicle Temp Photo", 
+        "Material Temp Photo", "Vehicle Back Side Photo", "Vehicle Back Side Photo with Material", "Count Sheet Photo", 
+        "Damage Boxes Photo", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
       filteredLogs.forEach(log => {
         const row = [
-          log.inward_entry_date ? log.inward_entry_date.split('T')[0] : '',
+          log.inward_id || '',
+          log.reference_no || '',
+          formatDateDisplay(log.inward_entry_date),
           log.warehouse_name || 'Generic',
           log.operator_email || '-',
           log.inward_vehicle_no || '',
           log.inward_seal_no || '',
-          log.inward_client_name || '',
+          log.inward_vehicle_temp !== undefined ? `${log.inward_vehicle_temp}°C` : '',
+          log.inward_material_temp !== undefined ? `${log.inward_material_temp}°C` : '',
           log.inward_transporter_name || '',
           log.inward_driver_name || '',
           log.inward_driver_no || '',
+          log.inward_client_name || '',
           log.inward_dock_no || '',
           log.inward_vehicle_reporting_time || '',
-          log.inward_vehicle_temp !== undefined ? `${log.inward_vehicle_temp}°C` : '',
-          log.inward_material_temp !== undefined ? `${log.inward_material_temp}°C` : '',
-          log.inward_material_type || '',
-          log.inward_pallets_in_qty || 0,
-          log.inward_invoice_qty || 0,
-          log.inward_received_qty || 0,
-          log.inward_received_boxes_qty || 0,
-          log.inward_short_received_boxes_qty || 0,
-          log.inward_excess_received_boxes_qty || 0,
-          log.inward_damage_received_boxes_qty || 0,
           log.inward_unloading_start_time || '',
-          log.inward_unloading_end_time || '',
           formatDuration(log.inward_unloading_duration_hours, log.inward_unloading_duration_mins),
+          log.inward_unloading_end_time || '',
+          log.inward_pallets_in_qty !== undefined ? log.inward_pallets_in_qty : 0,
+          log.inward_invoice_qty !== undefined ? log.inward_invoice_qty : 0,
+          log.inward_received_qty !== undefined ? log.inward_received_qty : 0,
+          log.inward_received_boxes_qty !== undefined ? log.inward_received_boxes_qty : 0,
+          log.inward_short_received_boxes_qty !== undefined ? log.inward_short_received_boxes_qty : 0,
+          log.inward_excess_received_boxes_qty !== undefined ? log.inward_excess_received_boxes_qty : 0,
+          log.inward_damage_received_boxes_qty !== undefined ? log.inward_damage_received_boxes_qty : 0,
+          log.inward_material_type || '',
           log.inward_unloading_supervisor_name || '',
-          log.inward_remarks || ''
+          log.inward_remarks || '',
+          extractFilenames(log.inward_invoice_photos),
+          extractFilenames(log.inward_pod_photo),
+          extractFilenames(log.inward_vehicle_seal_photo),
+          extractFilenames(log.inward_vehicle_temp_photo),
+          extractFilenames(log.inward_material_temp_photo),
+          extractFilenames(log.inward_vehicle_back_side_photo),
+          extractFilenames(log.inward_vehicle_back_side_photo_with_material),
+          extractFilenames(log.inward_count_sheet_photo),
+          extractFilenames(log.inward_damage_boxes_photo),
+          log.update_details || '',
+          log.update_count !== undefined ? log.update_count : 0,
+          formatDateTimeDisplay(log.inward_created_at),
+          formatDateTimeDisplay(log.inward_updated_at)
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
     } else if (historyTab === 'outward') {
       const headers = [
-        "Date", "Warehouse", "Operator Email", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
-        "Reporting Time", "Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
-        "Invoice Qty", "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Boxes", 
-        "Loading Start", "Loading End", "Loading Duration", "Supervisor", "Remarks"
+        "Outward Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
+        "Vehicle Temp (°C)", "Pre-Cooling Temp (°C)", "Material Temp (°C)", "Transporter Name", "Driver Name", 
+        "Driver Contact No.", "Client Name", "Dock No", "Vehicle Reporting Time", "Loading Start Time", 
+        "Loading Duration", "Loading End Time", "Pallets Qty", "Invoice Qty", 
+        "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Loaded Boxes", "Material Type", 
+        "Supervisor Name", "Remarks", "Invoice Photos", "POD Photo", "Vehicle Seal Photo", "Vehicle Temp Photo", 
+        "Pre-Cooling Temp Photo", "Material Temp Photo", "Vehicle Back Side Photo", "Vehicle Back Side Photo with Material", 
+        "Damage Boxes Photo", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
       filteredLogs.forEach(log => {
         const row = [
-          log.outward_entry_date ? log.outward_entry_date.split('T')[0] : '',
+          log.outward_id || '',
+          log.reference_no || '',
+          formatDateDisplay(log.outward_entry_date),
           log.warehouse_name || 'Generic',
           log.operator_email || '-',
           log.outward_vehicle_no || '',
           log.outward_seal_no || '',
-          log.outward_client_name || '',
+          log.outward_vehicle_temp !== undefined ? `${log.outward_vehicle_temp}°C` : '',
+          log.outward_pre_vehicle_temp !== undefined ? `${log.outward_pre_vehicle_temp}°C` : '',
+          log.outward_material_temp !== undefined ? `${log.outward_material_temp}°C` : '',
           log.outward_transporter_name || '',
           log.outward_driver_name || '',
           log.outward_driver_no || '',
+          log.outward_client_name || '',
           log.outward_dock_no || '',
           log.outward_vehicle_reporting_time || '',
-          log.outward_vehicle_temp !== undefined ? `${log.outward_vehicle_temp}°C` : '',
-          log.outward_material_temp !== undefined ? `${log.outward_material_temp}°C` : '',
-          log.outward_material_type || '',
-          log.outward_pallets_in_qty || 0,
-          log.outward_invoice_qty || 0,
-          log.outward_received_qty || 0,
-          log.outward_received_boxes_qty || 0,
-          log.outward_short_received_boxes_qty || 0,
-          log.outward_excess_received_boxes_qty || 0,
-          log.outward_damage_received_boxes_qty || 0,
           log.outward_loading_start_time || '',
-          log.outward_loading_end_time || '',
           formatDuration(log.outward_loading_duration_hours, log.outward_loading_duration_mins),
+          log.outward_loading_end_time || '',
+          log.outward_pallets_in_qty !== undefined ? log.outward_pallets_in_qty : 0,
+          log.outward_invoice_qty !== undefined ? log.outward_invoice_qty : 0,
+          log.outward_received_qty !== undefined ? log.outward_received_qty : 0,
+          log.outward_received_boxes_qty !== undefined ? log.outward_received_boxes_qty : 0,
+          log.outward_short_received_boxes_qty !== undefined ? log.outward_short_received_boxes_qty : 0,
+          log.outward_excess_received_boxes_qty !== undefined ? log.outward_excess_received_boxes_qty : 0,
+          log.outward_damage_received_boxes_qty !== undefined ? log.outward_damage_received_boxes_qty : 0,
+          log.outward_material_type || '',
           log.outward_loading_supervisor_name || '',
-          log.outward_remarks || ''
+          log.outward_remarks || '',
+          extractFilenames(log.outward_invoice_photos),
+          extractFilenames(log.outward_pod_photo),
+          extractFilenames(log.outward_vehicle_seal_photo),
+          extractFilenames(log.outward_vehicle_temp_photo),
+          extractFilenames(log.outward_pre_vehicle_temp_photo),
+          extractFilenames(log.outward_material_temp_photo),
+          extractFilenames(log.outward_vehicle_back_side_photo),
+          extractFilenames(log.outward_vehicle_back_side_photo_with_material),
+          extractFilenames(log.outward_damage_boxes_photo),
+          log.update_details || '',
+          log.update_count !== undefined ? log.update_count : 0,
+          formatDateTimeDisplay(log.outward_created_at),
+          formatDateTimeDisplay(log.outward_updated_at)
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
@@ -2028,8 +2168,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               </div>
             </button>
             <button 
-              className={`clean-menu-item ${activeMenu === 'data_operators' ? 'active' : ''}`}
-              onClick={() => setActiveMenu('data_operators')}
+              className={`clean-menu-item ${activeMenu === 'user_management' ? 'active' : ''}`}
+              onClick={() => setActiveMenu('user_management')}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -2038,8 +2178,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 padding: '10px 14px',
                 borderRadius: 'var(--radius-sm)',
                 border: 'none',
-                background: activeMenu === 'data_operators' ? 'var(--primary-light)' : 'transparent',
-                color: activeMenu === 'data_operators' ? 'var(--primary)' : 'var(--text-dark)',
+                background: activeMenu === 'user_management' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'user_management' ? 'var(--primary)' : 'var(--text-dark)',
                 fontWeight: '700',
                 fontSize: '0.82rem',
                 cursor: 'pointer',
@@ -2048,34 +2188,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Thermometer size={18} />
-                <span>Data Operators</span>
-              </div>
-            </button>
-
-            <button 
-              className={`clean-menu-item ${activeMenu === 'sub_admins' ? 'active' : ''}`}
-              onClick={() => setActiveMenu('sub_admins')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                width: '100%',
-                padding: '10px 14px',
-                borderRadius: 'var(--radius-sm)',
-                border: 'none',
-                background: activeMenu === 'sub_admins' ? 'var(--primary-light)' : 'transparent',
-                color: activeMenu === 'sub_admins' ? 'var(--primary)' : 'var(--text-dark)',
-                fontWeight: '700',
-                fontSize: '0.82rem',
-                cursor: 'pointer',
-                textAlign: 'left',
-                transition: 'all 0.2s ease'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <ShieldCheck size={18} />
-                <span>Sub-Admins</span>
+                <Users size={18} />
+                <span>Admins & Operators</span>
               </div>
             </button>
 
@@ -2184,31 +2298,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 <span>Profile Lookup</span>
               </div>
             </button>
-            <button 
-              className={`clean-menu-item ${activeMenu === 'native_inspections' ? 'active' : ''}`}
-              onClick={() => setActiveMenu('native_inspections')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                width: '100%',
-                padding: '10px 14px',
-                borderRadius: 'var(--radius-sm)',
-                border: 'none',
-                background: activeMenu === 'native_inspections' ? 'var(--primary-light)' : 'transparent',
-                color: activeMenu === 'native_inspections' ? 'var(--primary)' : 'var(--text-dark)',
-                fontWeight: '700',
-                fontSize: '0.82rem',
-                cursor: 'pointer',
-                textAlign: 'left',
-                transition: 'all 0.2s ease'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Smartphone size={18} />
-                <span>Native App Logs</span>
-              </div>
-            </button>
+
 
             <button 
               className={`clean-menu-item ${activeMenu === 'daily_box_tracker' ? 'active' : ''}`}
@@ -2291,25 +2381,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           <span className="secure-role-tag" style={{ margin: 0 }}>
             {activeMenu === 'dashboard'
               ? 'Super Admin - Control Dashboard'
+              : activeMenu === 'user_management'
+                ? 'Super Admin - Admins & Operators'
               : activeMenu === 'sub_admins'
                 ? 'Super Admin - Sub-Admin Profiles'
-                : activeMenu === 'customer_reports'
-                  ? 'Super Admin - Customer Reports'
-                : activeMenu === 'data_operators' 
-                  ? 'Super Admin - Operator Profiles' 
-                  : activeMenu === 'history_logs' 
-                    ? 'Super Admin - History Logs' 
-                    : activeMenu === 'activity_logs'
-                      ? 'Super Admin - Operator Activities'
-                      : activeMenu === 'profile_lookup'
-                        ? 'Super Admin - Profile Lookup'
-                        : activeMenu === 'native_inspections'
-                          ? 'Super Admin - Native App Logs'
-                        : activeMenu === 'inventory_log'
-                          ? 'Super Admin - Inventory Reconciliation'
-                        : activeMenu === 'super_admin_profile'
-                          ? 'Super Admin - Profile & Security'
-                          : 'Super Administrator'}
+              : activeMenu === 'customer_reports'
+                ? 'Super Admin - Customer Reports'
+              : activeMenu === 'data_operators' 
+                ? 'Super Admin - Operator Profiles' 
+              : activeMenu === 'history_logs' 
+                ? 'Super Admin - History Logs' 
+              : activeMenu === 'activity_logs'
+                ? 'Super Admin - Operator Activities'
+              : activeMenu === 'profile_lookup'
+                ? 'Super Admin - Profile Lookup'
+              : activeMenu === 'inventory_log'
+                ? 'Super Admin - Inventory Reconciliation'
+              : activeMenu === 'super_admin_profile'
+                ? 'Super Admin - Profile & Security'
+                : 'Super Administrator'}
           </span>
           <div className="secure-clock-subtext" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '700' }}>
             <Clock size={12} />
@@ -2390,30 +2480,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
-            <button 
-              className={`clean-menu-item ${activeMenu === 'data_operators' ? 'active' : ''}`}
+             <button 
+              className={`clean-menu-item ${activeMenu === 'user_management' ? 'active' : ''}`}
               onClick={() => {
-                setActiveMenu('data_operators');
+                setActiveMenu('user_management');
                 setIsMobileMenuOpen(false);
               }}
             >
               <div className="item-left">
-                <Thermometer size={18} className="item-icon" />
-                <span>Data Operators</span>
-              </div>
-              <ChevronRight size={16} className="item-arrow" />
-            </button>
-
-            <button 
-              className={`clean-menu-item ${activeMenu === 'sub_admins' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveMenu('sub_admins');
-                setIsMobileMenuOpen(false);
-              }}
-            >
-              <div className="item-left">
-                <ShieldCheck size={18} className="item-icon" />
-                <span>Sub-Admins</span>
+                <Users size={18} className="item-icon" />
+                <span>Admins & Operators</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -2477,19 +2553,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <ChevronRight size={16} className="item-arrow" />
             </button>
 
-            <button 
-              className={`clean-menu-item ${activeMenu === 'native_inspections' ? 'active' : ''}`}
-              onClick={() => {
-                setActiveMenu('native_inspections');
-                setIsMobileMenuOpen(false);
-              }}
-            >
-              <div className="item-left">
-                <Smartphone size={18} className="item-icon" />
-                <span>Native App Logs</span>
-              </div>
-              <ChevronRight size={16} className="item-arrow" />
-            </button>
+
 
 
 
@@ -2863,7 +2927,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
                 <button 
-                  onClick={() => setActiveMenu('data_operators')}
+                  onClick={() => {
+                    setActiveMenu('user_management');
+                    setUserTab('operators');
+                  }}
                   style={{
                     padding: '10px 14px',
                     borderRadius: 'var(--radius-md)',
@@ -3007,218 +3074,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
 
 
-        {activeMenu === 'native_inspections' && (
-          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            
-            {/* Header section */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
-                  Native App Daily Inspections
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                  Monitor and manage daily chamber temperature logs submitted from the mobile native application.
-                </p>
-              </div>
 
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button
-                  onClick={loadDailyInspectionsData}
-                  disabled={loadingInspections}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <Activity size={14} className={loadingInspections ? 'spin' : ''} />
-                  Refresh
-                </button>
-              </div>
-            </div>
-
-            {/* Error Banner */}
-            {inspectionsError && (
-              <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '700' }}>
-                {inspectionsError}
-              </div>
-            )}
-
-            {/* Filter / Search bar */}
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '240px' }}>
-                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search Logs</label>
-                <div style={{ position: 'relative' }}>
-                  <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                  <input
-                    type="text"
-                    placeholder="Search by operator, chamber, or client..."
-                    value={inspectionsSearch}
-                    onChange={(e) => setInspectionsSearch(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px 8px 34px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.8rem',
-                      outline: 'none',
-                      backgroundColor: 'var(--bg-main)',
-                      color: 'var(--text-dark)'
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Inspections Table */}
-            {loadingInspections ? (
-              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <span>Loading daily inspections...</span>
-              </div>
-            ) : inspections.length === 0 ? (
-              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <span>No inspections logged yet from the native application.</span>
-              </div>
-            ) : (
-              <div className="table-responsive" style={{ maxHeight: '600px', overflowY: 'auto' }}>
-                <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date & Time</th>
-                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Chamber</th>
-                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client</th>
-                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Temp</th>
-                      <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator</th>
-                      <th style={{ textAlign: 'center', padding: '12px 16px' }}>Photo</th>
-                      <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {inspections
-                      .filter((insp) => {
-                        const term = inspectionsSearch.toLowerCase().trim();
-                        if (!term) return true;
-                        return (
-                          (insp.operator_name && insp.operator_name.toLowerCase().includes(term)) ||
-                          (insp.chamber_name && insp.chamber_name.toLowerCase().includes(term)) ||
-                          (insp.client_name && insp.client_name.toLowerCase().includes(term))
-                        );
-                      })
-                      .map((insp) => {
-                        const formattedDate = insp.entry_date ? new Date(insp.entry_date).toLocaleDateString('en-GB') : '-';
-                        const formattedTime = insp.inspection_time || '-';
-                        const photoUrl = insp.photo_url
-                          ? (insp.photo_url.startsWith('uploads') ? `/${insp.photo_url}` : insp.photo_url)
-                          : null;
-
-                        return (
-                          <tr key={insp.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '600' }}>
-                              {formattedDate} <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem', marginLeft: '6px' }}>{formattedTime}</span>
-                            </td>
-                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '700' }}>
-                              {insp.chamber_name || `Chamber #${insp.chamber_id}`}
-                            </td>
-                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)' }}>
-                              {insp.client_name}
-                            </td>
-                            <td style={{ padding: '12px 16px', fontSize: '0.82rem', color: 'var(--text-dark)', fontWeight: '700' }}>
-                              <span style={{
-                                padding: '4px 8px',
-                                borderRadius: 'var(--radius-sm)',
-                                backgroundColor: insp.temperature > 0 ? '#fee2e2' : '#e0f2fe',
-                                color: insp.temperature > 0 ? '#ef4444' : '#0284c7'
-                              }}>
-                                {insp.temperature}°C
-                              </span>
-                            </td>
-                            <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)' }}>
-                              {insp.operator_name}
-                            </td>
-                            <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                              {photoUrl ? (
-                                <div 
-                                  onClick={() => setLightboxImg(photoUrl)}
-                                  style={{
-                                    width: '36px',
-                                    height: '36px',
-                                    borderRadius: 'var(--radius-sm)',
-                                    overflow: 'hidden',
-                                    cursor: 'pointer',
-                                    border: '1px solid var(--border)',
-                                    display: 'inline-block'
-                                  }}
-                                >
-                                  <img 
-                                    src={photoUrl} 
-                                    alt="Sensor reading" 
-                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                                  />
-                                </div>
-                              ) : (
-                                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>No Photo</span>
-                              )}
-                            </td>
-                            <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedDetailLog(insp);
-                                    setDetailType('daily');
-                                  }}
-                                  title="View Data Profile & Photos"
-                                  style={{
-                                    backgroundColor: '#f1f5f9',
-                                    border: '1px solid #cbd5e1',
-                                    color: '#334155',
-                                    padding: '6px 10px',
-                                    borderRadius: 'var(--radius-sm)',
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    fontSize: '0.75rem',
-                                    fontWeight: 700
-                                  }}
-                                >
-                                  <Eye size={13} />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteDailyInspection(insp.id)}
-                                  style={{
-                                    padding: '6px',
-                                    borderRadius: 'var(--radius-sm)',
-                                    border: 'none',
-                                    backgroundColor: 'transparent',
-                                    color: '#ef4444',
-                                    cursor: 'pointer',
-                                    transition: 'color 0.2s'
-                                  }}
-                                  title="Delete Log"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
 
 
 
@@ -3694,8 +3550,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         )}
 
         {activeMenu === 'daily_box_tracker' && (() => {
+          const uniqueClients = Array.from(new Set(dailyDeltas.map(d => d.client_name).filter(Boolean))).sort();
+          const uniqueChambers = Array.from(new Set(dailyDeltas.map(d => d.chamber_name).filter(Boolean))).sort();
+
           const filtered = dailyDeltas.filter(row => {
             if (!row.client_name) return false;
+            if (deltasClientFilter !== 'All' && row.client_name !== deltasClientFilter) return false;
+            if (deltasChamberFilter !== 'All' && row.chamber_name !== deltasChamberFilter) return false;
             if (deltasSearch.trim() !== '') {
               return row.client_name.toLowerCase().includes(deltasSearch.toLowerCase());
             }
@@ -3704,18 +3565,58 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
           const handleExportDeltasCSV = () => {
             if (!filtered || filtered.length === 0) return;
-            const headers = 'Client Name,Warehouse Name,Chamber Name,Previous Audit Date,Previous Box Count,Latest Audit Date,Latest Box Count,Change (Delta),Trend Status\n';
+            
+            const formatDateCSV = (dStr) => {
+              if (!dStr) return '-';
+              const parts = dStr.split('-');
+              if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+              return dStr;
+            };
+
+            const headers = 'Client Name,Warehouse Name,Chamber Name,Previous Audit Date,Previous Box Count,Latest Audit Date,Latest Box Count,Change (Delta),Trend Status,History (Last 5 Audit Counts)\n';
             const csvContent = headers + filtered.map(row => {
-              const prevDate = row.prev_date ? new Date(row.prev_date).toLocaleDateString('en-GB') : '-';
-              const latestDate = row.latest_date ? new Date(row.latest_date).toLocaleDateString('en-GB') : '-';
+              const prevDate = formatDateCSV(row.prev_date);
+              const latestDate = formatDateCSV(row.latest_date);
               const trend = row.delta > 0 ? 'Inward Increase' : row.delta < 0 ? 'Outward Decrease' : 'No Change';
-              return `"${row.client_name || '-'}","${row.warehouse_name || '-'}","${row.chamber_name || '-'}","${prevDate}",${row.prev_count},"${latestDate}",${row.latest_count},${row.delta},"${trend}"`;
+              const historyStr = row.history ? row.history.map(h => `${formatDateCSV(h.date)}:${h.count}`).join(' | ') : '';
+              return `"${row.client_name || '-'}","${row.warehouse_name || '-'}","${row.chamber_name || '-'}","${prevDate}",${row.prev_count},"${latestDate}",${row.latest_count},${row.delta},"${trend}","${historyStr}"`;
             }).join('\n');
             downloadCsv(`ReeferON_DailyBoxDeltas_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
           };
 
-          const chartData = filtered.slice(0, 8);
-          const maxVal = Math.max(...chartData.map(d => Math.max(d.latest_count, d.prev_count)), 10);
+          const isAllWarehouse = deltasWarehouseFilter === 'All';
+          let chartData = [];
+          if (isAllWarehouse) {
+            const warehouseChamberGroups = {};
+            filtered.forEach(row => {
+              const wh = row.warehouse_name || 'Generic';
+              const ch = row.chamber_name || 'Generic';
+              const key = `${wh}|||${ch}`;
+              if (!warehouseChamberGroups[key]) {
+                warehouseChamberGroups[key] = { name: `${wh} (${ch})`, latest_count: 0, delta: 0 };
+              }
+              warehouseChamberGroups[key].latest_count += (row.latest_count || 0);
+              warehouseChamberGroups[key].delta += (row.delta || 0);
+            });
+            chartData = Object.values(warehouseChamberGroups)
+              .sort((a, b) => b.latest_count - a.latest_count)
+              .slice(0, 8);
+          } else {
+            const chamberClientGroups = {};
+            filtered.forEach(row => {
+              const ch = row.chamber_name || 'Generic';
+              const cl = row.client_name || 'Generic';
+              const key = `${ch}|||${cl}`;
+              if (!chamberClientGroups[key]) {
+                chamberClientGroups[key] = { name: `${ch} (${cl})`, latest_count: 0, delta: 0 };
+              }
+              chamberClientGroups[key].latest_count += (row.latest_count || 0);
+              chamberClientGroups[key].delta += (row.delta || 0);
+            });
+            chartData = Object.values(chamberClientGroups)
+              .sort((a, b) => b.latest_count - a.latest_count)
+              .slice(0, 8);
+          }
 
           const startIndex = (deltasCurrentPage - 1) * deltasPerPage;
           const endIndex = startIndex + deltasPerPage;
@@ -3790,10 +3691,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               )}
 
               {/* Top Filter and Search Bar */}
-              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
                 {/* Warehouse Filter */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '220px' }}>
-                  <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '160px' }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     Filter by Warehouse
                   </label>
                   <select
@@ -3803,12 +3704,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       setDeltasCurrentPage(1);
                     }}
                     style={{
-                      padding: '10px 14px',
+                      padding: '6px 10px',
                       borderRadius: 'var(--radius-sm)',
                       border: '1px solid var(--border)',
-                      fontSize: '0.82rem',
+                      fontSize: '0.78rem',
                       outline: 'none',
-                      backgroundColor: 'var(--bg-main)',
+                      backgroundColor: deltasWarehouseFilter !== 'All' ? '#e0f2fe' : 'var(--bg-main)',
                       color: 'var(--text-dark)',
                       cursor: 'pointer',
                       fontWeight: '700',
@@ -3822,13 +3723,157 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   </select>
                 </div>
 
+                {/* Client Filter */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '150px' }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Filter by Client
+                  </label>
+                  <select
+                    value={deltasClientFilter}
+                    onChange={(e) => {
+                      setDeltasClientFilter(e.target.value);
+                      setDeltasCurrentPage(1);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.78rem',
+                      outline: 'none',
+                      backgroundColor: deltasClientFilter !== 'All' ? '#e0f2fe' : 'var(--bg-main)',
+                      color: 'var(--text-dark)',
+                      cursor: 'pointer',
+                      fontWeight: '700',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="All">All Clients</option>
+                    {uniqueClients.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Chamber Filter */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '150px' }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Filter by Chamber
+                  </label>
+                  <select
+                    value={deltasChamberFilter}
+                    onChange={(e) => {
+                      setDeltasChamberFilter(e.target.value);
+                      setDeltasCurrentPage(1);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.78rem',
+                      outline: 'none',
+                      backgroundColor: deltasChamberFilter !== 'All' ? '#e0f2fe' : 'var(--bg-main)',
+                      color: 'var(--text-dark)',
+                      cursor: 'pointer',
+                      fontWeight: '700',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="All">All Chambers</option>
+                    {uniqueChambers.map(ch => (
+                      <option key={ch} value={ch}>{ch}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* From Date Filter */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '130px' }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    From Date
+                  </label>
+                  <input
+                    type="date"
+                    value={deltasFromDate}
+                    onChange={(e) => {
+                      setDeltasFromDate(e.target.value);
+                      setDeltasCurrentPage(1);
+                    }}
+                    style={{
+                      padding: '5px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.78rem',
+                      outline: 'none',
+                      backgroundColor: deltasFromDate ? '#e0f2fe' : 'var(--bg-main)',
+                      color: 'var(--text-dark)',
+                      fontWeight: '700',
+                      cursor: 'pointer'
+                    }}
+                  />
+                </div>
+
+                {/* To Date Filter */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '130px' }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    To Date
+                  </label>
+                  <input
+                    type="date"
+                    value={deltasToDate}
+                    onChange={(e) => {
+                      setDeltasToDate(e.target.value);
+                      setDeltasCurrentPage(1);
+                    }}
+                    style={{
+                      padding: '5px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      fontSize: '0.78rem',
+                      outline: 'none',
+                      backgroundColor: deltasToDate ? '#e0f2fe' : 'var(--bg-main)',
+                      color: 'var(--text-dark)',
+                      fontWeight: '700',
+                      cursor: 'pointer'
+                    }}
+                  />
+                </div>
+
+                {/* Clear Filters Button */}
+                <button
+                  onClick={() => {
+                    setDeltasWarehouseFilter('All');
+                    setDeltasClientFilter('All');
+                    setDeltasChamberFilter('All');
+                    setDeltasFromDate('');
+                    setDeltasToDate('');
+                    setDeltasSearch('');
+                    setDeltasCurrentPage(1);
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid #cbd5e1',
+                    backgroundColor: '#f1f5f9',
+                    color: '#475569',
+                    fontWeight: '700',
+                    fontSize: '0.76rem',
+                    cursor: 'pointer',
+                    marginTop: '16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    transition: 'background-color 0.2s'
+                  }}
+                >
+                  Clear Filters
+                </button>
+
                 {/* Client Search */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '280px' }}>
-                  <label style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '200px' }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     Search Client Name
                   </label>
                   <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <Search size={14} style={{ position: 'absolute', left: '12px', color: 'var(--text-muted)' }} />
+                    <Search size={13} style={{ position: 'absolute', left: '10px', color: 'var(--text-muted)' }} />
                     <input
                       type="text"
                       placeholder="Search client lot..."
@@ -3838,12 +3883,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         setDeltasCurrentPage(1);
                       }}
                       style={{
-                        padding: '10px 14px 10px 34px',
+                        padding: '6px 10px 6px 30px',
                         borderRadius: 'var(--radius-sm)',
                         border: '1px solid var(--border)',
-                        fontSize: '0.82rem',
+                        fontSize: '0.78rem',
                         outline: 'none',
-                        backgroundColor: 'var(--bg-main)',
+                        backgroundColor: deltasSearch.trim() !== '' ? '#e0f2fe' : 'var(--bg-main)',
                         color: 'var(--text-dark)',
                         width: '100%',
                         fontWeight: '600'
@@ -3855,172 +3900,251 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
               {/* Visual Chart Section */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {/* Chart Card */}
-                {chartData.length > 0 ? (
-                  <div style={{ 
-                    padding: '28px', 
-                    background: 'linear-gradient(135deg, var(--surface) 0%, var(--bg-main) 100%)', 
-                    borderRadius: 'var(--radius-lg)', 
-                    border: '1px solid var(--border)',
-                    boxShadow: '0 8px 30px -4px rgba(0, 0, 0, 0.03)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '24px',
-                    position: 'relative',
-                    overflow: 'hidden'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {(() => {
+                  const isSingleLotSelected = deltasClientFilter !== 'All' && deltasChamberFilter !== 'All';
+                  
+                  if (isSingleLotSelected) {
+                    const selectedLot = dailyDeltas.find(d => d.client_name === deltasClientFilter && d.chamber_name === deltasChamberFilter);
+                    const lotHistory = selectedLot ? (selectedLot.history || []) : [];
+                    
+                    const formatDate = (dStr) => {
+                      if (!dStr) return '-';
+                      const parts = dStr.split('-');
+                      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+                      return dStr;
+                    };
+
+                    return (
+                      <div style={{ 
+                        padding: '24px', 
+                        background: 'linear-gradient(135deg, var(--surface) 0%, var(--bg-main) 100%)', 
+                        borderRadius: 'var(--radius-lg)', 
+                        border: '1px solid var(--border)',
+                        boxShadow: '0 8px 30px -4px rgba(0, 0, 0, 0.03)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '20px'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
+                          <div style={{ width: '3px', height: '16px', backgroundColor: '#2563eb', borderRadius: '2px' }} />
+                          <span style={{ fontSize: '0.88rem', fontWeight: '850', color: 'var(--text-dark)', letterSpacing: '-0.01em' }}>
+                            {deltasFromDate || deltasToDate 
+                              ? `Audit History (${deltasFromDate ? deltasFromDate.split('-').reverse().join('/') : 'Start'} to ${deltasToDate ? deltasToDate.split('-').reverse().join('/') : 'Latest'}): `
+                              : 'Audit History (Recent Logs): '
+                            }
+                            <span style={{ color: '#2563eb' }}>{deltasClientFilter}</span> — {deltasChamberFilter}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: '12px', padding: '15px 0' }}>
+                          {lotHistory.length === 0 ? (
+                            <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>No historical logs found for the selected date range.</div>
+                          ) : (
+                            lotHistory.map((h, index) => {
+                              const currentCount = h.count;
+                              const prevPoint = index > 0 ? lotHistory[index - 1] : null;
+                              const stepDelta = prevPoint ? (currentCount - prevPoint.count) : 0;
+                              
+                              const isUp = stepDelta > 0;
+                              const isDown = stepDelta < 0;
+                              const formattedDateStr = formatDate(h.date);
+                              
+                              return (
+                                <div key={index} style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                                  {/* Timeline node card */}
+                                  <div style={{ 
+                                    width: '130px', 
+                                    backgroundColor: 'var(--surface)', 
+                                    borderRadius: 'var(--radius-md)', 
+                                    border: '1px solid var(--border)', 
+                                    padding: '12px 10px', 
+                                    alignItems: 'center', 
+                                    display: 'flex', 
+                                    flexDirection: 'column', 
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.02)',
+                                    zIndex: 2,
+                                    transition: 'transform 0.2s',
+                                    cursor: 'default'
+                                  }}>
+                                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: '700', marginBottom: '6px' }}>
+                                      {formattedDateStr}
+                                    </span>
+                                    
+                                    <span style={{ fontSize: '1.2rem', fontWeight: '900', color: 'var(--text-dark)' }}>
+                                      {currentCount.toLocaleString()}
+                                    </span>
+                                    <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                                      Boxes
+                                    </span>
+
+                                    {index > 0 ? (
+                                      <span style={{ 
+                                        fontSize: '0.68rem', 
+                                        fontWeight: '800', 
+                                        color: isUp ? '#10b981' : isDown ? '#ef4444' : '#64748b',
+                                        backgroundColor: isUp ? '#f0fdf4' : isDown ? '#fef2f2' : '#f8fafc',
+                                        padding: '2px 8px',
+                                        borderRadius: '12px',
+                                        border: `1px solid ${isUp ? '#dcfce7' : isDown ? '#fee2e2' : '#f1f5f9'}`,
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '2px'
+                                      }}>
+                                        {isUp ? `▲ +${stepDelta}` : isDown ? `▼ ${stepDelta}` : '● 0'}
+                                      </span>
+                                    ) : (
+                                      <span style={{ 
+                                        fontSize: '0.64rem', 
+                                        color: '#6366f1', 
+                                        backgroundColor: '#eef2ff',
+                                        padding: '2px 8px',
+                                        borderRadius: '12px',
+                                        border: '1px solid #e0e7ff',
+                                        fontWeight: '800' 
+                                      }}>
+                                        Initial
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Dashed connector line */}
+                                  {index < lotHistory.length - 1 && (
+                                    <div style={{ 
+                                      width: '40px', 
+                                      borderTop: '2px dashed var(--border)', 
+                                      height: 0, 
+                                      marginLeft: '-2px', 
+                                      marginRight: '-2px',
+                                      zIndex: 1
+                                    }} />
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Default Donut Chart View (for multiple lots)
+                  if (chartData.length === 0) {
+                    return (
+                      <div style={{ padding: '40px', textAlign: 'center', backgroundColor: 'var(--bg-main)', borderRadius: 'var(--radius-lg)', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        Add temperature audit logs in native app to display comparative metrics.
+                      </div>
+                    );
+                  }
+
+                  const totalBoxCount = chartData.reduce((sum, d) => sum + (d.latest_count || 0), 0);
+                  const donutColors = [
+                    '#2563eb', '#10b981', '#6366f1', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f97316'
+                  ];
+                  const radius = 75;
+                  const strokeWidth = 18;
+                  const circumference = 2 * Math.PI * radius;
+
+                  return (
+                    <div style={{ 
+                      padding: '24px', 
+                      background: 'linear-gradient(135deg, var(--surface) 0%, var(--bg-main) 100%)', 
+                      borderRadius: 'var(--radius-lg)', 
+                      border: '1px solid var(--border)',
+                      boxShadow: '0 8px 30px -4px rgba(0, 0, 0, 0.03)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '20px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
                         <div style={{ width: '3px', height: '16px', backgroundColor: 'var(--primary)', borderRadius: '2px' }} />
-                        <span style={{ fontSize: '0.9rem', fontWeight: '850', color: 'var(--text-dark)', letterSpacing: '-0.01em' }}>
-                          Client Box Audit Reconciliation Chart
+                        <span style={{ fontSize: '0.88rem', fontWeight: '850', color: 'var(--text-dark)', letterSpacing: '-0.01em' }}>
+                          {isAllWarehouse ? 'Warehouse Box Stock Distribution' : 'Chamber Box Stock Distribution'}
                         </span>
                       </div>
-                      
-                      <div style={{ display: 'flex', gap: '16px', alignItems: 'center', fontSize: '0.76rem', fontWeight: '800' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ width: '14px', height: '14px', background: 'linear-gradient(180deg, #cbd5e1 0%, #94a3b8 100%)', borderRadius: '4px' }} />
-                          <span style={{ color: 'var(--text-muted)' }}>Previous Count</span>
+
+                      <div style={{ display: 'flex', gap: '30px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-evenly' }}>
+                        <div style={{ position: 'relative', width: '210px', height: '210px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <svg width="200" height="200" viewBox="0 0 200 200" style={{ transform: 'rotate(-90deg)' }}>
+                            {totalBoxCount === 0 ? (
+                              <circle cx="100" cy="100" r={radius} fill="transparent" stroke="#e2e8f0" strokeWidth={strokeWidth} />
+                            ) : (() => {
+                              let accumulated = 0;
+                              return chartData.map((d, index) => {
+                                const pct = (d.latest_count / totalBoxCount) * 100;
+                                const dashLength = (pct * circumference) / 100;
+                                const dashOffset = -accumulated;
+                                accumulated += dashLength;
+                                const color = donutColors[index % donutColors.length];
+                                return (
+                                  <circle
+                                    key={index}
+                                    cx="100"
+                                    cy="100"
+                                    r={radius}
+                                    fill="transparent"
+                                    stroke={color}
+                                    strokeWidth={strokeWidth}
+                                    strokeDasharray={`${dashLength} ${circumference}`}
+                                    strokeDashoffset={dashOffset}
+                                    style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+                                  />
+                                );
+                              });
+                            })()}
+                          </svg>
+                          <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', textAlign: 'center' }}>
+                            <span style={{ fontSize: '0.72rem', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Stock</span>
+                            <span style={{ fontSize: '1.4rem', fontWeight: '900', color: 'var(--text-dark)', marginTop: '2px', lineHeight: 1 }}>{totalBoxCount.toLocaleString()}</span>
+                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>Boxes</span>
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ width: '14px', height: '14px', background: 'linear-gradient(180deg, var(--primary) 0%, #1d4ed8 100%)', borderRadius: '4px' }} />
-                          <span style={{ color: 'var(--text-dark)' }}>Latest Count</span>
-                        </div>
-                      </div>
-                    </div>
 
-                    {/* Chart Grid Wrapper */}
-                    <div style={{ 
-                      position: 'relative', 
-                      height: '240px', 
-                      paddingTop: '20px',
-                      backgroundImage: 'linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px)',
-                      backgroundSize: '20px 20px',
-                      borderRadius: 'var(--radius-sm)'
-                    }}>
-                      {/* Horizontal Grid lines */}
-                      <div style={{ position: 'absolute', top: '20px', left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
-                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
-                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
-                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
-                        <div style={{ borderBottom: '1px dashed rgba(148, 163, 184, 0.16)', width: '100%', height: 0 }} />
-                        <div style={{ borderBottom: '2px solid var(--border)', width: '100%', height: 0 }} />
-                      </div>
-
-                      {/* Bars Container */}
-                      <div style={{ 
-                        display: 'grid', 
-                        gridTemplateColumns: `repeat(${chartData.length}, 1fr)`, 
-                        gap: '24px', 
-                        height: '100%', 
-                        alignItems: 'end',
-                        position: 'relative',
-                        zIndex: 2
-                      }}>
-                        {chartData.map((d, index) => {
-                          const prevHeight = (d.prev_count / maxVal) * 150;
-                          const latestHeight = (d.latest_count / maxVal) * 150;
-                          const isGreen = d.delta > 0;
-                          const isRed = d.delta < 0;
-
-                          return (
-                            <div key={index} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end', position: 'relative' }}>
-                              
-                              {/* Hoverable Count Indicators */}
-                              <div style={{ 
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minWidth: '260px', maxWidth: '480px' }}>
+                          {chartData.map((d, index) => {
+                            const color = donutColors[index % donutColors.length];
+                            const pct = totalBoxCount > 0 ? ((d.latest_count / totalBoxCount) * 100).toFixed(1) : '0';
+                            const isGreen = d.delta > 0;
+                            const isRed = d.delta < 0;
+                            
+                            return (
+                              <div key={index} style={{ 
                                 display: 'flex', 
-                                alignItems: 'center',
-                                gap: '6px', 
-                                position: 'absolute', 
-                                bottom: `${Math.max(prevHeight, latestHeight) + 12}px`, 
-                                fontSize: '0.74rem', 
-                                fontWeight: '850',
-                                backgroundColor: '#1e293b', // Solid dark slate background
-                                color: '#ffffff',
-                                padding: '4px 10px',
-                                borderRadius: '12px',
-                                border: '1px solid #334155',
-                                whiteSpace: 'nowrap',
-                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-                                zIndex: 10
+                                alignItems: 'center', 
+                                justifyContent: 'space-between', 
+                                padding: '6px 10px', 
+                                borderRadius: 'var(--radius-sm)', 
+                                backgroundColor: 'var(--bg-main)', 
+                                border: '1px solid var(--border)' 
                               }}>
-                                <span style={{ color: '#cbd5e1' }} title="Previous Count">{d.prev_count}</span>
-                                <span style={{ color: '#64748b', fontSize: '0.65rem' }}>➔</span>
-                                <span style={{ color: '#38bdf8', fontWeight: '900' }} title="Latest Count">{d.latest_count}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', flex: 1 }}>
+                                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: color, flexShrink: 0 }} />
+                                  <span style={{ fontSize: '0.76rem', fontWeight: '700', color: 'var(--text-dark)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.name}>
+                                    {d.name}
+                                  </span>
+                                </div>
+                                
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                  <span style={{ fontSize: '0.76rem', fontWeight: '850', color: 'var(--text-dark)' }}>
+                                    {d.latest_count.toLocaleString()} <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: '600' }}>({pct}%)</span>
+                                  </span>
+                                  <span style={{
+                                    fontSize: '0.68rem',
+                                    fontWeight: '800',
+                                    color: isGreen ? '#16a34a' : isRed ? '#dc2626' : '#64748b',
+                                    width: '45px',
+                                    textAlign: 'right'
+                                  }}>
+                                    {isGreen ? `▲ +${d.delta}` : isRed ? `▼ ${d.delta}` : `● 0`}
+                                  </span>
+                                </div>
                               </div>
-
-                              {/* Bars Container */}
-                              <div style={{ display: 'flex', gap: '6px', alignItems: 'end', width: '100%', justifyContent: 'center' }}>
-                                {/* Previous Bar */}
-                                <div 
-                                  title={`Previous: ${d.prev_count} boxes`}
-                                  style={{ 
-                                    width: '18px', 
-                                    height: `${Math.max(prevHeight, 4)}px`, 
-                                    background: 'linear-gradient(180deg, #e2e8f0 0%, #cbd5e1 100%)', 
-                                    borderRadius: '4px 4px 0 0',
-                                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4)',
-                                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                                    cursor: 'pointer'
-                                  }} 
-                                />
-                                {/* Latest Bar */}
-                                <div 
-                                  title={`Latest: ${d.latest_count} boxes`}
-                                  style={{ 
-                                    width: '18px', 
-                                    height: `${Math.max(latestHeight, 4)}px`, 
-                                    background: 'linear-gradient(180deg, var(--primary) 0%, #1d4ed8 100%)', 
-                                    borderRadius: '4px 4px 0 0',
-                                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.15), inset 0 1px 0 rgba(255,255,255,0.3)',
-                                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                                    cursor: 'pointer'
-                                  }} 
-                                />
-                              </div>
-
-                              {/* Client Name Label */}
-                              <div style={{ 
-                                marginTop: '10px', 
-                                fontSize: '0.74rem', 
-                                fontWeight: '800', 
-                                color: 'var(--text-dark)', 
-                                textAlign: 'center',
-                                width: '100%',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap'
-                              }} title={d.client_name}>
-                                {d.client_name}
-                              </div>
-
-                              {/* Delta Pill Tag */}
-                              <div style={{
-                                fontSize: '0.64rem',
-                                fontWeight: '850',
-                                color: isGreen ? '#16a34a' : isRed ? '#dc2626' : '#64748b',
-                                marginTop: '4px',
-                                backgroundColor: isGreen ? '#f0fdf4' : isRed ? '#fef2f2' : '#f8fafc',
-                                padding: '2px 6px',
-                                borderRadius: '10px',
-                                border: `1px solid ${isGreen ? '#dcfce7' : isRed ? '#fee2e2' : '#f1f5f9'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '2px'
-                              }}>
-                                {isGreen ? `▲ +${d.delta}` : isRed ? `▼ ${d.delta}` : `● 0`}
-                              </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ padding: '40px', textAlign: 'center', backgroundColor: 'var(--bg-main)', borderRadius: 'var(--radius-lg)', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    Add temperature audit logs in native app to display comparative metrics.
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Main Grid Table */}
                 <div className="table-responsive" style={{ maxHeight: '500px', overflowY: 'auto' }}>
@@ -4034,6 +4158,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Previous Count</th>
                         <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>In / Out Flow</th>
                         <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Audit Date</th>
+                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Trend (Last 5)</th>
                         <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Final Count (In Chamber)</th>
                         <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Trend Status</th>
                       </tr>
@@ -4041,7 +4166,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     <tbody>
                       {paginatedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={9} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                          <td colSpan={10} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
                             No records found matching filters.
                           </td>
                         </tr>
@@ -4049,8 +4174,18 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         paginatedRows.map((row, idx) => {
                           const isGreen = row.delta > 0;
                           const isRed = row.delta < 0;
-                          const formattedPrevDate = row.prev_date ? new Date(row.prev_date).toLocaleDateString('en-GB') : '-';
-                          const formattedLatestDate = row.latest_date ? new Date(row.latest_date).toLocaleDateString('en-GB') : '-';
+                          
+                          const formatDateDisplayLocal = (dateStr) => {
+                            if (!dateStr) return '-';
+                            const parts = dateStr.split('-');
+                            if (parts.length === 3) {
+                              return `${parts[2]}/${parts[1]}/${parts[0]}`;
+                            }
+                            return dateStr;
+                          };
+
+                          const formattedPrevDate = formatDateDisplayLocal(row.prev_date);
+                          const formattedLatestDate = formatDateDisplayLocal(row.latest_date);
                           
                           const absDelta = Math.abs(row.delta);
                           const flowText = row.delta > 0 ? `+${absDelta} In` : row.delta < 0 ? `-${absDelta} Out` : `0`;
@@ -4078,6 +4213,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               </td>
                               <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                 {formattedLatestDate}
+                              </td>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', verticalAlign: 'middle' }}>
+                                <Sparkline data={row.history} />
                               </td>
                               <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-dark)' }}>
                                 {row.latest_count.toLocaleString()}
@@ -6657,444 +6795,926 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           </div>
         )}
 
-        {activeMenu === 'sub_admins' && (
+        {activeMenu === 'user_management' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Top: Register New Sub-Admin Horizontal Form */}
-            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {editingSubAdmin ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
-                  <span>{editingSubAdmin ? `Modify Sub-Admin Profile: ${editingSubAdmin.email}` : 'Register New Sub-Admin'}</span>
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                  All fields are mandatory. Registered credentials grant dashboard and inquiry management access to Sub-Admins.
-                </p>
-              </div>
-
-              <form onSubmit={handleSaveSubAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-                  {/* Full Name */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
-                    <input 
-                      type="text"
-                      name="subadmin-full-name"
-                      inputMode="text"
-                      autoComplete="name"
-                      placeholder="e.g. Jane Doe"
-                      value={subAdminFullName}
-                      onChange={(e) => setSubAdminFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Phone No. */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
-                    <input 
-                      type="tel"
-                      name="subadmin-phone"
-                      inputMode="numeric"
-                      autoComplete="tel"
-                      placeholder="e.g. 9998887776"
-                      value={subAdminPhoneNo}
-                      onChange={(e) => setSubAdminPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
-                      pattern="[0-9+]{7,15}"
-                      title="Enter a valid phone number (digits only)"
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Email ID */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email Address *</label>
-                    <input 
-                      type="email"
-                      name="subadmin-email"
-                      inputMode="email"
-                      autoComplete="email"
-                      placeholder="e.g. jane@reeferon.com"
-                      value={subAdminEmail}
-                      onChange={(e) => setSubAdminEmail(e.target.value)}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Password */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
-                      {editingSubAdmin ? 'New Password (Optional)' : 'Password *'}
-                    </label>
-                    <div style={{ position: 'relative', width: '100%' }}>
-                      <input 
-                        type={showPassword ? 'text' : 'password'}
-                        name="subadmin-password"
-                        autoComplete="new-password"
-                        placeholder={editingSubAdmin ? 'Leave blank to retain current' : 'Enter account password'}
-                        value={subAdminPassword}
-                        onChange={(e) => setSubAdminPassword(e.target.value)}
-                        required={!editingSubAdmin}
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          paddingRight: '40px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          fontSize: '0.85rem',
-                          outline: 'none',
-                          backgroundColor: 'var(--bg-main)'
-                        }}
-                      />
-                      <button 
-                        type="button" 
-                        onClick={() => setShowPassword(p => !p)}
-                        style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}
-                      >
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Data Access Scope: Client & Warehouse Restrictions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                  <div>
-                    <span style={{ fontSize: '0.82rem', fontWeight: '800', color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Lock size={14} color="#ea580c" />
-                      Data Access Scope
-                    </span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>
-                      Restrict which client & warehouse data this sub-admin can view. Leave empty for full access.
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-                    {/* Client Names Multi-Select (options from DO monitor logs) */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Client Names</label>
-                      <select
-                        value=""
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val && !subAdminSelectedClients.includes(val)) {
-                            setSubAdminSelectedClients((prev) => [...prev, val]);
-                          }
-                        }}
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          backgroundColor: 'var(--bg-main)',
-                          fontSize: '0.85rem',
-                          color: 'var(--text-dark)',
-                          outline: 'none',
-                          minWidth: 0,
-                          cursor: 'pointer',
-                          appearance: 'auto'
-                        }}
-                      >
-                        <option value="">
-                          {(accessScopeOptions.clients || []).length === 0
-                            ? 'No client names yet — save a DO inward/outward/chamber log first'
-                            : 'Select client name from DO records…'}
-                        </option>
-                        {(accessScopeOptions.clients || [])
-                          .filter((c) => !subAdminSelectedClients.includes(c))
-                          .map((client) => (
-                            <option key={client} value={client}>
-                              {client}
-                            </option>
-                          ))}
-                      </select>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
-                        {subAdminSelectedClients.length === 0 ? (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No clients selected — full client access</span>
-                        ) : (
-                          subAdminSelectedClients.map((client, idx) => (
-                            <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
-                              {client}
-                              <button type="button" onClick={() => setSubAdminSelectedClients(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Warehouse Names Multi-Select — same theme as clients */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Warehouses</label>
-                      <select
-                        value=""
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val && !subAdminSelectedWarehouses.includes(val)) {
-                            setSubAdminSelectedWarehouses((prev) => [...prev, val]);
-                          }
-                        }}
-                        style={{
-                          width: '100%',
-                          padding: '10px 14px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          backgroundColor: 'var(--bg-main)',
-                          fontSize: '0.85rem',
-                          color: 'var(--text-dark)',
-                          outline: 'none',
-                          minWidth: 0,
-                          cursor: 'pointer',
-                          appearance: 'auto'
-                        }}
-                      >
-                        <option value="">
-                          {(accessScopeOptions.warehouses || []).length === 0
-                            ? 'No warehouses yet — register a DO operator or save a log first'
-                            : 'Select warehouse from DO records…'}
-                        </option>
-                        {(accessScopeOptions.warehouses || [])
-                          .filter((w) => !subAdminSelectedWarehouses.includes(w))
-                          .map((wh) => (
-                            <option key={wh} value={wh}>
-                              {wh}
-                            </option>
-                          ))}
-                      </select>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
-                        {subAdminSelectedWarehouses.length === 0 ? (
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No warehouses selected — full warehouse access</span>
-                        ) : (
-                          subAdminSelectedWarehouses.map((wh, idx) => (
-                            <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
-                              {wh}
-                              <button type="button" onClick={() => setSubAdminSelectedWarehouses(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                  {editingSubAdmin && (
-                    <button 
-                      type="button" 
-                      onClick={cancelEditSubAdmin}
-                      style={{
-                        padding: '10px 20px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        backgroundColor: '#ffffff',
-                        fontSize: '0.85rem',
-                        fontWeight: '700',
-                        cursor: 'pointer',
-                        color: 'var(--text-dark)'
-                      }}
-                    >
-                      Cancel Edit
-                    </button>
-                  )}
-                  <button 
-                    type="submit"
-                    disabled={savingSubAdmin || loadingSubAdmins}
-                    style={{
-                      padding: '10px 24px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: 'none',
-                      background: editingSubAdmin ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
-                      color: '#ffffff',
-                      fontSize: '0.85rem',
-                      fontWeight: '800',
-                      cursor: savingSubAdmin ? 'wait' : 'pointer',
-                      opacity: savingSubAdmin ? 0.85 : 1,
-                      boxShadow: editingSubAdmin ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
-                      transition: 'all 0.2s ease',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}
-                  >
-                    {savingSubAdmin ? (
-                      <>
-                        <Loader2 size={16} className="spinner-icon" />
-                        {subAdminProcessStatus || 'Processing…'}
-                      </>
-                    ) : (editingSubAdmin ? 'Update Sub-Admin' : 'Register Sub-Admin')}
-                  </button>
-                </div>
-              </form>
+            {/* Top Toggle Buttons: Sub-Admins and Data Operators */}
+            <div style={{
+              display: 'flex',
+              gap: '12px',
+              backgroundColor: 'var(--surface)',
+              padding: '6px 10px',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border)',
+              alignSelf: 'flex-start',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+            }}>
+              <button
+                type="button"
+                onClick={() => setUserTab('sub_admins')}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  backgroundColor: userTab === 'sub_admins' ? 'var(--primary)' : 'transparent',
+                  color: userTab === 'sub_admins' ? '#fff' : 'var(--text-dark)',
+                  fontWeight: '700',
+                  fontSize: '0.82rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <ShieldCheck size={16} />
+                Sub-Admins
+              </button>
+              <button
+                type="button"
+                onClick={() => setUserTab('operators')}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  backgroundColor: userTab === 'operators' ? 'var(--primary)' : 'transparent',
+                  color: userTab === 'operators' ? '#fff' : 'var(--text-dark)',
+                  fontWeight: '700',
+                  fontSize: '0.82rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <Thermometer size={16} />
+                Data Operators
+              </button>
             </div>
 
-            {/* Bottom: Sub-Admins Directory List */}
-            {(() => {
-              const filteredSubAdminsList = subAdmins.filter(sa => {
-                const term = subAdminSearch.toLowerCase();
-                return (
-                  (sa.full_name && sa.full_name.toLowerCase().includes(term)) ||
-                  (sa.email && sa.email.toLowerCase().includes(term)) ||
-                  (sa.phone_no && sa.phone_no.toLowerCase().includes(term))
-                );
-              });
-
-              return (
-                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                    <div>
-                      <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Sub-Admins Directory</h2>
-                      <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage customer account credentials and system access permissions.</p>
-                    </div>
-
-                    <div style={{ minWidth: '240px' }}>
-                      <input 
-                        type="text" 
-                        placeholder="Search by name, email..."
-                        value={subAdminSearch}
-                        onChange={(e) => setSubAdminSearch(e.target.value)}
-                        style={{
-                          width: '100%',
-                          padding: '8px 12px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          fontSize: '0.8rem',
-                          outline: 'none',
-                          backgroundColor: 'var(--bg-main)'
-                        }}
-                      />
-                    </div>
+            {/* Render the appropriate view based on userTab */}
+            {userTab === 'sub_admins' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                {/* Top: Register New Sub-Admin Horizontal Form */}
+                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {editingSubAdmin ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
+                      <span>{editingSubAdmin ? `Modify Sub-Admin Profile: ${editingSubAdmin.email}` : 'Register New Sub-Admin'}</span>
+                    </h2>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                      All fields are mandatory. Registered credentials grant dashboard and inquiry management access to Sub-Admins.
+                    </p>
                   </div>
 
-                  {subAdminSuccess && (
-                    <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                      {subAdminSuccess}
-                    </div>
-                  )}
-                  {subAdminError && (
-                    <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                      {subAdminError}
-                    </div>
-                  )}
+                  <form onSubmit={handleSaveSubAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                      {/* Full Name */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
+                        <input 
+                          type="text"
+                          name="subadmin-full-name"
+                          inputMode="text"
+                          autoComplete="name"
+                          placeholder="e.g. Jane Doe"
+                          value={subAdminFullName}
+                          onChange={(e) => setSubAdminFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
 
-                  {loadingSubAdmins ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                      <span>Loading sub-admins directory...</span>
+                      {/* Phone No. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
+                        <input 
+                          type="tel"
+                          name="subadmin-phone"
+                          inputMode="numeric"
+                          autoComplete="tel"
+                          placeholder="e.g. 9876543210"
+                          value={subAdminPhoneNo}
+                          onChange={(e) => setSubAdminPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
+                          pattern="[0-9+]{7,15}"
+                          title="Enter a valid phone number (digits only)"
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+
+                      {/* Email ID */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
+                        <input 
+                          type="email"
+                          name="subadmin-email"
+                          inputMode="email"
+                          autoComplete="email"
+                          placeholder="e.g. customer@client.com"
+                          value={subAdminEmail}
+                          onChange={(e) => setSubAdminEmail(e.target.value)}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+
+                      {/* Password */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
+                          {editingSubAdmin ? 'Password (leave blank to keep)' : 'Password *'}
+                        </label>
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                          <input 
+                            type={showPassword ? 'text' : 'password'}
+                            name="subadmin-password"
+                            autoComplete="new-password"
+                            placeholder={editingSubAdmin ? '••••••••' : 'Enter login password'}
+                            value={subAdminPassword}
+                            onChange={(e) => setSubAdminPassword(e.target.value)}
+                            required={!editingSubAdmin}
+                            style={{
+                              width: '100%',
+                              padding: '10px 40px 10px 14px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid var(--border)',
+                              fontSize: '0.85rem',
+                              outline: 'none',
+                              backgroundColor: 'var(--bg-main)',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(prev => !prev)}
+                            style={{
+                              position: 'absolute',
+                              right: '12px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '0',
+                              color: 'var(--text-muted)'
+                            }}
+                            title={showPassword ? 'Hide Password' : 'Show Password'}
+                          >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Client Filter Access (dropdown selection) */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Clients</label>
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val && !subAdminSelectedClients.includes(val)) {
+                              setSubAdminSelectedClients((prev) => [...prev, val]);
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: 'var(--bg-main)',
+                            fontSize: '0.85rem',
+                            color: 'var(--text-dark)',
+                            outline: 'none',
+                            minWidth: 0,
+                            cursor: 'pointer',
+                            appearance: 'auto'
+                          }}
+                        >
+                          <option value="">
+                            {(accessScopeOptions.clients || []).length === 0
+                              ? 'No client names yet — save a DO inward/outward/chamber log first'
+                              : 'Select client name from DO records…'}
+                          </option>
+                          {(accessScopeOptions.clients || [])
+                            .filter((c) => !subAdminSelectedClients.includes(c))
+                            .map((client) => (
+                              <option key={client} value={client}>
+                                {client}
+                              </option>
+                            ))}
+                        </select>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                          {subAdminSelectedClients.length === 0 ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No clients selected — full client access</span>
+                          ) : (
+                            subAdminSelectedClients.map((client, idx) => (
+                              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                                {client}
+                                <button type="button" onClick={() => setSubAdminSelectedClients(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                  <X size={12} />
+                                </button>
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Warehouse Filter Access (dropdown selection) */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Warehouses</label>
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val && !subAdminSelectedWarehouses.includes(val)) {
+                              setSubAdminSelectedWarehouses((prev) => [...prev, val]);
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: 'var(--bg-main)',
+                            fontSize: '0.85rem',
+                            color: 'var(--text-dark)',
+                            outline: 'none',
+                            minWidth: 0,
+                            cursor: 'pointer',
+                            appearance: 'auto'
+                          }}
+                        >
+                          <option value="">
+                            {(accessScopeOptions.warehouses || []).length === 0
+                              ? 'No warehouses yet — register a DO operator or save a log first'
+                              : 'Select warehouse from DO records…'}
+                          </option>
+                          {(accessScopeOptions.warehouses || [])
+                            .filter((w) => !subAdminSelectedWarehouses.includes(w))
+                            .map((wh) => (
+                              <option key={wh} value={wh}>
+                                {wh}
+                              </option>
+                            ))}
+                        </select>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                          {subAdminSelectedWarehouses.length === 0 ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No warehouses selected — full warehouse access</span>
+                          ) : (
+                            subAdminSelectedWarehouses.map((wh, idx) => (
+                              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                                {wh}
+                                <button type="button" onClick={() => setSubAdminSelectedWarehouses(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                  <X size={12} />
+                                </button>
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  ) : filteredSubAdminsList.length === 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
-                      <ShieldAlert size={32} color="#94a3b8" />
-                      <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching sub-admins found.</p>
+
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                      {editingSubAdmin && (
+                        <button 
+                          type="button" 
+                          onClick={cancelEditSubAdmin}
+                          style={{
+                            padding: '10px 20px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: '#ffffff',
+                            fontSize: '0.85rem',
+                            fontWeight: '700',
+                            cursor: 'pointer',
+                            color: 'var(--text-dark)'
+                          }}
+                        >
+                          Cancel Edit
+                        </button>
+                      )}
+                      <button 
+                        type="submit"
+                        disabled={savingSubAdmin || loadingSubAdmins}
+                        style={{
+                          padding: '10px 24px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          background: editingSubAdmin ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
+                          color: '#ffffff',
+                          fontSize: '0.85rem',
+                          fontWeight: '800',
+                          cursor: (savingSubAdmin || loadingSubAdmins) ? 'wait' : 'pointer',
+                          opacity: (savingSubAdmin || loadingSubAdmins) ? 0.85 : 1,
+                          boxShadow: editingSubAdmin ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
+                          transition: 'all 0.2s ease',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '8px'
+                        }}
+                      >
+                        {savingSubAdmin ? (
+                          <>
+                            <Loader2 size={16} className="spinner-icon" />
+                            {subAdminProcessStatus || 'Processing…'}
+                          </>
+                        ) : (editingSubAdmin ? 'Update Sub-Admin' : 'Register Sub-Admin')}
+                      </button>
                     </div>
-                  ) : (
-                    <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
-                      <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Role Level</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Data Access Scope</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
-                            <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredSubAdminsList.map((sa) => (
-                            <tr key={sa.id}>
-                              <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.full_name || '-'}</td>
-                              <td style={{ padding: '12px 16px', fontWeight: '500' }}>{sa.phone_no || '-'}</td>
-                              <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.email}</td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <span className="status-badge" style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 800 }}>
-                                  Sub-Admin / Customer
-                                </span>
-                              </td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  {sa.allowed_clients ? (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
-                                      {sa.allowed_clients.split(',').map((c, i) => (
-                                        <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{c.trim()}</span>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Clients</span>
-                                  )}
-                                  {sa.allowed_warehouses ? (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
-                                      {sa.allowed_warehouses.split(',').map((w, i) => (
-                                        <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{w.trim()}</span>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Warehouses</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                                {new Date(sa.created_at).toLocaleDateString('en-GB')}
-                              </td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                  <button 
-                                    className="btn-edit-log"
-                                    type="button"
-                                    onClick={() => startEditSubAdmin(sa)}
-                                    title="Edit Sub-Admin Profile"
-                                    style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                  >
-                                    <Edit size={14} />
-                                  </button>
-                                  <button 
-                                    className="btn-delete-log"
-                                    type="button"
-                                    onClick={() => handleDeleteSubAdmin(sa.id)}
-                                    title="Revoke Access (Delete)"
-                                    style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                  </form>
                 </div>
-              );
-            })()}
+
+                {/* Bottom: Sub-Admins Directory List */}
+                {(() => {
+                  const filteredSubAdminsList = subAdmins.filter(sa => {
+                    const term = subAdminSearch.toLowerCase();
+                    return (
+                      (sa.full_name && sa.full_name.toLowerCase().includes(term)) ||
+                      (sa.email && sa.email.toLowerCase().includes(term)) ||
+                      (sa.phone_no && sa.phone_no.toLowerCase().includes(term))
+                    );
+                  });
+
+                  return (
+                    <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                        <div>
+                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Sub-Admins Directory</h2>
+                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage customer account credentials and system access permissions.</p>
+                        </div>
+
+                        <div style={{ minWidth: '240px' }}>
+                          <input 
+                            type="text" 
+                            placeholder="Search by name, email..."
+                            value={subAdminSearch}
+                            onChange={(e) => setSubAdminSearch(e.target.value)}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid var(--border)',
+                              fontSize: '0.8rem',
+                              outline: 'none',
+                              backgroundColor: 'var(--bg-main)'
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {subAdminSuccess && (
+                        <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
+                          {subAdminSuccess}
+                        </div>
+                      )}
+                      {subAdminError && (
+                        <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
+                          {subAdminError}
+                        </div>
+                      )}
+
+                      {loadingSubAdmins ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                          <span>Loading sub-admins directory...</span>
+                        </div>
+                      ) : filteredSubAdminsList.length === 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
+                          <ShieldAlert size={32} color="#94a3b8" />
+                          <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching sub-admins found.</p>
+                        </div>
+                      ) : (
+                        <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
+                          <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                              <tr>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Role Level</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Data Access Scope</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
+                                <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredSubAdminsList.map((sa) => (
+                                <tr key={sa.id}>
+                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.full_name || '-'}</td>
+                                  <td style={{ padding: '12px 16px', fontWeight: '500' }}>{sa.phone_no || '-'}</td>
+                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.email}</td>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <span className="status-badge" style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 800 }}>
+                                      Sub-Admin / Customer
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                      {sa.allowed_clients ? (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                                          {sa.allowed_clients.split(',').map((c, i) => (
+                                            <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{c.trim()}</span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Clients</span>
+                                      )}
+                                      {sa.allowed_warehouses ? (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                                          {sa.allowed_warehouses.split(',').map((w, i) => (
+                                            <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{w.trim()}</span>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Warehouses</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                    {new Date(sa.created_at).toLocaleDateString('en-GB')}
+                                  </td>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                      <button 
+                                        className="btn-edit-log"
+                                        type="button"
+                                        onClick={() => startEditSubAdmin(sa)}
+                                        title="Edit Sub-Admin Profile"
+                                        style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                      >
+                                        <Edit size={14} />
+                                      </button>
+                                      <button 
+                                        className="btn-delete-log"
+                                        type="button"
+                                        onClick={() => handleDeleteSubAdmin(sa.id)}
+                                        title="Revoke Access (Delete)"
+                                        style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                {/* Top: Register New Operator Horizontal Form */}
+                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {editingOp ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
+                      <span>{editingOp ? `Modify Operator Profile: ${editingOp.email}` : 'Register New Data Operator'}</span>
+                    </h2>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                      {editingOp ? 'Update account details, phone number, warehouse allocation or change password.' : 'All horizontal fields are mandatory. Registered credentials grant access to Operator Portals.'}
+                    </p>
+                  </div>
+
+                  <form onSubmit={handleSaveOperator} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                      {/* Full Name */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
+                        <input 
+                          type="text"
+                          name="op-full-name"
+                          inputMode="text"
+                          autoComplete="name"
+                          placeholder="e.g. John Doe"
+                          value={opFullName}
+                          onChange={(e) => setOpFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+
+                      {/* Phone No. */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
+                        <input 
+                          type="tel"
+                          name="op-phone"
+                          inputMode="numeric"
+                          autoComplete="tel"
+                          placeholder="e.g. 9876543210"
+                          value={opPhoneNo}
+                          onChange={(e) => setOpPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
+                          pattern="[0-9+]{7,15}"
+                          title="Enter a valid phone number (digits only)"
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+
+                      {/* Email ID */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
+                        <input 
+                          type="email"
+                          name="op-email"
+                          inputMode="email"
+                          autoComplete="email"
+                          placeholder="e.g. operator@reeferon.com"
+                          value={opEmail}
+                          onChange={(e) => setOpEmail(e.target.value)}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+
+                      {/* Password */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
+                          {editingOp ? 'Password (leave blank to keep)' : 'Password *'}
+                        </label>
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                          <input 
+                            type={showPassword ? 'text' : 'password'}
+                            name="op-password"
+                            autoComplete="new-password"
+                            placeholder={editingOp ? '••••••••' : 'Enter login password'}
+                            value={opPassword}
+                            onChange={(e) => setOpPassword(e.target.value)}
+                            required={!editingOp}
+                            style={{
+                              width: '100%',
+                              padding: '10px 40px 10px 14px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid var(--border)',
+                              fontSize: '0.85rem',
+                              outline: 'none',
+                              backgroundColor: 'var(--bg-main)',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(prev => !prev)}
+                            style={{
+                              position: 'absolute',
+                              right: '12px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '0',
+                              color: 'var(--text-muted)'
+                            }}
+                            title={showPassword ? 'Hide Password' : 'Show Password'}
+                          >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Warehouse Name */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse Name *</label>
+                        <input 
+                          type="text"
+                          name="op-warehouse"
+                          inputMode="text"
+                          autoComplete="organization"
+                          placeholder="e.g. Delhi Warehouse"
+                          value={opWarehouseName}
+                          onChange={(e) => setOpWarehouseName(e.target.value)}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+
+                      {/* Assigned Chambers Limit */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Total Chambers Assigned *</label>
+                        <input 
+                          type="number"
+                          min="1"
+                          max="100"
+                          placeholder="e.g. 4"
+                          value={opChamberLimit}
+                          onChange={(e) => setOpChamberLimit(e.target.value)}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            fontSize: '0.85rem',
+                            outline: 'none',
+                            backgroundColor: 'var(--bg-main)'
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                      {editingOp && (
+                        <button 
+                          type="button" 
+                          onClick={cancelEditOperator}
+                          style={{
+                            padding: '10px 20px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: '#ffffff',
+                            fontSize: '0.85rem',
+                            fontWeight: '700',
+                            cursor: 'pointer',
+                            color: 'var(--text-dark)'
+                          }}
+                        >
+                          Cancel Edit
+                        </button>
+                      )}
+                      <button 
+                        type="submit"
+                        disabled={savingOp || loadingOps}
+                        style={{
+                          padding: '10px 24px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          background: editingOp ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
+                          color: '#ffffff',
+                          fontSize: '0.85rem',
+                          fontWeight: '800',
+                          cursor: savingOp ? 'wait' : 'pointer',
+                          opacity: savingOp ? 0.85 : 1,
+                          boxShadow: editingOp ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
+                          transition: 'all 0.2s ease',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '8px'
+                        }}
+                      >
+                        {savingOp ? (
+                          <>
+                            <Loader2 size={16} className="spinner-icon" />
+                            {opProcessStatus || 'Processing…'}
+                          </>
+                        ) : (editingOp ? 'Update Operator Profile' : 'Register Operator Profile')}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* Bottom: Operators Directory List */}
+                {(() => {
+                  const filteredOperators = operators.filter(op => {
+                    const term = operatorSearch.toLowerCase();
+                    return (
+                      (op.full_name && op.full_name.toLowerCase().includes(term)) ||
+                      (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
+                      (op.email && op.email.toLowerCase().includes(term))
+                    );
+                  });
+
+                  return (
+                    <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                        <div>
+                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Registered Operators Directory</h2>
+                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage profile credentials and warehouse configurations.</p>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <div style={{ minWidth: '240px' }}>
+                            <input 
+                              type="text" 
+                              placeholder="Search by name, warehouse..."
+                              value={operatorSearch}
+                              onChange={(e) => setOperatorSearch(e.target.value)}
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border)',
+                                fontSize: '0.8rem',
+                                outline: 'none',
+                                backgroundColor: 'var(--bg-main)',
+                                height: '37px',
+                                boxSizing: 'border-box'
+                              }}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleExportOperatorsDirectory}
+                            disabled={!operators || operators.length === 0}
+                            title="Export operators directory to CSV"
+                            style={{
+                              padding: '8px 14px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: 'none',
+                              backgroundColor: !operators || operators.length === 0 ? '#94a3b8' : '#22c55e',
+                              color: '#ffffff',
+                              fontSize: '0.8rem',
+                              fontWeight: '700',
+                              cursor: !operators || operators.length === 0 ? 'not-allowed' : 'pointer',
+                              opacity: !operators || operators.length === 0 ? 0.7 : 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              height: '37px',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            <Download size={14} />
+                            <span>Export</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {exportError?.retryKey === 'operators' && (
+                        <ExportErrorBanner
+                          message={exportError.message}
+                          retryable={exportError.retryable}
+                          onRetry={retryFailedExport}
+                          onDismiss={() => setExportError(null)}
+                        />
+                      )}
+
+                      {opSuccess && (
+                        <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
+                          {opSuccess}
+                        </div>
+                      )}
+                      {opError && (
+                        <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
+                          {opError}
+                        </div>
+                      )}
+
+                      {loadingOps ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                          <span>Loading operators profiles directory...</span>
+                        </div>
+                      ) : filteredOperators.length === 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
+                          <ShieldAlert size={32} color="#94a3b8" />
+                          <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching operators found.</p>
+                        </div>
+                      ) : (
+                        <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
+                          <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                              <tr>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator ID</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse / Data Access</th>
+                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
+                                <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredOperators.map((op) => {
+                                 if (!op) return null;
+                                 return (
+                                   <tr key={op.id}>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <span className="status-badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', fontWeight: 800 }}>
+                                      #{op.id}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.full_name || '-'}</td>
+                                  <td style={{ padding: '12px 16px', fontWeight: '500' }}>{op.phone_no || '-'}</td>
+                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.email}</td>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                      <strong style={{ fontWeight: '700', color: op.warehouse_name ? 'var(--text-dark)' : '#ea580c' }}>
+                                        {op.warehouse_name || 'Not Configured'}
+                                      </strong>
+                                      <span className="status-badge" style={{ 
+                                        backgroundColor: op.warehouse_name ? 'var(--primary-light)' : '#ffedd5', 
+                                        color: op.warehouse_name ? 'var(--primary)' : '#ea580c', 
+                                        fontWeight: 800,
+                                        fontSize: '0.64rem',
+                                        display: 'inline-block',
+                                        width: 'max-content',
+                                        padding: '2px 8px',
+                                        borderRadius: '100px'
+                                      }}>
+                                        {op.warehouse_name ? `Access: ${op.warehouse_name} Logs Only` : 'Access: All Warehouses'}
+                                      </span>
+                                      <span className="status-badge" style={{ 
+                                        backgroundColor: '#f1f5f9', 
+                                        color: '#475569', 
+                                        fontWeight: 800,
+                                        fontSize: '0.64rem',
+                                        display: 'inline-block',
+                                        width: 'max-content',
+                                        padding: '2px 8px',
+                                        borderRadius: '100px',
+                                        marginTop: '2px'
+                                      }}>
+                                        Chambers: 1 to {op.chamber_limit || 4}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                    {new Date(op.created_at).toLocaleDateString('en-GB')}
+                                  </td>
+                                  <td style={{ padding: '12px 16px' }}>
+                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                      <button 
+                                        className="btn-edit-log"
+                                        type="button"
+                                        onClick={() => startEditOperator(op)}
+                                        title="Edit Operator Profile"
+                                        style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                      >
+                                        <Edit size={14} />
+                                      </button>
+                                      <button 
+                                        className="btn-delete-log"
+                                        type="button"
+                                        onClick={() => handleDeleteOperator(op.id)}
+                                        title="Revoke Access (Delete)"
+                                        style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              )})}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
 
@@ -7331,437 +7951,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         );
                       })}
                     </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeMenu === 'data_operators' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Top: Register New Operator Horizontal Form */}
-            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {editingOp ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
-                  <span>{editingOp ? `Modify Operator Profile: ${editingOp.email}` : 'Register New Data Operator'}</span>
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                  {editingOp ? 'Update account details, phone number, warehouse allocation or change password.' : 'All horizontal fields are mandatory. Registered credentials grant access to Operator Portals.'}
-                </p>
-              </div>
-
-              <form onSubmit={handleSaveOperator} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-                  {/* Full Name */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
-                    <input 
-                      type="text"
-                      name="op-full-name"
-                      inputMode="text"
-                      autoComplete="name"
-                      placeholder="e.g. John Doe"
-                      value={opFullName}
-                      onChange={(e) => setOpFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Phone No. */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
-                    <input 
-                      type="tel"
-                      name="op-phone"
-                      inputMode="numeric"
-                      autoComplete="tel"
-                      placeholder="e.g. 9876543210"
-                      value={opPhoneNo}
-                      onChange={(e) => setOpPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
-                      pattern="[0-9+]{7,15}"
-                      title="Enter a valid phone number (digits only)"
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Email ID */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
-                    <input 
-                      type="email"
-                      name="op-email"
-                      inputMode="email"
-                      autoComplete="email"
-                      placeholder="e.g. operator@reeferon.com"
-                      value={opEmail}
-                      onChange={(e) => setOpEmail(e.target.value)}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Password */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
-                      {editingOp ? 'Password (leave blank to keep)' : 'Password *'}
-                    </label>
-                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                      <input 
-                        type={showPassword ? 'text' : 'password'}
-                        name="op-password"
-                        autoComplete="new-password"
-                        placeholder={editingOp ? '••••••••' : 'Enter login password'}
-                        value={opPassword}
-                        onChange={(e) => setOpPassword(e.target.value)}
-                        required={!editingOp}
-                        style={{
-                          width: '100%',
-                          padding: '10px 40px 10px 14px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border)',
-                          fontSize: '0.85rem',
-                          outline: 'none',
-                          backgroundColor: 'var(--bg-main)',
-                          boxSizing: 'border-box'
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(prev => !prev)}
-                        style={{
-                          position: 'absolute',
-                          right: '12px',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          padding: '0',
-                          color: 'var(--text-muted)'
-                        }}
-                        title={showPassword ? 'Hide Password' : 'Show Password'}
-                      >
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Warehouse Name */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse Name *</label>
-                    <input 
-                      type="text"
-                      name="op-warehouse"
-                      inputMode="text"
-                      autoComplete="organization"
-                      placeholder="e.g. Delhi Warehouse"
-                      value={opWarehouseName}
-                      onChange={(e) => setOpWarehouseName(e.target.value)}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-
-                  {/* Assigned Chambers Limit */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Total Chambers Assigned *</label>
-                    <input 
-                      type="number"
-                      min="1"
-                      max="100"
-                      placeholder="e.g. 4"
-                      value={opChamberLimit}
-                      onChange={(e) => setOpChamberLimit(e.target.value)}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.85rem',
-                        outline: 'none',
-                        backgroundColor: 'var(--bg-main)'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                  {editingOp && (
-                    <button 
-                      type="button" 
-                      onClick={cancelEditOperator}
-                      style={{
-                        padding: '10px 20px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        backgroundColor: '#ffffff',
-                        fontSize: '0.85rem',
-                        fontWeight: '700',
-                        cursor: 'pointer',
-                        color: 'var(--text-dark)'
-                      }}
-                    >
-                      Cancel Edit
-                    </button>
-                  )}
-                  <button 
-                    type="submit"
-                    disabled={savingOp || loadingOps}
-                    style={{
-                      padding: '10px 24px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: 'none',
-                      background: editingOp ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
-                      color: '#ffffff',
-                      fontSize: '0.85rem',
-                      fontWeight: '800',
-                      cursor: savingOp ? 'wait' : 'pointer',
-                      opacity: savingOp ? 0.85 : 1,
-                      boxShadow: editingOp ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
-                      transition: 'all 0.2s ease',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}
-                  >
-                    {savingOp ? (
-                      <>
-                        <Loader2 size={16} className="spinner-icon" />
-                        {opProcessStatus || 'Processing…'}
-                      </>
-                    ) : (editingOp ? 'Update Operator Profile' : 'Register Operator Profile')}
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            {/* Bottom: Operators Directory List */}
-            {(() => {
-              const filteredOperators = operators.filter(op => {
-                const term = operatorSearch.toLowerCase();
-                return (
-                  (op.full_name && op.full_name.toLowerCase().includes(term)) ||
-                  (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
-                  (op.email && op.email.toLowerCase().includes(term))
-                );
-              });
-
-              return (
-                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                    <div>
-                      <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Registered Operators Directory</h2>
-                      <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage profile credentials and warehouse configurations.</p>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <div style={{ minWidth: '240px' }}>
-                        <input 
-                          type="text" 
-                          placeholder="Search by name, warehouse..."
-                          value={operatorSearch}
-                          onChange={(e) => setOperatorSearch(e.target.value)}
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.8rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)',
-                            height: '37px',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleExportOperatorsDirectory}
-                        disabled={!operators || operators.length === 0}
-                        title="Export operators directory to CSV"
-                        style={{
-                          padding: '8px 14px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          backgroundColor: !operators || operators.length === 0 ? '#94a3b8' : '#22c55e',
-                          color: '#ffffff',
-                          fontSize: '0.8rem',
-                          fontWeight: '700',
-                          cursor: !operators || operators.length === 0 ? 'not-allowed' : 'pointer',
-                          opacity: !operators || operators.length === 0 ? 0.7 : 1,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          height: '37px',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        <Download size={14} />
-                        <span>Export</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {exportError?.retryKey === 'operators' && (
-                    <ExportErrorBanner
-                      message={exportError.message}
-                      retryable={exportError.retryable}
-                      onRetry={retryFailedExport}
-                      onDismiss={() => setExportError(null)}
-                    />
-                  )}
-
-                  {opSuccess && (
-                    <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                      {opSuccess}
-                    </div>
-                  )}
-                  {opError && (
-                    <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                      {opError}
-                    </div>
-                  )}
-
-                  {loadingOps ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                      <span>Loading operators profiles directory...</span>
-                    </div>
-                  ) : filteredOperators.length === 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
-                      <ShieldAlert size={32} color="#94a3b8" />
-                      <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching operators found.</p>
-                    </div>
-                  ) : (
-                    <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
-                      <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator ID</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse / Data Access</th>
-                            <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
-                            <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredOperators.map((op) => {
-                             if (!op) return null;
-                             return (
-                               <tr key={op.id}>
-                              <td style={{ padding: '12px 16px' }}>
-                                <span className="status-badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', fontWeight: 800 }}>
-                                  #{op.id}
-                                </span>
-                              </td>
-                              <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.full_name || '-'}</td>
-                              <td style={{ padding: '12px 16px', fontWeight: '500' }}>{op.phone_no || '-'}</td>
-                              <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.email}</td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  <strong style={{ fontWeight: '700', color: op.warehouse_name ? 'var(--text-dark)' : '#ea580c' }}>
-                                    {op.warehouse_name || 'Not Configured'}
-                                  </strong>
-                                  <span className="status-badge" style={{ 
-                                    backgroundColor: op.warehouse_name ? 'var(--primary-light)' : '#ffedd5', 
-                                    color: op.warehouse_name ? 'var(--primary)' : '#ea580c', 
-                                    fontWeight: 800,
-                                    fontSize: '0.64rem',
-                                    display: 'inline-block',
-                                    width: 'max-content',
-                                    padding: '2px 8px',
-                                    borderRadius: '100px'
-                                  }}>
-                                    {op.warehouse_name ? `Access: ${op.warehouse_name} Logs Only` : 'Access: All Warehouses'}
-                                  </span>
-                                  <span className="status-badge" style={{ 
-                                    backgroundColor: '#f1f5f9', 
-                                    color: '#475569', 
-                                    fontWeight: 800,
-                                    fontSize: '0.64rem',
-                                    display: 'inline-block',
-                                    width: 'max-content',
-                                    padding: '2px 8px',
-                                    borderRadius: '100px',
-                                    marginTop: '2px'
-                                  }}>
-                                    Chambers: 1 to {op.chamber_limit || 4}
-                                  </span>
-                                </div>
-                              </td>
-                              <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                                {new Date(op.created_at).toLocaleDateString('en-GB')}
-                              </td>
-                              <td style={{ padding: '12px 16px' }}>
-                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                  <button 
-                                    className="btn-edit-log"
-                                    onClick={() => startEditOperator(op)}
-                                    title="Edit Operator Profile"
-                                    style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                  >
-                                    <Edit size={14} />
-                                  </button>
-                                  <button 
-                                    className="btn-delete-log"
-                                    onClick={() => handleDeleteOperator(op.id)}
-                                    title="Revoke Access (Delete)"
-                                    style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          )})}
-                        </tbody>
                       </table>
                     </div>
                   )}
                 </div>
-              );
-            })()}
-          </div>
-        )}
+              </div>
+            )}
           </>
         )}
       </main>
