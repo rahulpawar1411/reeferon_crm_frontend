@@ -697,6 +697,15 @@ export const fetchInventoryReconciliation = async ({ search, warehouse } = {}) =
   return data.items || [];
 };
 
+export const fetchInventoryFilterOptions = async () => {
+  const res = await fetch(`${API_BASE_URL}/dashboard/inventory-filter-options`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || err.error || 'Failed to fetch live warehouse/client filters.');
+  }
+  return await res.json();
+};
+
 // ====================================================================
 // 5. Data Operator CRUD APIs (Super Admin only)
 // ====================================================================

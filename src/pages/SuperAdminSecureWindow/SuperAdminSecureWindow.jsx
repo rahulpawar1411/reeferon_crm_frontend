@@ -25,7 +25,7 @@ import {
   changeSuperAdminPassword, verifySuperAdminProfileAccess,
   fetchCustomerReports, updateCustomerReportStatus,
   fetchDailyInspections, deleteDailyInspection,
-  fetchInventoryReconciliation, fetchDailyInventoryDeltas
+  fetchInventoryReconciliation, fetchInventoryFilterOptions, fetchDailyInventoryDeltas
 } from '../../services/api';
 import {
   requireExportDates,
@@ -39,59 +39,31 @@ import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBan
 import '../../components/DOSidebar/DOSidebar.css';
 import './SuperAdminSecureWindow.css';
 
-const Sparkline = ({ data }) => {
-  if (!data || data.length < 2) {
-    return <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>No trend</span>;
-  }
-  
-  const values = data.map(d => Number(d.count) || 0);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min === 0 ? 1 : max - min;
-  
-  const width = 70;
-  const height = 20;
-  const padding = 2;
-  
-  const points = values.map((val, idx) => {
-    const x = padding + (idx * (width - 2 * padding)) / (values.length - 1);
-    const y = padding + (height - 2 * padding) - ((val - min) * (height - 2 * padding)) / range;
-    return `${x},${y}`;
-  }).join(' ');
-  
-  const lastX = padding + ((values.length - 1) * (width - 2 * padding)) / (values.length - 1);
-  const lastY = padding + (height - 2 * padding) - ((values[values.length - 1] - min) * (height - 2 * padding)) / range;
-  
-  const overallDelta = values[values.length - 1] - values[0];
-  const strokeColor = overallDelta > 0 ? '#10b981' : overallDelta < 0 ? '#ef4444' : '#94a3b8';
-  
-  return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', verticalAlign: 'middle' }}>
-      <svg width={width} height={height} style={{ overflow: 'visible' }}>
-        <polyline
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          points={points}
-        />
-        <circle
-          cx={lastX}
-          cy={lastY}
-          r="2.5"
-          fill={strokeColor}
-          stroke="#ffffff"
-          strokeWidth="1"
-        />
-      </svg>
-    </div>
-  );
-};
-
 const TempMonitor = lazy(() => import('../TempMonitor/TempMonitor'));
 const InwardMonitor = lazy(() => import('../InwardMonitor/InwardMonitor'));
 const OutwardMonitor = lazy(() => import('../OutwardMonitor/OutwardMonitor'));
+
+/** Highlight Added / Deleted keywords in DO operation log descriptions. */
+const highlightAddedDeletedWords = (text, extraNodes = null) => {
+  const str = String(text || '');
+  if (!str) return extraNodes || '';
+  const parts = str.split(/(\bAdded\b|\bDeleted\b|\badded\b|\bdeleted\b)/g);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        if (/^(Added|Deleted|added|deleted)$/.test(part)) {
+          return (
+            <span key={`kw-${i}`} style={{ color: '#dc2626', fontWeight: 800 }}>
+              {part}
+            </span>
+          );
+        }
+        return <React.Fragment key={`t-${i}`}>{part}</React.Fragment>;
+      })}
+      {extraNodes}
+    </span>
+  );
+};
 
 export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate }) {
   const [time, setTime] = useState(new Date());
@@ -279,6 +251,244 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
+  /** Shorten long file paths for readable update diffs */
+  const shortenUpdateValue = (val) => {
+    const s = String(val ?? '').trim();
+    if (!s || s === 'N/A') return 'N/A';
+    if (s.includes('/') || s.includes('\\')) {
+      const name = s.split(/[/\\]/).pop();
+      return name ? `…/${name}` : s;
+    }
+    return s.length > 48 ? `${s.slice(0, 45)}…` : s;
+  };
+
+  /**
+   * Parses "Field: old ➔ new, Field2: old2 ➔ new2" into readable rows.
+   */
+  const parseUpdateDetails = (raw) => {
+    if (!raw || !String(raw).trim()) return [];
+    const text = String(raw).trim();
+    const parts = text.split(/\s*,\s*(?=[^,:]+:\s)/);
+    return parts.map((part) => {
+      const arrowMatch = part.match(/^(.*?):\s*(.*?)\s*➔\s*(.*)$/);
+      if (arrowMatch) {
+        return {
+          field: arrowMatch[1].trim(),
+          from: shortenUpdateValue(arrowMatch[2]),
+          to: shortenUpdateValue(arrowMatch[3])
+        };
+      }
+      const colonIdx = part.indexOf(':');
+      if (colonIdx === -1) {
+        return { field: 'Change', from: '—', to: shortenUpdateValue(part) };
+      }
+      return {
+        field: part.slice(0, colonIdx).trim(),
+        from: '—',
+        to: shortenUpdateValue(part.slice(colonIdx + 1))
+      };
+    }).filter((row) => row.field);
+  };
+
+  const renderUpdateDetailsReadable = (raw) => {
+    const rows = parseUpdateDetails(raw);
+    if (rows.length === 0) {
+      return (
+        <span className="profile-value" style={{ color: 'var(--text-muted)' }}>
+          — No field changes recorded —
+        </span>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          width: '100%',
+          marginTop: '4px',
+          border: '1px solid var(--border)',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          backgroundColor: 'var(--bg-main, #f8fafc)'
+        }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1.1fr 1fr 1fr',
+            gap: '0',
+            padding: '8px 10px',
+            backgroundColor: 'var(--surface)',
+            borderBottom: '1px solid var(--border)',
+            fontSize: '0.68rem',
+            fontWeight: 800,
+            color: 'var(--text-muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em'
+          }}
+        >
+          <span>Field</span>
+          <span>Before</span>
+          <span>After</span>
+        </div>
+        {rows.map((row, idx) => (
+          <div
+            key={`${row.field}-${idx}`}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1.1fr 1fr 1fr',
+              gap: '8px',
+              padding: '9px 10px',
+              borderBottom: idx === rows.length - 1 ? 'none' : '1px solid var(--border)',
+              alignItems: 'start',
+              backgroundColor: idx % 2 === 0 ? 'transparent' : 'rgba(148,163,184,0.08)'
+            }}
+          >
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-dark)' }}>
+              {row.field}
+            </span>
+            <span style={{ fontSize: '0.78rem', color: '#64748b', wordBreak: 'break-word' }}>
+              {row.from}
+            </span>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a', wordBreak: 'break-word' }}>
+              {row.to}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const resolveShiftLabel = (shift, inspectionTime, createdAt) => {
+    const s = String(shift || '').trim();
+    if (/^morning$/i.test(s)) return 'Morning';
+    if (/^evening$/i.test(s)) return 'Evening';
+
+    const t = String(inspectionTime || '').trim();
+    const tUp = t.toUpperCase();
+    if (/^10:00\b/.test(t) || tUp === '10:00 AM') return 'Morning';
+    if (/^16:00\b|^18:00\b/.test(t) || tUp.includes('04:00 PM') || tUp.includes('06:00 PM')) {
+      return 'Evening';
+    }
+
+    const hm = t.match(/^(\d{1,2}):(\d{2})/);
+    if (hm) {
+      let h = parseInt(hm[1], 10);
+      if (tUp.includes('PM') && h < 12) h += 12;
+      if (tUp.includes('AM') && h === 12) h = 0;
+      return h < 14 ? 'Morning' : 'Evening';
+    }
+
+    if (createdAt) {
+      const d = new Date(createdAt);
+      if (!isNaN(d.getTime())) return d.getHours() < 14 ? 'Morning' : 'Evening';
+    }
+    return 'Morning';
+  };
+
+  /** Single form-style chamber log view — no duplicate fields */
+  const renderChamberLogFormView = (log, { enableCopyRef = false } = {}) => {
+    if (!log) return null;
+    const tempVal = log.chamber_temp ?? log.box_temp;
+    const shiftLabel = resolveShiftLabel(log.shift, log.inspection_time, log.created_at);
+
+    const formField = (label, value, opts = {}) => (
+      <div className="profile-item" style={opts.full ? { gridColumn: 'span 2' } : undefined}>
+        <span className="profile-label">{label}</span>
+        <span className="profile-value" style={opts.valueStyle || undefined}>
+          {value}
+        </span>
+      </div>
+    );
+
+    const refNode = enableCopyRef ? (
+      <span
+        onClick={() => {
+          if (log.reference_no) {
+            navigator.clipboard.writeText(log.reference_no);
+            setCopiedRef(log.reference_no);
+            setTimeout(() => setCopiedRef(null), 1500);
+          }
+        }}
+        title="Click to copy Reference Number"
+        style={{
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '6px',
+          fontWeight: 700,
+          color: copiedRef === log.reference_no ? '#10b981' : 'var(--primary)'
+        }}
+      >
+        {log.reference_no || '-'}
+        {log.reference_no && (
+          copiedRef === log.reference_no ? <Check size={12} color="#10b981" /> : <Copy size={10} style={{ opacity: 0.5 }} />
+        )}
+      </span>
+    ) : (
+      <span style={{ fontWeight: 700, color: 'var(--primary)' }}>{log.reference_no || '-'}</span>
+    );
+
+    return (
+      <div className="profile-group-card">
+        <div className="profile-group-title">Chamber Temperature Log</div>
+        <div className="profile-grid-list">
+          {formField('Entry Date', formatDateStr(log.formatted_date || log.entry_date))}
+          {formField('Reference No', refNode)}
+          {formField('Client Name', log.client_name || '-')}
+          {formField('Chamber Name', log.chamber_name || '-')}
+          {formField('Chamber Type', log.chamber_type || 'Frozen')}
+          {formField('Inspection Time', log.inspection_time || '-')}
+          {formField('Shift', shiftLabel)}
+          {formField(
+            'Box Temp (°C)',
+            tempVal != null ? `${tempVal}°C` : '-',
+            {
+              valueStyle: {
+                fontWeight: 700,
+                color: tempVal != null && Number(tempVal) <= -18 ? '#15803d' : '#b91c1c'
+              }
+            }
+          )}
+          {formField(
+            'Box Count',
+            log.box_count !== undefined && log.box_count !== null ? String(log.box_count) : '-'
+          )}
+          {formField('Supervisor Name', log.monitor_supervisor_name || '-')}
+          {formField('Warehouse', log.warehouse_name || 'Generic')}
+          {formField('Operator', renderOperatorEmail(log.operator_email))}
+          {formField(
+            'Photo Capture Time',
+            log.photo_capture_time ? formatDateTimeStr(log.photo_capture_time) : '-'
+          )}
+          {formField(
+            'Time Variance',
+            log.time_variance_minutes !== undefined && log.time_variance_minutes !== null
+              ? `${log.time_variance_minutes} mins`
+              : '-'
+          )}
+          {formField('Submission Delay', log.overdue_time || 'same day', {
+            valueStyle:
+              log.overdue_time && log.overdue_time !== 'same day'
+                ? { color: '#dc2626', fontWeight: 700 }
+                : undefined
+          })}
+          {formField('Source', Number(log.is_native) === 1 ? 'Mobile Native App' : 'Web / Monitor')}
+          {formField('Created At', formatDateTimeStr(log.created_at) || '-')}
+          {formField('Updated At', log.updated_at ? formatDateTimeStr(log.updated_at) : '-')}
+          {formField(
+            'Update Count',
+            Number(log.update_count) > 0 ? String(log.update_count) : '0'
+          )}
+          <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+            <span className="profile-label">Update Details</span>
+            {renderUpdateDetailsReadable(log.update_details)}
+          </div>
+          {formField('Remarks', log.remarks || '—', { full: true })}
+        </div>
+      </div>
+    );
+  };
+
   // Security & Access Logs States
   const [securitySearch, setSecuritySearch] = useState('');
   const [securityFromDate, setSecurityFromDate] = useState('');
@@ -314,33 +524,50 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [breakdownCurrentPage, setBreakdownCurrentPage] = useState(1);
   const [breakdownPerPage] = useState(15);
 
-  // Daily Box Tracker States
+  // Daily Box Tracker — live warehouse → client cascading filters (from DB)
+  const [inventoryFilterOptions, setInventoryFilterOptions] = useState({ warehouses: [], total_warehouses: 0, total_clients: 0 });
   const [dailyDeltas, setDailyDeltas] = useState([]);
   const [loadingDeltas, setLoadingDeltas] = useState(false);
   const [deltasError, setDeltasError] = useState('');
-  const [deltasSearch, setDeltasSearch] = useState('');
   const [deltasWarehouseFilter, setDeltasWarehouseFilter] = useState('All');
   const [deltasClientFilter, setDeltasClientFilter] = useState('All');
-  const [deltasChamberFilter, setDeltasChamberFilter] = useState('All');
-  const [deltasFromDate, setDeltasFromDate] = useState('');
-  const [deltasToDate, setDeltasToDate] = useState('');
   const [deltasCurrentPage, setDeltasCurrentPage] = useState(1);
-  const [deltasPerPage] = useState(10);
+  const [deltasPerPage] = useState(15);
+  const [deltasViewClient, setDeltasViewClient] = useState(null); // selected row for View detail
+  const [deltasViewHistoryPage, setDeltasViewHistoryPage] = useState(1);
+  const [deltasViewHistoryPerPage] = useState(10);
 
-  const loadDailyInventoryDeltas = async () => {
+  const loadDailyBoxTrackerData = async (warehouseOverride) => {
+    const warehouse = warehouseOverride !== undefined ? warehouseOverride : deltasWarehouseFilter;
     setLoadingDeltas(true);
     setDeltasError('');
     try {
-      const data = await fetchDailyInventoryDeltas({
-        warehouse: deltasWarehouseFilter === 'All' ? '' : deltasWarehouseFilter,
-        fromDate: deltasFromDate || undefined,
-        toDate: deltasToDate || undefined
+      const [filterData, deltaRows] = await Promise.all([
+        fetchInventoryFilterOptions(),
+        fetchDailyInventoryDeltas({
+          warehouse: warehouse && warehouse !== 'All' ? warehouse : undefined
+        })
+      ]);
+      setInventoryFilterOptions({
+        warehouses: Array.isArray(filterData?.warehouses) ? filterData.warehouses : [],
+        total_warehouses: Number(filterData?.total_warehouses) || 0,
+        total_clients: Number(filterData?.total_clients) || 0
       });
-      setDailyDeltas(Array.isArray(data) ? data : []);
+      setDailyDeltas(Array.isArray(deltaRows) ? deltaRows : []);
+      setDeltasViewClient((prev) => {
+        if (!prev) return null;
+        const match = (Array.isArray(deltaRows) ? deltaRows : []).find((r) =>
+          r.client_name === prev.client_name &&
+          String(r.chamber_name || '') === String(prev.chamber_name || '') &&
+          String(r.warehouse_name || '') === String(prev.warehouse_name || '')
+        );
+        return match || prev;
+      });
       setDeltasCurrentPage(1);
     } catch (err) {
-      console.error('Failed to fetch daily deltas:', err);
-      setDeltasError(err.message || 'Failed to fetch daily inventory comparison logs.');
+      console.error('Failed to load Daily Box Tracker data:', err);
+      setDeltasError(err.message || 'Failed to load warehouse inventory data.');
+      setInventoryFilterOptions({ warehouses: [], total_warehouses: 0, total_clients: 0 });
       setDailyDeltas([]);
     } finally {
       setLoadingDeltas(false);
@@ -819,6 +1046,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
+  useEffect(() => {
+    checkNewDOChanges();
+    const interval = setInterval(() => {
+      checkNewDOChanges();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   const loadHistoryLogs = async () => {
     setLoadingLogs(true);
 
@@ -885,15 +1120,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadOperatorsData();
       loadInventoryReconciliationData();
     } else if (activeMenu === 'daily_box_tracker') {
-      loadOperatorsData();
-      loadDailyInventoryDeltas();
+      loadDailyBoxTrackerData();
     }
   }, [activeMenu]);
-
-  useEffect(() => {
-    if (activeMenu !== 'daily_box_tracker') return;
-    loadDailyInventoryDeltas();
-  }, [activeMenu, deltasWarehouseFilter, deltasFromDate, deltasToDate]);
 
   useEffect(() => {
     if (activeMenu !== 'inventory_log') return;
@@ -1565,7 +1794,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         } else if (created?.emailSkipped) {
           setOpSuccess(
             created?.emailError
-              || 'Data operator registered. Email skipped — set RESEND_API_KEY in backend .env and restart server.'
+              || 'Data operator registered. Email skipped — set SMTP_USER and SMTP_PASS (Gmail App Password) in backend .env and restart server.'
           );
         } else {
           setOpSuccess(
@@ -1692,7 +1921,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         } else if (created?.emailSkipped) {
           setSubAdminSuccess(
             created?.emailError
-              || 'Sub-Admin registered. Email skipped — set RESEND_API_KEY in backend .env and restart server.'
+              || 'Sub-Admin registered. Email skipped — set SMTP_USER and SMTP_PASS (Gmail App Password) in backend .env and restart server.'
           );
         } else {
           setSubAdminSuccess(
@@ -2224,7 +2453,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
             <button 
               className={`clean-menu-item ${activeMenu === 'activity_logs' ? 'active' : ''}`}
-              onClick={() => setActiveMenu('activity_logs')}
+              onClick={() => {
+                setActiveMenu('activity_logs');
+                if (hasNewDOChanges) setAuditSubTab('do_changes');
+              }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -2376,34 +2608,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           </div>
         </div>
 
-        {/* Center section: Super Administrator & Time (Centered) */}
+        {/* Center section: Super Admin + date/time below */}
         <div className="secure-header-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', textAlign: 'center' }}>
           <span className="secure-role-tag" style={{ margin: 0 }}>
-            {activeMenu === 'dashboard'
-              ? 'Super Admin - Control Dashboard'
-              : activeMenu === 'user_management'
-                ? 'Super Admin - Admins & Operators'
-              : activeMenu === 'sub_admins'
-                ? 'Super Admin - Sub-Admin Profiles'
-              : activeMenu === 'customer_reports'
-                ? 'Super Admin - Customer Reports'
-              : activeMenu === 'data_operators' 
-                ? 'Super Admin - Operator Profiles' 
-              : activeMenu === 'history_logs' 
-                ? 'Super Admin - History Logs' 
-              : activeMenu === 'activity_logs'
-                ? 'Super Admin - Operator Activities'
-              : activeMenu === 'profile_lookup'
-                ? 'Super Admin - Profile Lookup'
-              : activeMenu === 'inventory_log'
-                ? 'Super Admin - Inventory Reconciliation'
-              : activeMenu === 'super_admin_profile'
-                ? 'Super Admin - Profile & Security'
-                : 'Super Administrator'}
+            Super Admin
           </span>
-          <div className="secure-clock-subtext" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '700' }}>
-            <Clock size={12} />
-            <span>{formatDate(time)} - {formatTime(time)}</span>
+          <div className="secure-clock-subtext" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '700' }}>
+            <span>{formatDate(time)}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <Clock size={12} />
+              {formatTime(time)}
+            </span>
           </div>
         </div>
 
@@ -2515,6 +2730,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               className={`clean-menu-item ${activeMenu === 'activity_logs' ? 'active' : ''}`}
               onClick={() => {
                 setActiveMenu('activity_logs');
+                if (hasNewDOChanges) setAuditSubTab('do_changes');
                 setIsMobileMenuOpen(false);
               }}
             >
@@ -2993,10 +3209,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   style={{
                     padding: '10px 14px',
                     borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)',
-                    fontWeight: '700',
+                    border: hasNewDOChanges ? '1px solid #ef4444' : '1px solid var(--border)',
+                    backgroundColor: hasNewDOChanges ? '#fef2f2' : 'var(--bg-main)',
+                    color: hasNewDOChanges ? '#ef4444' : 'var(--text-dark)',
+                    fontWeight: hasNewDOChanges ? '800' : '700',
                     fontSize: '0.8rem',
                     cursor: 'pointer',
                     display: 'flex',
@@ -3011,7 +3227,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   }}
                   className="dashboard-shortcut-btn"
                 >
-                  <Activity size={16} color="var(--primary)" />
+                  <Activity size={16} color={hasNewDOChanges ? '#ef4444' : 'var(--primary)'} />
                   <span>DO Operations Log</span>
                   {hasNewDOChanges && <span className="pulsing-dot" style={{ marginLeft: '4px', position: 'relative', top: 'auto', right: 'auto' }} />}
                 </button>
@@ -3550,118 +3766,590 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         )}
 
         {activeMenu === 'daily_box_tracker' && (() => {
-          const uniqueClients = Array.from(new Set(dailyDeltas.map(d => d.client_name).filter(Boolean))).sort();
-          const uniqueChambers = Array.from(new Set(dailyDeltas.map(d => d.chamber_name).filter(Boolean))).sort();
+          const liveWarehouses = inventoryFilterOptions.warehouses || [];
+          const selectedWh = liveWarehouses.find(
+            (w) => String(w.name).toLowerCase().trim() === String(deltasWarehouseFilter).toLowerCase().trim()
+          );
 
-          const filtered = dailyDeltas.filter(row => {
-            if (!row.client_name) return false;
-            if (deltasClientFilter !== 'All' && row.client_name !== deltasClientFilter) return false;
-            if (deltasChamberFilter !== 'All' && row.chamber_name !== deltasChamberFilter) return false;
-            if (deltasSearch.trim() !== '') {
-              return row.client_name.toLowerCase().includes(deltasSearch.toLowerCase());
-            }
-            return true;
+          const clientsForWarehouse = deltasWarehouseFilter === 'All'
+            ? Array.from(new Set(liveWarehouses.flatMap((w) => w.clients || []))).sort((a, b) => a.localeCompare(b))
+            : (selectedWh?.clients || []);
+
+          const filteredRows = (dailyDeltas || [])
+            .filter((row) => {
+              if (!row || !row.client_name) return false;
+              if (deltasWarehouseFilter !== 'All') {
+                const rowWh = String(row.warehouse_name || '').toLowerCase().trim();
+                const selWh = String(deltasWarehouseFilter).toLowerCase().trim();
+                if (rowWh !== selWh) return false;
+              }
+              if (deltasClientFilter !== 'All' && row.client_name !== deltasClientFilter) return false;
+              return true;
+            })
+            .slice()
+            .sort((a, b) => {
+              // Latest update on top
+              const da = String(a.latest_date || '');
+              const db = String(b.latest_date || '');
+              if (db !== da) return db.localeCompare(da);
+              return String(a.client_name || '').localeCompare(String(b.client_name || ''));
+            });
+
+          const totalBoxes = filteredRows.reduce((sum, r) => sum + (Number(r.latest_count) || 0), 0);
+          const netDelta = filteredRows.reduce((sum, r) => sum + (Number(r.delta) || 0), 0);
+          const uniqueClientsInData = new Set(filteredRows.map((r) => r.client_name)).size;
+
+          // Client-wise box totals from live filtered rows (warehouse + client filters)
+          const clientBoxMap = {};
+          filteredRows.forEach((r) => {
+            const name = r.client_name || 'Unknown';
+            clientBoxMap[name] = (clientBoxMap[name] || 0) + (Number(r.latest_count) || 0);
           });
+          const PIE_COLORS = [
+            '#0284c7', '#0f766e', '#7c3aed', '#ea580c', '#16a34a',
+            '#db2777', '#4f46e5', '#ca8a04', '#0891b2', '#dc2626'
+          ];
+          const clientPieSlices = Object.entries(clientBoxMap)
+            .map(([name, boxes]) => ({ name, boxes }))
+            .sort((a, b) => b.boxes - a.boxes);
 
-          const handleExportDeltasCSV = () => {
-            if (!filtered || filtered.length === 0) return;
-            
-            const formatDateCSV = (dStr) => {
-              if (!dStr) return '-';
-              const parts = dStr.split('-');
-              if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-              return dStr;
+          const renderClientBoxesPieSvg = () => {
+            const size = 200;
+            const cx = size / 2;
+            const cy = size / 2;
+            const radius = 78;
+            const innerR = 48;
+            const slices = clientPieSlices;
+            const total = slices.reduce((s, x) => s + x.boxes, 0) || 0;
+
+            if (!slices.length || total <= 0) {
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative', width: size, height: size }}>
+                    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                      <circle cx={cx} cy={cy} r={radius} fill="#f1f5f9" />
+                      <circle cx={cx} cy={cy} r={innerR} fill="var(--surface, #fff)" />
+                    </svg>
+                    <div style={{
+                      position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', flexDirection: 'column', pointerEvents: 'none'
+                    }}>
+                      <span style={{ fontSize: '1.1rem', fontWeight: 900, color: '#94a3b8' }}>0</span>
+                      <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#94a3b8' }}>boxes</span>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    Is filter ke liye koi client box data nahi.
+                  </div>
+                </div>
+              );
+            }
+
+            const polar = (angleDeg, r) => {
+              const rad = ((angleDeg - 90) * Math.PI) / 180;
+              return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
             };
 
-            const headers = 'Client Name,Warehouse Name,Chamber Name,Previous Audit Date,Previous Box Count,Latest Audit Date,Latest Box Count,Change (Delta),Trend Status,History (Last 5 Audit Counts)\n';
-            const csvContent = headers + filtered.map(row => {
-              const prevDate = formatDateCSV(row.prev_date);
-              const latestDate = formatDateCSV(row.latest_date);
-              const trend = row.delta > 0 ? 'Inward Increase' : row.delta < 0 ? 'Outward Decrease' : 'No Change';
-              const historyStr = row.history ? row.history.map(h => `${formatDateCSV(h.date)}:${h.count}`).join(' | ') : '';
-              return `"${row.client_name || '-'}","${row.warehouse_name || '-'}","${row.chamber_name || '-'}","${prevDate}",${row.prev_count},"${latestDate}",${row.latest_count},${row.delta},"${trend}","${historyStr}"`;
-            }).join('\n');
-            downloadCsv(`ReeferON_DailyBoxDeltas_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
-          };
-
-          const isAllWarehouse = deltasWarehouseFilter === 'All';
-          let chartData = [];
-          if (isAllWarehouse) {
-            const warehouseChamberGroups = {};
-            filtered.forEach(row => {
-              const wh = row.warehouse_name || 'Generic';
-              const ch = row.chamber_name || 'Generic';
-              const key = `${wh}|||${ch}`;
-              if (!warehouseChamberGroups[key]) {
-                warehouseChamberGroups[key] = { name: `${wh} (${ch})`, latest_count: 0, delta: 0 };
-              }
-              warehouseChamberGroups[key].latest_count += (row.latest_count || 0);
-              warehouseChamberGroups[key].delta += (row.delta || 0);
+            let angle = 0;
+            const paths = slices.map((slice, idx) => {
+              const portion = slice.boxes / total;
+              const sweep = Math.max(portion * 360, portion > 0 ? 0.3 : 0);
+              const start = angle;
+              const end = angle + sweep;
+              angle = end;
+              const large = sweep > 180 ? 1 : 0;
+              const p1 = polar(start, radius);
+              const p2 = polar(end, radius);
+              const p3 = polar(end, innerR);
+              const p4 = polar(start, innerR);
+              const d = [
+                `M ${p1.x} ${p1.y}`,
+                `A ${radius} ${radius} 0 ${large} 1 ${p2.x} ${p2.y}`,
+                `L ${p3.x} ${p3.y}`,
+                `A ${innerR} ${innerR} 0 ${large} 0 ${p4.x} ${p4.y}`,
+                'Z'
+              ].join(' ');
+              return {
+                ...slice,
+                d,
+                color: PIE_COLORS[idx % PIE_COLORS.length],
+                pct: Math.round(portion * 1000) / 10
+              };
             });
-            chartData = Object.values(warehouseChamberGroups)
-              .sort((a, b) => b.latest_count - a.latest_count)
-              .slice(0, 8);
-          } else {
-            const chamberClientGroups = {};
-            filtered.forEach(row => {
-              const ch = row.chamber_name || 'Generic';
-              const cl = row.client_name || 'Generic';
-              const key = `${ch}|||${cl}`;
-              if (!chamberClientGroups[key]) {
-                chamberClientGroups[key] = { name: `${ch} (${cl})`, latest_count: 0, delta: 0 };
-              }
-              chamberClientGroups[key].latest_count += (row.latest_count || 0);
-              chamberClientGroups[key].delta += (row.delta || 0);
-            });
-            chartData = Object.values(chamberClientGroups)
-              .sort((a, b) => b.latest_count - a.latest_count)
-              .slice(0, 8);
-          }
 
-          const startIndex = (deltasCurrentPage - 1) * deltasPerPage;
-          const endIndex = startIndex + deltasPerPage;
-          const paginatedRows = filtered.slice(startIndex, endIndex);
-
-          return (
-            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              
-              {/* Header section */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
-                <div>
-                  <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
-                    Daily Box Inventory Tracker
-                  </h2>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                    Track and visualize daily changes in client box counts across physical inspections.
-                  </p>
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+                  <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Client boxes distribution">
+                    {paths.map((p) => (
+                      <path
+                        key={p.name}
+                        d={p.d}
+                        fill={p.color}
+                        stroke="var(--surface, #fff)"
+                        strokeWidth={2}
+                      >
+                        <title>{`${p.name}: ${p.boxes.toLocaleString()} boxes (${p.pct}%)`}</title>
+                      </path>
+                    ))}
+                  </svg>
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    pointerEvents: 'none'
+                  }}>
+                    <span style={{
+                      fontSize: String(total).length > 5 ? '0.95rem' : '1.25rem',
+                      fontWeight: 900,
+                      color: 'var(--text-dark)',
+                      lineHeight: 1.1
+                    }}>
+                      {loadingDeltas ? '…' : total.toLocaleString()}
+                    </span>
+                    <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                      boxes
+                    </span>
+                    <span style={{ fontSize: '0.62rem', fontWeight: 700, color: '#64748b', marginTop: 2 }}>
+                      {uniqueClientsInData} clients
+                    </span>
+                  </div>
                 </div>
 
-                {/* Action Buttons */}
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={handleExportDeltasCSV}
-                    disabled={filtered.length === 0}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: 'none',
-                      backgroundColor: 'var(--primary)',
-                      color: '#ffffff',
-                      fontWeight: '700',
-                      fontSize: '0.8rem',
-                      cursor: filtered.length === 0 ? 'not-allowed' : 'pointer',
-                      opacity: filtered.length === 0 ? 0.6 : 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px'
-                    }}
-                  >
-                    <Download size={14} />
-                    Export CSV
-                  </button>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  maxHeight: 200,
+                  overflowY: 'auto',
+                  minWidth: 200,
+                  flex: 1
+                }}>
+                  {paths.map((p) => (
+                    <div
+                      key={p.name}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        fontSize: '0.76rem'
+                      }}
+                    >
+                      <span style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 2,
+                        backgroundColor: p.color,
+                        flexShrink: 0
+                      }} />
+                      <span style={{
+                        fontWeight: 700,
+                        color: 'var(--text-dark)',
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                        title={p.name}
+                      >
+                        {p.name}
+                      </span>
+                      <span style={{ fontWeight: 800, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                        {p.boxes.toLocaleString()}
+                        <span style={{ fontWeight: 600, marginLeft: 4 }}>({p.pct}%)</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          };
 
+          const clientCountLabel = deltasWarehouseFilter === 'All'
+            ? `Showing ${filteredRows.length} lots · ${uniqueClientsInData} clients · ${totalBoxes.toLocaleString()} boxes`
+            : `${deltasWarehouseFilter}: ${filteredRows.length} lots · ${uniqueClientsInData} clients · ${totalBoxes.toLocaleString()} boxes`;
+
+          const pageStart = (deltasCurrentPage - 1) * deltasPerPage;
+          const paginatedRows = filteredRows.slice(pageStart, pageStart + deltasPerPage);
+
+          const formatDate = (dateStr) => {
+            if (!dateStr) return '-';
+            const parts = String(dateStr).split('-');
+            if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+            return dateStr;
+          };
+
+          const handleExportBoxInventoryCSV = () => {
+            if (!filteredRows.length) return;
+            const headers = 'Client,Warehouse,Chamber,Previous Qty,Previous Temp,Previous Date,Latest Qty,Latest Temp,Latest Date,Plus/Minus,Status\n';
+            const csvContent = headers + filteredRows.map((row) => {
+              const latestQty = Math.max(0, Number(row.latest_count) || 0);
+              const prevQty = Math.max(0, Number(row.prev_count) || 0);
+              const inwardQty = Number(row.inward_qty) >= 0
+                ? Number(row.inward_qty)
+                : (latestQty > prevQty ? latestQty - prevQty : 0);
+              const outwardQty = Number(row.outward_qty) >= 0
+                ? Number(row.outward_qty)
+                : (prevQty > latestQty ? prevQty - latestQty : 0);
+              const status = inwardQty > 0 ? 'Plus' : outwardQty > 0 ? 'Minus' : 'No Change';
+              const plusMinus = inwardQty > 0 ? `+${inwardQty}` : outwardQty > 0 ? `-${outwardQty}` : '0';
+              const latestTemp = row.latest_temp != null && row.latest_temp !== '' ? `${row.latest_temp}°C` : '';
+              const prevTemp = row.prev_temp != null && row.prev_temp !== '' ? `${row.prev_temp}°C` : '';
+              return [
+                `"${row.client_name || '-'}"`,
+                `"${row.warehouse_name || '-'}"`,
+                `"${row.chamber_name || '-'}"`,
+                row.prev_date ? prevQty : '',
+                prevTemp,
+                `"${formatDate(row.prev_date)}"`,
+                latestQty,
+                latestTemp,
+                `"${formatDate(row.latest_date)}"`,
+                plusMinus,
+                `"${status}"`
+              ].join(',');
+            }).join('\n');
+            const whTag = deltasWarehouseFilter === 'All' ? 'All' : String(deltasWarehouseFilter).replace(/\s+/g, '_');
+            downloadCsv(`Box_Inventory_${whTag}_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+          };
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: '70vh' }}>
+              {deltasViewClient ? (() => {
+                const row = deltasViewClient;
+                const latestQty = Math.max(0, Number(row.latest_count) || 0);
+                const prevQty = Math.max(0, Number(row.prev_count) || 0);
+                const inwardQty = Number(row.inward_qty) >= 0
+                  ? Number(row.inward_qty)
+                  : (latestQty > prevQty ? latestQty - prevQty : 0);
+                const outwardQty = Number(row.outward_qty) >= 0
+                  ? Number(row.outward_qty)
+                  : (prevQty > latestQty ? prevQty - latestQty : 0);
+                const history = Array.isArray(row.history)
+                  ? [...row.history].sort((a, b) => {
+                      const da = String(a.date || a.entry_date || '');
+                      const db = String(b.date || b.entry_date || '');
+                      if (db !== da) return db.localeCompare(da);
+                      const shiftOf = (h) => resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
+                      const sa = shiftOf(a) === 'Evening' ? 1 : 0;
+                      const sb = shiftOf(b) === 'Evening' ? 1 : 0;
+                      if (sb !== sa) return sb - sa;
+                      return (Number(b.id) || 0) - (Number(a.id) || 0);
+                    })
+                  : [];
+
+                const historyStart = (deltasViewHistoryPage - 1) * deltasViewHistoryPerPage;
+                const paginatedHistory = history.slice(historyStart, historyStart + deltasViewHistoryPerPage);
+
+                const handleExportClientHistoryCSV = () => {
+                  if (!history.length) return;
+                  const headers = 'Date,Slot,Box Qty,Box Temp,Plus/Minus,Status\n';
+                  const csvContent = headers + history.map((h, i) => {
+                    const countRaw = h.box_count ?? h.count;
+                    const count = countRaw === null || countRaw === undefined || countRaw === ''
+                      ? ''
+                      : Math.max(0, Number(countRaw) || 0);
+                    const olderRaw = i < history.length - 1
+                      ? (history[i + 1].box_count ?? history[i + 1].count)
+                      : null;
+                    const older = olderRaw === null || olderRaw === undefined || olderRaw === ''
+                      ? null
+                      : Math.max(0, Number(olderRaw) || 0);
+                    const step = (count === '' || older === null) ? null : Number(count) - older;
+                    const status = step == null ? 'Start' : step > 0 ? 'Plus' : step < 0 ? 'Minus' : 'No Change';
+                    const plusMinus = step == null ? '' : step > 0 ? `+${step}` : step < 0 ? `-${Math.abs(step)}` : '0';
+                    const tempRaw = h.box_temp ?? h.temp ?? h.chamber_temp;
+                    const temp = tempRaw != null && tempRaw !== '' && Number.isFinite(Number(tempRaw))
+                      ? `${Number(tempRaw)}°C`
+                      : '';
+                    const slot = resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
+                    const dateVal = h.date || h.entry_date;
+                    return [
+                      `"${formatDate(dateVal)}"`,
+                      `"${slot}"`,
+                      count,
+                      temp,
+                      plusMinus,
+                      `"${status}"`
+                    ].join(',');
+                  }).join('\n');
+                  const safeName = String(row.client_name || 'Client').replace(/[^\w\-]+/g, '_');
+                  downloadCsv(`Client_History_${safeName}_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+                };
+
+                return (
+                  <div className="diagnostics-card" style={{
+                    flex: 1,
+                    padding: 24,
+                    backgroundColor: 'var(--surface)',
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px solid var(--border)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 20
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: '1px solid var(--border)', paddingBottom: 14, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeltasViewClient(null);
+                            setDeltasViewHistoryPage(1);
+                          }}
+                          style={{
+                            border: '1px solid var(--border)',
+                            background: '#fff',
+                            borderRadius: 'var(--radius-sm)',
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            fontWeight: 700,
+                            fontSize: '0.8rem',
+                            color: 'var(--text-dark)'
+                          }}
+                        >
+                          ← Back
+                        </button>
+                        <div>
+                          <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+                            {row.client_name}
+                          </h2>
+                          <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            {row.warehouse_name || '-'} · {row.chamber_name || '-'}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleExportClientHistoryCSV}
+                        disabled={history.length === 0}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: history.length === 0 ? '#94a3b8' : '#22c55e',
+                          color: '#fff',
+                          fontWeight: 700,
+                          fontSize: '0.8rem',
+                          cursor: history.length === 0 ? 'not-allowed' : 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6
+                        }}
+                      >
+                        <Download size={14} />
+                        Export
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Previous Qty</div>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: 6 }}>
+                          {row.prev_date ? prevQty.toLocaleString() : '—'}
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>{formatDate(row.prev_date)}</div>
+                      </div>
+                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Latest Qty</div>
+                        <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: 6, color: 'var(--primary)' }}>
+                          {latestQty.toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>{formatDate(row.latest_date)}</div>
+                      </div>
+                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Latest Slot</div>
+                        {(() => {
+                          const slotLabel = resolveShiftLabel(row.latest_shift || row.latest_slot, null, null);
+                          const isMorning = slotLabel === 'Morning';
+                          return (
+                            <>
+                              <div style={{
+                                fontSize: '1.2rem',
+                                fontWeight: 800,
+                                marginTop: 6,
+                                color: isMorning ? '#0369a1' : '#b45309'
+                              }}>
+                                {slotLabel}
+                              </div>
+                              {row.prev_shift && (
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                                  Prev: {resolveShiftLabel(row.prev_shift || row.prev_slot, null, null)}
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Box Temp</div>
+                        {(() => {
+                          const latestTempRaw = row.latest_temp ?? row.box_temp ?? row.chamber_temp;
+                          const latestTemp = latestTempRaw != null && latestTempRaw !== '' && Number.isFinite(Number(latestTempRaw))
+                            ? Number(latestTempRaw)
+                            : null;
+                          const prevTempRaw = row.prev_temp;
+                          const prevTemp = prevTempRaw != null && prevTempRaw !== '' && Number.isFinite(Number(prevTempRaw))
+                            ? Number(prevTempRaw)
+                            : null;
+                          return (
+                            <>
+                              <div style={{
+                                fontSize: '1.4rem',
+                                fontWeight: 800,
+                                marginTop: 6,
+                                color: latestTemp == null ? '#64748b' : latestTemp <= -18 ? '#15803d' : '#b91c1c'
+                              }}>
+                                {latestTemp == null ? '—' : `${latestTemp}°C`}
+                              </div>
+                              {prevTemp != null && (
+                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                                  Prev: {prevTemp}°C
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                          {inwardQty > 0 ? 'Plus (In)' : outwardQty > 0 ? 'Minus (Out)' : 'In / Out'}
+                        </div>
+                        <div style={{
+                          fontSize: '1.4rem',
+                          fontWeight: 800,
+                          marginTop: 6,
+                          color: inwardQty > 0 ? '#16a34a' : outwardQty > 0 ? '#dc2626' : '#64748b'
+                        }}>
+                          {inwardQty > 0 ? `+${inwardQty}` : outwardQty > 0 ? `-${outwardQty}` : '0'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                        <h3 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+                          Audit History
+                        </h3>
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                          {history.length} records
+                        </span>
+                      </div>
+                      {history.length === 0 ? (
+                        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>No history available.</div>
+                      ) : (
+                        <>
+                          <div className="table-responsive">
+                            <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                                  <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Date</th>
+                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Slot</th>
+                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Box Qty</th>
+                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Box Temp</th>
+                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>In / Out</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {paginatedHistory.map((h, i) => {
+                                  const globalIndex = historyStart + i;
+                                  const countRaw = h.box_count ?? h.count;
+                                  const count = countRaw === null || countRaw === undefined || countRaw === ''
+                                    ? null
+                                    : Math.max(0, Number(countRaw) || 0);
+                                  const olderRaw = globalIndex < history.length - 1
+                                    ? (history[globalIndex + 1].box_count ?? history[globalIndex + 1].count)
+                                    : null;
+                                  const older = olderRaw === null || olderRaw === undefined || olderRaw === ''
+                                    ? null
+                                    : Math.max(0, Number(olderRaw) || 0);
+                                  const step = (count === null || older === null) ? null : count - older;
+                                  const tempRaw = h.box_temp ?? h.temp ?? h.chamber_temp;
+                                  const tempVal = tempRaw != null && tempRaw !== '' && Number.isFinite(Number(tempRaw))
+                                    ? Number(tempRaw)
+                                    : null;
+                                  const slotLabel = resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
+                                  const isMorning = slotLabel === 'Morning';
+                                  const isLastRow = i === paginatedHistory.length - 1;
+                                  const cellBorder = isLastRow ? 'none' : undefined;
+                                  const dateVal = h.date || h.entry_date;
+                                  return (
+                                    <tr key={`${dateVal}-${slotLabel}-${h.id || globalIndex}`}>
+                                      <td style={{ padding: '10px 12px', fontWeight: 600, borderBottom: cellBorder }}>{formatDate(dateVal)}</td>
+                                      <td style={{ padding: '10px 12px', textAlign: 'center', borderBottom: cellBorder }}>
+                                        <span style={{
+                                          padding: '3px 8px',
+                                          borderRadius: 'var(--radius-sm)',
+                                          backgroundColor: isMorning ? '#e0f2fe' : '#fef3c7',
+                                          color: isMorning ? '#0369a1' : '#b45309',
+                                          fontWeight: 800,
+                                          fontSize: '0.7rem'
+                                        }}>
+                                          {slotLabel}
+                                        </span>
+                                      </td>
+                                      <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 800, borderBottom: cellBorder }}>
+                                        {count === null ? '—' : count.toLocaleString()}
+                                      </td>
+                                      <td style={{
+                                        padding: '10px 12px',
+                                        textAlign: 'center',
+                                        fontWeight: 800,
+                                        borderBottom: cellBorder,
+                                        color: tempVal == null ? '#64748b' : tempVal <= -18 ? '#15803d' : '#b91c1c'
+                                      }}>
+                                        {tempVal == null ? '—' : `${tempVal}°C`}
+                                      </td>
+                                      <td style={{
+                                        padding: '10px 12px',
+                                        textAlign: 'center',
+                                        fontWeight: 700,
+                                        borderBottom: cellBorder,
+                                        color: step == null ? '#64748b' : step > 0 ? '#16a34a' : step < 0 ? '#dc2626' : '#64748b'
+                                      }}>
+                                        {step == null
+                                          ? '—'
+                                          : step > 0
+                                            ? `Plus: +${step}`
+                                            : step < 0
+                                              ? `Minus: -${Math.abs(step)}`
+                                              : '0'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          <PaginationBar
+                            page={deltasViewHistoryPage}
+                            totalItems={history.length}
+                            pageSize={deltasViewHistoryPerPage}
+                            onPageChange={setDeltasViewHistoryPage}
+                            itemLabel="records"
+                          />
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })() : (
+              <>
+              <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
+                      Daily Box Inventory Tracker
+                    </h2>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                      Warehouse select karo — us warehouse ka box inventory data neeche dikhega.
+                    </p>
+                  </div>
                   <button
-                    onClick={loadDailyInventoryDeltas}
+                    type="button"
+                    onClick={() => loadDailyBoxTrackerData()}
                     disabled={loadingDeltas}
                     style={{
                       padding: '8px 14px',
@@ -3669,64 +4357,78 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       border: '1px solid var(--border)',
                       backgroundColor: 'var(--bg-main)',
                       color: 'var(--text-dark)',
-                      fontWeight: '700',
+                      fontWeight: 700,
                       fontSize: '0.8rem',
-                      cursor: 'pointer',
-                      display: 'flex',
+                      cursor: loadingDeltas ? 'wait' : 'pointer',
+                      display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '6px'
+                      gap: 6
                     }}
                   >
-                    <Activity size={14} className={loadingDeltas ? 'spin' : ''} />
-                    Refresh
+                    {loadingDeltas ? <Loader2 size={14} className="spinner-icon" /> : <Activity size={14} />}
+                    Refresh Live Data
                   </button>
                 </div>
+
+                {deltasError && (
+                  <div style={{ padding: '10px 14px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#dc2626', fontSize: '0.8rem', fontWeight: 700 }}>
+                    {deltasError}
+                  </div>
+                )}
               </div>
 
-              {/* Error Banner */}
-              {deltasError && (
-                <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '700' }}>
-                  {deltasError}
-                </div>
-              )}
-
-              {/* Top Filter and Search Bar */}
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-                {/* Warehouse Filter */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '160px' }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Filter by Warehouse
+              {/* Filters — separate outer div */}
+              <div className="diagnostics-card" style={{
+                padding: 16,
+                backgroundColor: 'var(--surface)',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                gap: 12,
+                flexWrap: 'wrap',
+                alignItems: 'flex-end'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Warehouse (Live DB)
                   </label>
                   <select
                     value={deltasWarehouseFilter}
                     onChange={(e) => {
-                      setDeltasWarehouseFilter(e.target.value);
+                      const wh = e.target.value;
+                      setDeltasWarehouseFilter(wh);
+                      setDeltasClientFilter('All');
                       setDeltasCurrentPage(1);
+                      setDeltasViewClient(null);
+                      loadDailyBoxTrackerData(wh);
                     }}
                     style={{
-                      padding: '6px 10px',
+                      padding: '8px 12px',
                       borderRadius: 'var(--radius-sm)',
                       border: '1px solid var(--border)',
-                      fontSize: '0.78rem',
-                      outline: 'none',
-                      backgroundColor: deltasWarehouseFilter !== 'All' ? '#e0f2fe' : 'var(--bg-main)',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      backgroundColor: deltasWarehouseFilter !== 'All' ? '#e0f2fe' : '#fff',
                       color: 'var(--text-dark)',
+                      outline: 'none',
                       cursor: 'pointer',
-                      fontWeight: '700',
-                      width: '100%'
+                      height: 37
                     }}
                   >
-                    <option value="All">All Warehouses</option>
-                    {warehousesList.map(w => (
-                      <option key={w} value={w}>{w}</option>
+                    <option value="All">
+                      All Warehouses ({inventoryFilterOptions.total_warehouses})
+                    </option>
+                    {liveWarehouses.map((w) => (
+                      <option key={w.name} value={w.name}>
+                        {w.name} ({w.client_count} clients)
+                      </option>
                     ))}
                   </select>
                 </div>
 
-                {/* Client Filter */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '150px' }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Filter by Client
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
+                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Client (by Warehouse)
                   </label>
                   <select
                     value={deltasClientFilter}
@@ -3735,526 +4437,321 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       setDeltasCurrentPage(1);
                     }}
                     style={{
-                      padding: '6px 10px',
+                      padding: '8px 12px',
                       borderRadius: 'var(--radius-sm)',
                       border: '1px solid var(--border)',
-                      fontSize: '0.78rem',
-                      outline: 'none',
-                      backgroundColor: deltasClientFilter !== 'All' ? '#e0f2fe' : 'var(--bg-main)',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      backgroundColor: deltasClientFilter !== 'All' ? '#e0f2fe' : '#fff',
                       color: 'var(--text-dark)',
+                      outline: 'none',
                       cursor: 'pointer',
-                      fontWeight: '700',
-                      width: '100%'
+                      height: 37
                     }}
                   >
-                    <option value="All">All Clients</option>
-                    {uniqueClients.map(c => (
+                    <option value="All">
+                      All Clients ({clientsForWarehouse.length})
+                    </option>
+                    {clientsForWarehouse.map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
                 </div>
 
-                {/* Chamber Filter */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '150px' }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Filter by Chamber
-                  </label>
-                  <select
-                    value={deltasChamberFilter}
-                    onChange={(e) => {
-                      setDeltasChamberFilter(e.target.value);
-                      setDeltasCurrentPage(1);
-                    }}
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.78rem',
-                      outline: 'none',
-                      backgroundColor: deltasChamberFilter !== 'All' ? '#e0f2fe' : 'var(--bg-main)',
-                      color: 'var(--text-dark)',
-                      cursor: 'pointer',
-                      fontWeight: '700',
-                      width: '100%'
-                    }}
-                  >
-                    <option value="All">All Chambers</option>
-                    {uniqueChambers.map(ch => (
-                      <option key={ch} value={ch}>{ch}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* From Date Filter */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '130px' }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    From Date
-                  </label>
-                  <input
-                    type="date"
-                    value={deltasFromDate}
-                    onChange={(e) => {
-                      setDeltasFromDate(e.target.value);
-                      setDeltasCurrentPage(1);
-                    }}
-                    style={{
-                      padding: '5px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.78rem',
-                      outline: 'none',
-                      backgroundColor: deltasFromDate ? '#e0f2fe' : 'var(--bg-main)',
-                      color: 'var(--text-dark)',
-                      fontWeight: '700',
-                      cursor: 'pointer'
-                    }}
-                  />
-                </div>
-
-                {/* To Date Filter */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '130px' }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    To Date
-                  </label>
-                  <input
-                    type="date"
-                    value={deltasToDate}
-                    onChange={(e) => {
-                      setDeltasToDate(e.target.value);
-                      setDeltasCurrentPage(1);
-                    }}
-                    style={{
-                      padding: '5px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.78rem',
-                      outline: 'none',
-                      backgroundColor: deltasToDate ? '#e0f2fe' : 'var(--bg-main)',
-                      color: 'var(--text-dark)',
-                      fontWeight: '700',
-                      cursor: 'pointer'
-                    }}
-                  />
-                </div>
-
-                {/* Clear Filters Button */}
                 <button
+                  type="button"
                   onClick={() => {
                     setDeltasWarehouseFilter('All');
                     setDeltasClientFilter('All');
-                    setDeltasChamberFilter('All');
-                    setDeltasFromDate('');
-                    setDeltasToDate('');
-                    setDeltasSearch('');
                     setDeltasCurrentPage(1);
+                    loadDailyBoxTrackerData('All');
                   }}
                   style={{
-                    padding: '6px 12px',
+                    padding: '8px 14px',
                     borderRadius: 'var(--radius-sm)',
                     border: '1px solid #cbd5e1',
                     backgroundColor: '#f1f5f9',
                     color: '#475569',
-                    fontWeight: '700',
-                    fontSize: '0.76rem',
+                    fontWeight: 700,
+                    fontSize: '0.78rem',
                     cursor: 'pointer',
-                    marginTop: '16px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    transition: 'background-color 0.2s'
+                    height: 37
                   }}
                 >
                   Clear Filters
                 </button>
 
-                {/* Client Search */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '200px' }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Search Client Name
-                  </label>
-                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <Search size={13} style={{ position: 'absolute', left: '10px', color: 'var(--text-muted)' }} />
-                    <input
-                      type="text"
-                      placeholder="Search client lot..."
-                      value={deltasSearch}
-                      onChange={(e) => {
-                        setDeltasSearch(e.target.value);
-                        setDeltasCurrentPage(1);
-                      }}
+                <div style={{
+                  marginLeft: 'auto',
+                  padding: '8px 14px',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: '#f0f9ff',
+                  border: '1px solid #bae6fd',
+                  color: '#0369a1',
+                  fontWeight: 800,
+                  fontSize: '0.8rem',
+                  height: 37,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}>
+                  <span style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: loadingDeltas ? '#94a3b8' : '#22c55e',
+                    boxShadow: loadingDeltas ? 'none' : '0 0 0 3px rgba(34,197,94,0.25)',
+                    display: 'inline-block'
+                  }} />
+                  {loadingDeltas ? 'Loading live DB…' : clientCountLabel}
+                </div>
+              </div>
+
+              {/* Single SVG — client-wise boxes (follows warehouse/client filters) */}
+              <div className="diagnostics-card" style={{
+                padding: '18px 20px',
+                backgroundColor: 'var(--surface)',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      backgroundColor: loadingDeltas ? '#94a3b8' : '#22c55e',
+                      boxShadow: loadingDeltas ? 'none' : '0 0 0 3px rgba(34,197,94,0.2)'
+                    }} />
+                    <h3 style={{ margin: 0, fontSize: '0.82rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+                      Clients × Boxes
+                    </h3>
+                  </div>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                    {deltasWarehouseFilter === 'All' ? 'All Warehouses' : deltasWarehouseFilter}
+                    {deltasClientFilter !== 'All' ? ` · ${deltasClientFilter}` : ''}
+                    {' · '}
+                    {loadingDeltas ? 'syncing…' : 'live DB'}
+                  </span>
+                </div>
+                {renderClientBoxesPieSvg()}
+              </div>
+
+              {/* Warehouse-wise data table */}
+              <div className="diagnostics-card" style={{
+                padding: 20,
+                backgroundColor: 'var(--surface)',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <h3 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+                    {deltasWarehouseFilter === 'All' ? 'All Warehouses — Box Inventory' : `${deltasWarehouseFilter} — Box Inventory`}
+                  </h3>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                      Total boxes: <strong style={{ color: 'var(--text-dark)' }}>{totalBoxes.toLocaleString()}</strong>
+                    </span>
+                    <span style={{
+                      fontSize: '0.76rem',
+                      fontWeight: 800,
+                      color: netDelta > 0 ? '#16a34a' : netDelta < 0 ? '#dc2626' : '#64748b'
+                    }}>
+                      {netDelta > 0
+                        ? `Net inward: +${netDelta}`
+                        : netDelta < 0
+                          ? `Net outward: ${Math.abs(netDelta)}`
+                          : 'Net: No change'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleExportBoxInventoryCSV}
+                      disabled={filteredRows.length === 0}
                       style={{
-                        padding: '6px 10px 6px 30px',
+                        padding: '7px 12px',
                         borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
+                        border: 'none',
+                        backgroundColor: filteredRows.length === 0 ? '#94a3b8' : '#22c55e',
+                        color: '#fff',
+                        fontWeight: 700,
                         fontSize: '0.78rem',
-                        outline: 'none',
-                        backgroundColor: deltasSearch.trim() !== '' ? '#e0f2fe' : 'var(--bg-main)',
-                        color: 'var(--text-dark)',
-                        width: '100%',
-                        fontWeight: '600'
+                        cursor: filteredRows.length === 0 ? 'not-allowed' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5
                       }}
-                    />
+                    >
+                      <Download size={14} />
+                      Export
+                    </button>
                   </div>
                 </div>
-              </div>
 
-              {/* Visual Chart Section */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {(() => {
-                  const isSingleLotSelected = deltasClientFilter !== 'All' && deltasChamberFilter !== 'All';
-                  
-                  if (isSingleLotSelected) {
-                    const selectedLot = dailyDeltas.find(d => d.client_name === deltasClientFilter && d.chamber_name === deltasChamberFilter);
-                    const lotHistory = selectedLot ? (selectedLot.history || []) : [];
-                    
-                    const formatDate = (dStr) => {
-                      if (!dStr) return '-';
-                      const parts = dStr.split('-');
-                      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-                      return dStr;
-                    };
+                {loadingDeltas ? (
+                  <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                    Loading warehouse inventory…
+                  </div>
+                ) : filteredRows.length === 0 ? (
+                  <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                    Is filter ke liye koi box inventory data nahi mila.
+                  </div>
+                ) : (
+                  <>
+                    <div className="table-responsive" style={{ maxHeight: 520, overflowY: 'auto' }}>
+                      <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                            <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Client</th>
+                            <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Warehouse</th>
+                            <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Chamber</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Prev Qty</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Qty</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Box Temp</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Slot</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>In / Out</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Date</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Status</th>
+                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paginatedRows.map((row, idx) => {
+                            const latestQty = Math.max(0, Number(row.latest_count) || 0);
+                            const prevQty = Math.max(0, Number(row.prev_count) || 0);
+                            const inwardQty = Number(row.inward_qty) >= 0
+                              ? Number(row.inward_qty)
+                              : (latestQty > prevQty ? latestQty - prevQty : 0);
+                            const outwardQty = Number(row.outward_qty) >= 0
+                              ? Number(row.outward_qty)
+                              : (prevQty > latestQty ? prevQty - latestQty : 0);
+                            const isUp = inwardQty > 0;
+                            const isDown = outwardQty > 0;
+                            // Only one at a time: Plus OR Minus
+                            const flowLabel = isUp
+                              ? `Plus: +${inwardQty}`
+                              : isDown
+                                ? `Minus: -${outwardQty}`
+                                : '0';
+                            const latestTempRaw = row.latest_temp ?? row.box_temp ?? row.chamber_temp;
+                            const latestTemp = latestTempRaw != null && latestTempRaw !== '' && Number.isFinite(Number(latestTempRaw))
+                              ? Number(latestTempRaw)
+                              : null;
+                            const slotLabel = resolveShiftLabel(row.latest_shift || row.latest_slot, null, null);
+                            const isMorningSlot = slotLabel === 'Morning';
 
-                    return (
-                      <div style={{ 
-                        padding: '24px', 
-                        background: 'linear-gradient(135deg, var(--surface) 0%, var(--bg-main) 100%)', 
-                        borderRadius: 'var(--radius-lg)', 
-                        border: '1px solid var(--border)',
-                        boxShadow: '0 8px 30px -4px rgba(0, 0, 0, 0.03)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '20px'
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
-                          <div style={{ width: '3px', height: '16px', backgroundColor: '#2563eb', borderRadius: '2px' }} />
-                          <span style={{ fontSize: '0.88rem', fontWeight: '850', color: 'var(--text-dark)', letterSpacing: '-0.01em' }}>
-                            {deltasFromDate || deltasToDate 
-                              ? `Audit History (${deltasFromDate ? deltasFromDate.split('-').reverse().join('/') : 'Start'} to ${deltasToDate ? deltasToDate.split('-').reverse().join('/') : 'Latest'}): `
-                              : 'Audit History (Recent Logs): '
-                            }
-                            <span style={{ color: '#2563eb' }}>{deltasClientFilter}</span> — {deltasChamberFilter}
-                          </span>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: '12px', padding: '15px 0' }}>
-                          {lotHistory.length === 0 ? (
-                            <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>No historical logs found for the selected date range.</div>
-                          ) : (
-                            lotHistory.map((h, index) => {
-                              const currentCount = h.count;
-                              const prevPoint = index > 0 ? lotHistory[index - 1] : null;
-                              const stepDelta = prevPoint ? (currentCount - prevPoint.count) : 0;
-                              
-                              const isUp = stepDelta > 0;
-                              const isDown = stepDelta < 0;
-                              const formattedDateStr = formatDate(h.date);
-                              
-                              return (
-                                <div key={index} style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-                                  {/* Timeline node card */}
-                                  <div style={{ 
-                                    width: '130px', 
-                                    backgroundColor: 'var(--surface)', 
-                                    borderRadius: 'var(--radius-md)', 
-                                    border: '1px solid var(--border)', 
-                                    padding: '12px 10px', 
-                                    alignItems: 'center', 
-                                    display: 'flex', 
-                                    flexDirection: 'column', 
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.02)',
-                                    zIndex: 2,
-                                    transition: 'transform 0.2s',
-                                    cursor: 'default'
-                                  }}>
-                                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: '700', marginBottom: '6px' }}>
-                                      {formattedDateStr}
-                                    </span>
-                                    
-                                    <span style={{ fontSize: '1.2rem', fontWeight: '900', color: 'var(--text-dark)' }}>
-                                      {currentCount.toLocaleString()}
-                                    </span>
-                                    <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
-                                      Boxes
-                                    </span>
-
-                                    {index > 0 ? (
-                                      <span style={{ 
-                                        fontSize: '0.68rem', 
-                                        fontWeight: '800', 
-                                        color: isUp ? '#10b981' : isDown ? '#ef4444' : '#64748b',
-                                        backgroundColor: isUp ? '#f0fdf4' : isDown ? '#fef2f2' : '#f8fafc',
-                                        padding: '2px 8px',
-                                        borderRadius: '12px',
-                                        border: `1px solid ${isUp ? '#dcfce7' : isDown ? '#fee2e2' : '#f1f5f9'}`,
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '2px'
-                                      }}>
-                                        {isUp ? `▲ +${stepDelta}` : isDown ? `▼ ${stepDelta}` : '● 0'}
-                                      </span>
-                                    ) : (
-                                      <span style={{ 
-                                        fontSize: '0.64rem', 
-                                        color: '#6366f1', 
-                                        backgroundColor: '#eef2ff',
-                                        padding: '2px 8px',
-                                        borderRadius: '12px',
-                                        border: '1px solid #e0e7ff',
-                                        fontWeight: '800' 
-                                      }}>
-                                        Initial
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Dashed connector line */}
-                                  {index < lotHistory.length - 1 && (
-                                    <div style={{ 
-                                      width: '40px', 
-                                      borderTop: '2px dashed var(--border)', 
-                                      height: 0, 
-                                      marginLeft: '-2px', 
-                                      marginRight: '-2px',
-                                      zIndex: 1
-                                    }} />
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  // Default Donut Chart View (for multiple lots)
-                  if (chartData.length === 0) {
-                    return (
-                      <div style={{ padding: '40px', textAlign: 'center', backgroundColor: 'var(--bg-main)', borderRadius: 'var(--radius-lg)', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                        Add temperature audit logs in native app to display comparative metrics.
-                      </div>
-                    );
-                  }
-
-                  const totalBoxCount = chartData.reduce((sum, d) => sum + (d.latest_count || 0), 0);
-                  const donutColors = [
-                    '#2563eb', '#10b981', '#6366f1', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f97316'
-                  ];
-                  const radius = 75;
-                  const strokeWidth = 18;
-                  const circumference = 2 * Math.PI * radius;
-
-                  return (
-                    <div style={{ 
-                      padding: '24px', 
-                      background: 'linear-gradient(135deg, var(--surface) 0%, var(--bg-main) 100%)', 
-                      borderRadius: 'var(--radius-lg)', 
-                      border: '1px solid var(--border)',
-                      boxShadow: '0 8px 30px -4px rgba(0, 0, 0, 0.03)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '20px'
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
-                        <div style={{ width: '3px', height: '16px', backgroundColor: 'var(--primary)', borderRadius: '2px' }} />
-                        <span style={{ fontSize: '0.88rem', fontWeight: '850', color: 'var(--text-dark)', letterSpacing: '-0.01em' }}>
-                          {isAllWarehouse ? 'Warehouse Box Stock Distribution' : 'Chamber Box Stock Distribution'}
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '30px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-evenly' }}>
-                        <div style={{ position: 'relative', width: '210px', height: '210px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          <svg width="200" height="200" viewBox="0 0 200 200" style={{ transform: 'rotate(-90deg)' }}>
-                            {totalBoxCount === 0 ? (
-                              <circle cx="100" cy="100" r={radius} fill="transparent" stroke="#e2e8f0" strokeWidth={strokeWidth} />
-                            ) : (() => {
-                              let accumulated = 0;
-                              return chartData.map((d, index) => {
-                                const pct = (d.latest_count / totalBoxCount) * 100;
-                                const dashLength = (pct * circumference) / 100;
-                                const dashOffset = -accumulated;
-                                accumulated += dashLength;
-                                const color = donutColors[index % donutColors.length];
-                                return (
-                                  <circle
-                                    key={index}
-                                    cx="100"
-                                    cy="100"
-                                    r={radius}
-                                    fill="transparent"
-                                    stroke={color}
-                                    strokeWidth={strokeWidth}
-                                    strokeDasharray={`${dashLength} ${circumference}`}
-                                    strokeDashoffset={dashOffset}
-                                    style={{ transition: 'stroke-dashoffset 0.5s ease' }}
-                                  />
-                                );
-                              });
-                            })()}
-                          </svg>
-                          <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', textAlign: 'center' }}>
-                            <span style={{ fontSize: '0.72rem', fontWeight: '800', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Stock</span>
-                            <span style={{ fontSize: '1.4rem', fontWeight: '900', color: 'var(--text-dark)', marginTop: '2px', lineHeight: 1 }}>{totalBoxCount.toLocaleString()}</span>
-                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>Boxes</span>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minWidth: '260px', maxWidth: '480px' }}>
-                          {chartData.map((d, index) => {
-                            const color = donutColors[index % donutColors.length];
-                            const pct = totalBoxCount > 0 ? ((d.latest_count / totalBoxCount) * 100).toFixed(1) : '0';
-                            const isGreen = d.delta > 0;
-                            const isRed = d.delta < 0;
-                            
                             return (
-                              <div key={index} style={{ 
-                                display: 'flex', 
-                                alignItems: 'center', 
-                                justifyContent: 'space-between', 
-                                padding: '6px 10px', 
-                                borderRadius: 'var(--radius-sm)', 
-                                backgroundColor: 'var(--bg-main)', 
-                                border: '1px solid var(--border)' 
-                              }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', flex: 1 }}>
-                                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: color, flexShrink: 0 }} />
-                                  <span style={{ fontSize: '0.76rem', fontWeight: '700', color: 'var(--text-dark)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.name}>
-                                    {d.name}
-                                  </span>
-                                </div>
-                                
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                                  <span style={{ fontSize: '0.76rem', fontWeight: '850', color: 'var(--text-dark)' }}>
-                                    {d.latest_count.toLocaleString()} <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: '600' }}>({pct}%)</span>
-                                  </span>
+                              <tr key={`${row.client_name}-${row.chamber_name}-${idx}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                                <td style={{ padding: '10px 12px', fontWeight: 800, fontSize: '0.8rem', color: 'var(--text-dark)' }}>{row.client_name}</td>
+                                <td style={{ padding: '10px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{row.warehouse_name || '-'}</td>
+                                <td style={{ padding: '10px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{row.chamber_name || '-'}</td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.8rem' }}>
+                                  {row.prev_date ? prevQty.toLocaleString() : '-'}
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.88rem', fontWeight: 900, color: 'var(--primary)' }}>
+                                  {latestQty.toLocaleString()}
+                                </td>
+                                <td style={{
+                                  padding: '10px 12px',
+                                  textAlign: 'center',
+                                  fontWeight: 800,
+                                  fontSize: '0.8rem',
+                                  color: latestTemp == null ? '#64748b' : latestTemp <= -18 ? '#15803d' : '#b91c1c'
+                                }}>
+                                  {latestTemp == null ? '—' : `${latestTemp}°C`}
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                                   <span style={{
-                                    fontSize: '0.68rem',
-                                    fontWeight: '800',
-                                    color: isGreen ? '#16a34a' : isRed ? '#dc2626' : '#64748b',
-                                    width: '45px',
-                                    textAlign: 'right'
+                                    padding: '3px 8px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    backgroundColor: isMorningSlot ? '#e0f2fe' : '#fef3c7',
+                                    color: isMorningSlot ? '#0369a1' : '#b45309',
+                                    fontWeight: 800,
+                                    fontSize: '0.7rem'
                                   }}>
-                                    {isGreen ? `▲ +${d.delta}` : isRed ? `▼ ${d.delta}` : `● 0`}
+                                    {slotLabel}
                                   </span>
-                                </div>
-                              </div>
+                                </td>
+                                <td style={{
+                                  padding: '10px 12px',
+                                  textAlign: 'center',
+                                  fontWeight: 800,
+                                  fontSize: '0.8rem',
+                                  color: isUp ? '#16a34a' : isDown ? '#dc2626' : '#64748b'
+                                }}>
+                                  {flowLabel}
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                  {formatDate(row.latest_date)}
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                  <span style={{
+                                    padding: '3px 8px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    backgroundColor: isUp ? '#dcfce7' : isDown ? '#fee2e2' : '#f1f5f9',
+                                    color: isUp ? '#15803d' : isDown ? '#b91c1c' : '#475569',
+                                    fontWeight: 800,
+                                    fontSize: '0.7rem'
+                                  }}>
+                                    {isUp ? 'Inward' : isDown ? 'Outward' : 'No Change'}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeltasViewHistoryPage(1);
+                                      // Always open from latest loaded row so temp/qty are fresh
+                                      const fresh = (dailyDeltas || []).find((r) =>
+                                        r.client_name === row.client_name &&
+                                        String(r.chamber_name || '') === String(row.chamber_name || '') &&
+                                        String(r.warehouse_name || '') === String(row.warehouse_name || '')
+                                      );
+                                      setDeltasViewClient(fresh || row);
+                                    }}
+                                    style={{
+                                      border: 'none',
+                                      background: 'transparent',
+                                      color: 'var(--primary)',
+                                      fontWeight: 600,
+                                      fontSize: '0.78rem',
+                                      cursor: 'pointer',
+                                      textDecoration: 'underline',
+                                      padding: 0
+                                    }}
+                                  >
+                                    View
+                                  </button>
+                                </td>
+                              </tr>
                             );
                           })}
-                        </div>
-                      </div>
+                        </tbody>
+                      </table>
                     </div>
-                  );
-                })()}
 
-                {/* Main Grid Table */}
-                <div className="table-responsive" style={{ maxHeight: '500px', overflowY: 'auto' }}>
-                  <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                        <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Client Name</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Warehouse</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Chamber Name</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Previous Audit Date</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Previous Count</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>In / Out Flow</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Audit Date</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Trend (Last 5)</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Final Count (In Chamber)</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.74rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Trend Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {paginatedRows.length === 0 ? (
-                        <tr>
-                          <td colSpan={10} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-                            No records found matching filters.
-                          </td>
-                        </tr>
-                      ) : (
-                        paginatedRows.map((row, idx) => {
-                          const isGreen = row.delta > 0;
-                          const isRed = row.delta < 0;
-                          
-                          const formatDateDisplayLocal = (dateStr) => {
-                            if (!dateStr) return '-';
-                            const parts = dateStr.split('-');
-                            if (parts.length === 3) {
-                              return `${parts[2]}/${parts[1]}/${parts[0]}`;
-                            }
-                            return dateStr;
-                          };
-
-                          const formattedPrevDate = formatDateDisplayLocal(row.prev_date);
-                          const formattedLatestDate = formatDateDisplayLocal(row.latest_date);
-                          
-                          const absDelta = Math.abs(row.delta);
-                          const flowText = row.delta > 0 ? `+${absDelta} In` : row.delta < 0 ? `-${absDelta} Out` : `0`;
-                          const flowColor = row.delta > 0 ? '#16a34a' : row.delta < 0 ? '#dc2626' : 'var(--text-muted)';
-
-                          return (
-                            <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
-                              <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-dark)', fontWeight: '700' }}>
-                                {row.client_name}
-                              </td>
-                              <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                {row.warehouse_name}
-                              </td>
-                              <td style={{ padding: '12px 16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                {row.chamber_name}
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                {formattedPrevDate}
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '600', color: 'var(--text-dark)' }}>
-                                {row.prev_date ? row.prev_count.toLocaleString() : '-'}
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.82rem', fontWeight: '800', color: flowColor }}>
-                                {flowText}
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                {formattedLatestDate}
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center', verticalAlign: 'middle' }}>
-                                <Sparkline data={row.history} />
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-dark)' }}>
-                                {row.latest_count.toLocaleString()}
-                              </td>
-                              <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-                                <span style={{
-                                  padding: '4px 8px',
-                                  borderRadius: 'var(--radius-sm)',
-                                  backgroundColor: isGreen ? '#dcfce7' : isRed ? '#fee2e2' : '#f1f5f9',
-                                  color: isGreen ? '#15803d' : isRed ? '#b91c1c' : '#475569',
-                                  fontWeight: '800',
-                                  fontSize: '0.72rem'
-                                }}>
-                                  {isGreen ? '▲ Inward Increase' : isRed ? '▼ Outward Decrease' : '● No Change'}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Pagination Bar */}
-                {filtered.length > 0 && (
-                  <PaginationBar
-                    page={deltasCurrentPage}
-                    totalItems={filtered.length}
-                    pageSize={deltasPerPage}
-                    onPageChange={setDeltasCurrentPage}
-                    itemLabel="records"
-                  />
+                    {filteredRows.length > 0 && (
+                      <PaginationBar
+                        page={deltasCurrentPage}
+                        totalItems={filteredRows.length}
+                        pageSize={deltasPerPage}
+                        onPageChange={setDeltasCurrentPage}
+                        itemLabel="lots"
+                      />
+                    )}
+                  </>
                 )}
               </div>
+              </>
+              )}
             </div>
           );
         })()}
-
 
 
         {activeMenu === 'history_logs' && (
@@ -4879,125 +5376,57 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 <div className="profile-modal-body" style={{ padding: '0', animation: 'fadeIn 0.2s' }}>
                   {/* Left Column: Data Fields */}
                   <div className="profile-details-section">
-                    <div className="profile-group-card">
-                      <div className="profile-group-title">Metadata & Warehouse</div>
-                      <div className="profile-grid-list">
-                        <div className="profile-item">
-                          <span className="profile-label">Warehouse Facility</span>
-                          <span className="profile-value">{searchedRecord.warehouse_name || '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Recorded By Operator</span>
-                          <span className="profile-value">{renderOperatorEmail(searchedRecord.operator_email)}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Created Time</span>
-                          <span className="profile-value">{formatDateTimeStr(searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at)}</span>
-                        </div>
-                        {getUpdateDiff(
-                          searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
-                          searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
-                        ) && (
+                    {searchedRecordType !== 'daily' && (
+                      <div className="profile-group-card">
+                        <div className="profile-group-title">Metadata & Warehouse</div>
+                        <div className="profile-grid-list">
                           <div className="profile-item">
-                            <span className="profile-label">Last Updated Time</span>
-                            <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
-                              {formatDateTimeStr(searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at)}
-                            </span>
+                            <span className="profile-label">Warehouse Facility</span>
+                            <span className="profile-value">{searchedRecord.warehouse_name || '-'}</span>
                           </div>
-                        )}
-                        {(Number(searchedRecord.update_count) > 0 || searchedRecord.update_details) && (
-                          <div className="profile-item" style={{ gridColumn: 'span 2' }}>
-                            <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
-                            <span className="profile-value" style={{ fontWeight: '800', color: 'var(--text-dark)' }}>
-                              Changed {Number(searchedRecord.update_count) > 0 ? searchedRecord.update_count : 1} {Number(searchedRecord.update_count) === 1 ? 'time' : 'times'}
-                            </span>
+                          <div className="profile-item">
+                            <span className="profile-label">Recorded By Operator</span>
+                            <span className="profile-value">{renderOperatorEmail(searchedRecord.operator_email)}</span>
                           </div>
-                        )}
-                        {searchedRecord.remarks || searchedRecord.inward_remarks || searchedRecord.outward_remarks ? (
-                          <div className="profile-item" style={{ gridColumn: 'span 2' }}>
-                            <span className="profile-label">Remarks</span>
-                            <span className="profile-value profile-value-remarks">
-                              {searchedRecord.remarks || searchedRecord.inward_remarks || searchedRecord.outward_remarks}
-                            </span>
+                          <div className="profile-item">
+                            <span className="profile-label">Created Time</span>
+                            <span className="profile-value">{formatDateTimeStr(searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at)}</span>
                           </div>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {searchedRecordType === 'daily' && (
-                      <>
-                        <div className="profile-group-card">
-                          <div className="profile-group-title">General Information</div>
-                          <div className="profile-grid-list">
+                          {getUpdateDiff(
+                            searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
+                            searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
+                          ) && (
                             <div className="profile-item">
-                              <span className="profile-label">Date</span>
-                              <span className="profile-value">{formatDateStr(searchedRecord.formatted_date || searchedRecord.entry_date)}</span>
-                            </div>
-                            <div className="profile-item">
-                              <span className="profile-label">Reference No</span>
-                              <span 
-                                className="profile-value"
-                                onClick={() => {
-                                  if (searchedRecord.reference_no) {
-                                    navigator.clipboard.writeText(searchedRecord.reference_no);
-                                    setCopiedRef(searchedRecord.reference_no);
-                                    setTimeout(() => setCopiedRef(null), 1500);
-                                  }
-                                }}
-                                title="Click to copy Reference Number"
-                                style={{ 
-                                  cursor: 'pointer',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '6px',
-                                  color: copiedRef === searchedRecord.reference_no ? '#10b981' : 'var(--text-dark)',
-                                  transition: 'color 0.2s ease'
-                                }}
-                              >
-                                {searchedRecord.reference_no || '-'}
-                                {searchedRecord.reference_no && (
-                                  copiedRef === searchedRecord.reference_no ? (
-                                    <Check size={12} color="#10b981" />
-                                  ) : (
-                                    <Copy size={10} style={{ opacity: 0.5 }} />
-                                  )
-                                )}
+                              <span className="profile-label">Last Updated Time</span>
+                              <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
+                                {formatDateTimeStr(searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at)}
                               </span>
                             </div>
-                            <div className="profile-item">
-                              <span className="profile-label">Chamber Name</span>
-                              <span className="profile-value">{searchedRecord.chamber_name}</span>
+                          )}
+                          {(Number(searchedRecord.update_count) > 0 || searchedRecord.update_details) && (
+                            <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                              <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
+                              <span className="profile-value" style={{ fontWeight: '700', color: 'var(--text-dark)', marginBottom: '6px', display: 'block' }}>
+                                Changed {Number(searchedRecord.update_count) > 0 ? searchedRecord.update_count : 1} {Number(searchedRecord.update_count) === 1 ? 'time' : 'times'}
+                              </span>
+                              {searchedRecord.update_details
+                                ? renderUpdateDetailsReadable(searchedRecord.update_details)
+                                : null}
                             </div>
-                            <div className="profile-item">
-                              <span className="profile-label">Client Name</span>
-                              <span className="profile-value">{searchedRecord.client_name}</span>
+                          )}
+                          {searchedRecord.remarks || searchedRecord.inward_remarks || searchedRecord.outward_remarks ? (
+                            <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                              <span className="profile-label">Remarks</span>
+                              <span className="profile-value profile-value-remarks">
+                                {searchedRecord.remarks || searchedRecord.inward_remarks || searchedRecord.outward_remarks}
+                              </span>
                             </div>
-                          </div>
+                          ) : null}
                         </div>
-
-                        <div className="profile-group-card">
-                          <div className="profile-group-title">Temperature & Supervisor</div>
-                          <div className="profile-grid-list">
-                            <div className="profile-item">
-                              <span className="profile-label">Chamber Temp</span>
-                              <span className="profile-value">{searchedRecord.chamber_temp}°C</span>
-                            </div>
-                            <div className="profile-item">
-                              <span className="profile-label">Inspection Time</span>
-                              <span className="profile-value">{searchedRecord.inspection_time || '-'}</span>
-                            </div>
-                            <div className="profile-item">
-                              <span className="profile-label">Supervisor Name</span>
-                              <span className="profile-value">{searchedRecord.monitor_supervisor_name || '-'}</span>
-                            </div>
-                            <div className="profile-item">
-                              <span className="profile-label">Recorded Time variance</span>
-                              <span className="profile-value">{searchedRecord.time_variance_minutes !== undefined ? `${searchedRecord.time_variance_minutes} mins` : '-'}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </>
+                      </div>
                     )}
+
+                    {searchedRecordType === 'daily' && renderChamberLogFormView(searchedRecord, { enableCopyRef: true })}
 
                     {searchedRecordType === 'inward' && (
                       <>
@@ -5654,9 +6083,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     gap: '8px',
                     padding: '8px 16px',
                     borderRadius: 'var(--radius-sm)',
-                    border: '1px solid ' + (auditSubTab === 'do_changes' ? 'var(--primary)' : 'var(--border)'),
-                    backgroundColor: auditSubTab === 'do_changes' ? 'var(--primary-light)' : '#ffffff',
-                    color: auditSubTab === 'do_changes' ? 'var(--primary)' : 'var(--text-dark)',
+                    border: '1px solid ' + (auditSubTab === 'do_changes' ? 'var(--primary)' : (hasNewDOChanges ? '#ef4444' : 'var(--border)')),
+                    backgroundColor: auditSubTab === 'do_changes' ? 'var(--primary-light)' : (hasNewDOChanges ? '#fef2f2' : '#ffffff'),
+                    color: auditSubTab === 'do_changes' ? 'var(--primary)' : (hasNewDOChanges ? '#ef4444' : 'var(--text-dark)'),
                     fontSize: '0.82rem',
                     fontWeight: '700',
                     cursor: 'pointer',
@@ -5825,15 +6254,27 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           }}
                         >
                           <option value="All">All Actions</option>
-                          <option value="CREATE">CREATE</option>
-                          <option value="UPDATE">UPDATE</option>
-                          <option value="DELETE">DELETE</option>
-                          <option value="LOGIN">LOGIN</option>
-                          <option value="LOGIN_FAILED">LOGIN_FAILED</option>
-                          <option value="REQUEST_EDIT">REQUEST_EDIT</option>
-                          <option value="REQUEST_DELETE">REQUEST_DELETE</option>
-                          <option value="GRANT_PERMISSION">GRANT_PERMISSION</option>
-                          <option value="DENY_PERMISSION">DENY_PERMISSION</option>
+                          {auditSubTab === 'do_changes' ? (
+                            <>
+                              <option value="ADD_CLIENT">ADD_CLIENT</option>
+                              <option value="DELETE_CLIENT">DELETE_CLIENT</option>
+                              <option value="UPDATE_CLIENT">UPDATE_CLIENT</option>
+                              <option value="ADD_CHAMBER">ADD_CHAMBER</option>
+                              <option value="DELETE_CHAMBER">DELETE_CHAMBER</option>
+                            </>
+                          ) : (
+                            <>
+                              <option value="CREATE">CREATE</option>
+                              <option value="UPDATE">UPDATE</option>
+                              <option value="DELETE">DELETE</option>
+                              <option value="LOGIN">LOGIN</option>
+                              <option value="LOGIN_FAILED">LOGIN_FAILED</option>
+                              <option value="REQUEST_EDIT">REQUEST_EDIT</option>
+                              <option value="REQUEST_DELETE">REQUEST_DELETE</option>
+                              <option value="GRANT_PERMISSION">GRANT_PERMISSION</option>
+                              <option value="DENY_PERMISSION">DENY_PERMISSION</option>
+                            </>
+                          )}
                         </select>
                       </div>
 
@@ -5979,10 +6420,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 if (!act) return null;
                                 let actionColor = '#3b82f6';
                                 let actionBg = '#dbeafe';
-                                if (act.action === 'CREATE') {
+                                if (act.action === 'CREATE' || act.action === 'ADD_CLIENT' || act.action === 'ADD_CHAMBER') {
                                   actionColor = '#10b981';
                                   actionBg = '#d1fae5';
-                                } else if (act.action === 'DELETE') {
+                                } else if (act.action === 'DELETE' || act.action === 'DELETE_CLIENT' || act.action === 'DELETE_CHAMBER') {
                                   actionColor = '#ef4444';
                                   actionBg = '#fee2e2';
                                 }
@@ -6018,7 +6459,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                           const parts = descStr.split(match[0]);
                                           return (
                                             <span>
-                                              {parts[0]}
+                                              {highlightAddedDeletedWords(parts[0])}
                                               <span 
                                                 onClick={() => showLogDetailsByRef(refNo, act.permission_req, act.log_type)}
                                                 style={{ 
@@ -6031,11 +6472,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                               >
                                                 {refNo}
                                               </span>
-                                              {parts[1]}
+                                              {highlightAddedDeletedWords(parts[1])}
                                             </span>
                                           );
                                         }
-                                        return descStr;
+                                        return highlightAddedDeletedWords(descStr);
                                       })()}
                                     </td>
                                     <td style={{ padding: '6px 8px', color: '#64748b', fontSize: '0.72rem' }}>
@@ -6920,7 +7361,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </div>
 
                       {/* Email ID */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '280px', gridColumn: 'span 2' }}>
                         <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
                         <input 
                           type="email"
@@ -6933,12 +7374,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           required
                           style={{
                             width: '100%',
+                            minWidth: '280px',
                             padding: '10px 14px',
                             borderRadius: 'var(--radius-sm)',
                             border: '1px solid var(--border)',
                             fontSize: '0.85rem',
                             outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
+                            backgroundColor: 'var(--bg-main)',
+                            boxSizing: 'border-box'
                           }}
                         />
                       </div>
@@ -7356,7 +7799,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </div>
 
                       {/* Email ID */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '280px', gridColumn: 'span 2' }}>
                         <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
                         <input 
                           type="email"
@@ -7369,12 +7812,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           required
                           style={{
                             width: '100%',
+                            minWidth: '280px',
                             padding: '10px 14px',
                             borderRadius: 'var(--radius-sm)',
                             border: '1px solid var(--border)',
                             fontSize: '0.85rem',
                             outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
+                            backgroundColor: 'var(--bg-main)',
+                            boxSizing: 'border-box'
                           }}
                         />
                       </div>
@@ -7998,116 +8443,60 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             <div className="profile-modal-body">
               {/* Left Column: Data Fields */}
               <div className="profile-details-section">
-                <div className="profile-group-card">
-                  <div className="profile-group-title">Metadata & Warehouse</div>
-                  <div className="profile-grid-list">
-                    <div className="profile-item">
-                      <span className="profile-label">Warehouse Facility</span>
-                      <span className="profile-value">{selectedDetailLog.warehouse_name || '-'}</span>
-                    </div>
-                    <div className="profile-item">
-                      <span className="profile-label">Recorded By Operator</span>
-                      <span className="profile-value">{renderOperatorEmail(selectedDetailLog.operator_email)}</span>
-                    </div>
-                    <div className="profile-item">
-                      <span className="profile-label">Created Time</span>
-                      <span className="profile-value">{formatDateTimeStr(selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at)}</span>
-                    </div>
-                    {getUpdateDiff(
-                      selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
-                      selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
-                    ) && (
+                {detailType !== 'daily' && (
+                  <div className="profile-group-card">
+                    <div className="profile-group-title">Metadata & Warehouse</div>
+                    <div className="profile-grid-list">
                       <div className="profile-item">
-                        <span className="profile-label">Last Updated Time</span>
-                        <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
-                          {formatDateTimeStr(selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at)}
-                        </span>
+                        <span className="profile-label">Warehouse Facility</span>
+                        <span className="profile-value">{selectedDetailLog.warehouse_name || '-'}</span>
                       </div>
-                    )}
-                    {(Number(selectedDetailLog.update_count) > 0 || selectedDetailLog.update_details) && (
-                      <div className="profile-item" style={{ gridColumn: 'span 2' }}>
-                        <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
-                        <span className="profile-value" style={{ fontWeight: '800', color: 'var(--text-dark)' }}>
-                          Changed {Number(selectedDetailLog.update_count) > 0 ? selectedDetailLog.update_count : 1} {Number(selectedDetailLog.update_count) === 1 ? 'time' : 'times'}
-                        </span>
+                      <div className="profile-item">
+                        <span className="profile-label">Recorded By Operator</span>
+                        <span className="profile-value">{renderOperatorEmail(selectedDetailLog.operator_email)}</span>
                       </div>
-                    )}
-                    {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks ? (
-                      <div className="profile-item" style={{ gridColumn: 'span 2' }}>
-                        <span className="profile-label">Remarks</span>
-                        <span className="profile-value profile-value-remarks">
-                          {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks}
-                        </span>
+                      <div className="profile-item">
+                        <span className="profile-label">Created Time</span>
+                        <span className="profile-value">{formatDateTimeStr(selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at)}</span>
                       </div>
-                    ) : null}
-                  </div>
-                </div>
-
-                {detailType === 'daily' && (
-                  <>
-                    <div className="profile-group-card">
-                      <div className="profile-group-title">General Information</div>
-                      <div className="profile-grid-list">
+                      {getUpdateDiff(
+                        selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
+                        selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
+                      ) && (
                         <div className="profile-item">
-                          <span className="profile-label">Date</span>
-                          <span className="profile-value">{formatDateStr(selectedDetailLog.formatted_date || selectedDetailLog.entry_date)}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Reference No</span>
-                          <span className="profile-value">{selectedDetailLog.reference_no || '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Chamber Name</span>
-                          <span className="profile-value">{selectedDetailLog.chamber_name} ({selectedDetailLog.chamber_type || 'Frozen'})</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Client Name</span>
-                          <span className="profile-value">{selectedDetailLog.client_name}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Box Count</span>
-                          <span className="profile-value">{selectedDetailLog.box_count !== undefined && selectedDetailLog.box_count !== null ? `${selectedDetailLog.box_count} Boxes` : '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Warehouse</span>
-                          <span className="profile-value">{selectedDetailLog.warehouse_name || 'Generic'}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="profile-group-card">
-                      <div className="profile-group-title">Temperature & Supervisor</div>
-                      <div className="profile-grid-list">
-                        <div className="profile-item">
-                          <span className="profile-label">Chamber Temp</span>
-                          <span className="profile-value">{selectedDetailLog.chamber_temp}°C</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Inspection Time</span>
-                          <span className="profile-value">{selectedDetailLog.inspection_time || '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Photo Capture Time</span>
-                          <span className="profile-value">{selectedDetailLog.photo_capture_time || '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Supervisor Name</span>
-                          <span className="profile-value">{selectedDetailLog.monitor_supervisor_name || '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Time Variance</span>
-                          <span className="profile-value">{selectedDetailLog.time_variance_minutes !== undefined ? `${selectedDetailLog.time_variance_minutes} mins` : '-'}</span>
-                        </div>
-                        <div className="profile-item">
-                          <span className="profile-label">Submission Delay (Overdue)</span>
-                          <span className="profile-value" style={{ color: selectedDetailLog.overdue_time && selectedDetailLog.overdue_time !== 'same day' ? '#dc2626' : 'inherit', fontWeight: selectedDetailLog.overdue_time && selectedDetailLog.overdue_time !== 'same day' ? 'bold' : 'normal' }}>
-                            {selectedDetailLog.overdue_time || 'same day'}
+                          <span className="profile-label">Last Updated Time</span>
+                          <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
+                            {formatDateTimeStr(selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at)}
                           </span>
                         </div>
-                      </div>
+                      )}
+                      {(Number(selectedDetailLog.update_count) > 0 || selectedDetailLog.update_details) && (
+                        <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                          <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>
+                            Last Updated Details
+                          </span>
+                          <span className="profile-value" style={{ fontWeight: '700', color: 'var(--text-dark)', marginBottom: '6px', display: 'block' }}>
+                            Changed {Number(selectedDetailLog.update_count) > 0 ? selectedDetailLog.update_count : 1}{' '}
+                            {Number(selectedDetailLog.update_count) === 1 ? 'time' : 'times'}
+                          </span>
+                          {selectedDetailLog.update_details
+                            ? renderUpdateDetailsReadable(selectedDetailLog.update_details)
+                            : null}
+                        </div>
+                      )}
+                      {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks ? (
+                        <div className="profile-item" style={{ gridColumn: 'span 2' }}>
+                          <span className="profile-label">Remarks</span>
+                          <span className="profile-value profile-value-remarks">
+                            {selectedDetailLog.remarks || selectedDetailLog.inward_remarks || selectedDetailLog.outward_remarks}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
-                  </>
+                  </div>
                 )}
+
+                {detailType === 'daily' && renderChamberLogFormView(selectedDetailLog)}
 
                 {detailType === 'inward' && (
                   <>
