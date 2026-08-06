@@ -1788,7 +1788,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         await new Promise((r) => setTimeout(r, 50));
         setOpProcessStatus('Creating account & sending credentials email…');
         const created = await createOperator(payload);
-        if (created?.emailSent) {
+        if (created?.emailQueued || created?.emailSent === null) {
+          setOpSuccess('Data operator registered. Login credentials email is being sent.');
+        } else if (created?.emailSent) {
           setOpProcessStatus('Email sent successfully.');
           setOpSuccess('Data operator registered. Login credentials emailed successfully.');
         } else if (created?.emailSkipped) {

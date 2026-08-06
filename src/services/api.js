@@ -44,6 +44,27 @@ export function normalizeLogListResponse(data) {
   return { items: [], total: 0, page: 1, limit: 0, hasMore: false };
 }
 
+/** Read API error body safely (proxy/HTML/text must not crash res.json()). */
+async function readApiError(res, fallback) {
+  const text = await res.text().catch(() => '');
+  try {
+    const data = text ? JSON.parse(text) : {};
+    return data.error || data.message || fallback;
+  } catch (_) {
+    if (res.status === 401) return 'Session expired. Please log in again as Super Admin.';
+    if (res.status === 403) return 'Access denied.';
+    if (/an error occurred while trying to proxy/i.test(text)) {
+      return 'Backend not reachable on port 5000. Start backend (npm start) and try again.';
+    }
+    if (/^an error occurred/i.test(text.trim())) {
+      return 'Server timed out or failed (common on free deploy when email/DB is slow). Retry — account may already be created.';
+    }
+    if (res.status >= 500) return 'Server error. Please try again or check deploy logs.';
+    if (text && text.length < 200) return text;
+    return fallback;
+  }
+}
+
 function buildLogListQuery(params = {}) {
   const qs = new URLSearchParams();
   if (params.search) qs.set('search', params.search);
@@ -725,8 +746,7 @@ export const createOperator = async (data) => {
     body: JSON.stringify(data)
   });
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to create data operator.');
+    throw new Error(await readApiError(res, 'Failed to create data operator.'));
   }
   return await res.json();
 };
@@ -774,15 +794,7 @@ export const createSubAdmin = async (data) => {
     body: JSON.stringify(data)
   });
   if (!res.ok) {
-    let err = { error: 'Failed to create sub-admin.' };
-    try {
-      err = await res.json();
-    } catch (_) {
-      if (res.status === 401) err.error = 'Session expired. Please log in again as Super Admin.';
-      else if (res.status === 403) err.error = 'Only Super Admin can create sub-admins.';
-      else if (res.status >= 500) err.error = 'Server error. Ensure the backend is running on port 5000.';
-    }
-    throw new Error(err.error || err.message || 'Failed to create sub-admin.');
+    throw new Error(await readApiError(res, 'Failed to create sub-admin.'));
   }
   return await res.json();
 };
