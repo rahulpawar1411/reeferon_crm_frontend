@@ -302,18 +302,39 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     return rows.filter((row) => row.field);
   };
 
-  const renderFieldCompareTable = (rows, { title = 'Data Compare (Before → After)' } = {}) => {
+  const renderFieldCompareTable = (rows, { title = 'What Changed (Before → After)' } = {}) => {
     if (!rows || rows.length === 0) return null;
+    const labelMap = {
+      box_temp: 'Box Temperature',
+      chamber_temp: 'Box Temperature',
+      box_count: 'Box Count',
+      client_name: 'Client Name',
+      chamber_name: 'Chamber Name',
+      chamber_type: 'Chamber Type',
+      inspection_time: 'Inspection Time',
+      shift: 'Shift',
+      entry_date: 'Entry Date',
+      monitor_supervisor_name: 'Supervisor Name',
+      remarks: 'Remarks',
+      overdue_time: 'Submission Delay',
+      photo_capture_time: 'Photo Capture Time',
+      temp_sensor_image: 'Sensor Photo',
+      update_time: 'Update Time'
+    };
+    const nice = (field) => {
+      const k = String(field || '').trim();
+      return labelMap[k] || labelMap[k.toLowerCase()] || k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    };
     return (
       <div style={{ marginTop: 8 }}>
-        <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', marginBottom: 6 }}>
+        <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#1d4ed8', marginBottom: 8 }}>
           {title}
         </div>
         <div
           style={{
             width: '100%',
             border: '1px solid #bfdbfe',
-            borderRadius: 8,
+            borderRadius: 10,
             overflow: 'hidden',
             backgroundColor: '#f8fafc'
           }}
@@ -321,37 +342,37 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1.1fr 1fr 1fr',
-              padding: '8px 10px',
+              gridTemplateColumns: '1.15fr 1fr 1fr',
+              padding: '10px 12px',
               backgroundColor: '#dbeafe',
               borderBottom: '1px solid #bfdbfe',
-              fontSize: '0.68rem',
+              fontSize: '0.7rem',
               fontWeight: 800,
               color: '#1e3a8a',
               textTransform: 'uppercase'
             }}
           >
             <span>Field</span>
-            <span>Before (Old)</span>
-            <span>After (New)</span>
+            <span>Pehle (Before)</span>
+            <span>Baad me (After)</span>
           </div>
           {rows.map((row, idx) => (
             <div
               key={`${row.field}-${idx}`}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1.1fr 1fr 1fr',
-                gap: 8,
-                padding: '9px 10px',
+                gridTemplateColumns: '1.15fr 1fr 1fr',
+                gap: 10,
+                padding: '11px 12px',
                 borderBottom: idx === rows.length - 1 ? 'none' : '1px solid #e2e8f0',
                 backgroundColor: idx % 2 === 0 ? '#fff' : '#f8fafc'
               }}
             >
-              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>{row.field}</span>
-              <span style={{ fontSize: '0.78rem', color: '#b91c1c', textDecoration: 'line-through', wordBreak: 'break-word' }}>
+              <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0f172a' }}>{nice(row.field)}</span>
+              <span style={{ fontSize: '0.82rem', color: '#b91c1c', textDecoration: 'line-through', wordBreak: 'break-word' }}>
                 {row.from}
               </span>
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#15803d', wordBreak: 'break-word' }}>
+              <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#15803d', wordBreak: 'break-word' }}>
                 {row.to}
               </span>
             </div>
@@ -400,11 +421,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     return 'Morning';
   };
 
-  /** Single form-style chamber log view — no duplicate fields */
+  /** Chamber log detail — Quick Summary first, then full fields + update compare */
   const renderChamberLogFormView = (log, { enableCopyRef = false } = {}) => {
     if (!log) return null;
     const tempVal = log.chamber_temp ?? log.box_temp;
     const shiftLabel = resolveShiftLabel(log.shift, log.inspection_time, log.created_at);
+    const updateRows = parseUpdateDetails(log.update_details);
+    const hasUpdates = Number(log.update_count) > 0 || updateRows.length > 0;
+    const entryDate = formatDateStr(log.formatted_date || log.entry_date) || '-';
+    const boxCount =
+      log.box_count !== undefined && log.box_count !== null ? String(log.box_count) : '-';
 
     const formField = (label, value, opts = {}) => (
       <div className="profile-item" style={opts.full ? { gridColumn: 'span 2' } : undefined}>
@@ -444,63 +470,142 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     );
 
     return (
-      <div className="profile-group-card">
-        <div className="profile-group-title">Chamber Temperature Log</div>
-        <div className="profile-grid-list">
-          {formField('Entry Date', formatDateStr(log.formatted_date || log.entry_date))}
-          {formField('Reference No', refNode)}
-          {formField('Client Name', log.client_name || '-')}
-          {formField('Chamber Name', log.chamber_name || '-')}
-          {formField('Chamber Type', log.chamber_type || 'Frozen')}
-          {formField('Inspection Time', log.inspection_time || '-')}
-          {formField('Shift', shiftLabel)}
-          {formField(
-            'Box Temp (°C)',
-            tempVal != null ? `${tempVal}°C` : '-',
-            {
-              valueStyle: {
-                fontWeight: 700,
-                color: tempVal != null && Number(tempVal) <= -18 ? '#15803d' : '#b91c1c'
-              }
-            }
-          )}
-          {formField(
-            'Box Count',
-            log.box_count !== undefined && log.box_count !== null ? String(log.box_count) : '-'
-          )}
-          {formField('Supervisor Name', log.monitor_supervisor_name || '-')}
-          {formField('Warehouse', log.warehouse_name || 'Generic')}
-          {formField('Operator', renderOperatorEmail(log.operator_email))}
-          {formField(
-            'Photo Capture Time',
-            log.photo_capture_time ? formatDateTimeStr(log.photo_capture_time) : '-'
-          )}
-          {formField(
-            'Time Variance',
-            log.time_variance_minutes !== undefined && log.time_variance_minutes !== null
-              ? `${log.time_variance_minutes} mins`
-              : '-'
-          )}
-          {formField('Submission Delay', log.overdue_time || 'same day', {
-            valueStyle:
-              log.overdue_time && log.overdue_time !== 'same day'
-                ? { color: '#dc2626', fontWeight: 700 }
-                : undefined
-          })}
-          {formField('Source', Number(log.is_native) === 1 ? 'Mobile Native App' : 'Web / Monitor')}
-          {formField('Created At', formatDateTimeStr(log.created_at) || '-')}
-          {formField('Updated At', log.updated_at ? formatDateTimeStr(log.updated_at) : '-')}
-          {formField(
-            'Update Count',
-            Number(log.update_count) > 0 ? String(log.update_count) : '0'
-          )}
-          <div className="profile-item" style={{ gridColumn: 'span 2' }}>
-            <span className="profile-label">Update Details</span>
-            {renderUpdateDetailsReadable(log.update_details)}
+      <>
+        <div
+          className="profile-group-card"
+          style={{
+            background: 'linear-gradient(135deg, #f0f9ff 0%, #f8fafc 100%)',
+            border: '1px solid #bae6fd'
+          }}
+        >
+          <div className="profile-group-title" style={{ color: '#0369a1' }}>
+            Quick Summary
           </div>
-          {formField('Remarks', log.remarks || '—', { full: true })}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: 12
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Client Name</div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>{log.client_name || '-'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Chamber</div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>{log.chamber_name || '-'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Date</div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>{entryDate}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Time / Shift</div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>
+                {log.inspection_time || '-'} · {shiftLabel}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Temperature</div>
+              <div
+                style={{
+                  fontSize: '1.15rem',
+                  fontWeight: 900,
+                  marginTop: 2,
+                  color: tempVal != null && Number(tempVal) <= -18 ? '#15803d' : '#b91c1c'
+                }}
+              >
+                {tempVal != null ? `${tempVal}°C` : '-'}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Boxes</div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#0f172a', marginTop: 2 }}>{boxCount}</div>
+            </div>
+          </div>
+
+          {hasUpdates ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding: '10px 12px',
+                borderRadius: 8,
+                backgroundColor: '#fff7ed',
+                border: '1px solid #fed7aa'
+              }}
+            >
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#c2410c', marginBottom: 4 }}>
+                Updated {Number(log.update_count) > 0 ? log.update_count : updateRows.length}{' '}
+                {Number(log.update_count) === 1 ? 'time' : 'times'}
+                {log.updated_at ? ` · Last: ${formatDateTimeStr(log.updated_at)}` : ''}
+              </div>
+              {updateRows.length > 0
+                ? renderFieldCompareTable(updateRows, { title: 'Pehle kya tha → Update ke baad kya hai' })
+                : (
+                  <div style={{ fontSize: '0.78rem', color: '#9a3412' }}>
+                    Update hua, lekin field-level before/after detail save nahi hai.
+                  </div>
+                )}
+            </div>
+          ) : (
+            <div style={{ marginTop: 12, fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>
+              No updates yet — original submitted values below.
+            </div>
+          )}
         </div>
-      </div>
+
+        <div className="profile-group-card">
+          <div className="profile-group-title">Full Log Details</div>
+          <div className="profile-grid-list">
+            {formField('Entry Date', entryDate)}
+            {formField('Reference No', refNode)}
+            {formField('Client Name', log.client_name || '-')}
+            {formField('Chamber Name', log.chamber_name || '-')}
+            {formField('Chamber Type', log.chamber_type || 'Frozen')}
+            {formField('Inspection Time', log.inspection_time || '-')}
+            {formField('Shift', shiftLabel)}
+            {formField(
+              'Box Temp (°C)',
+              tempVal != null ? `${tempVal}°C` : '-',
+              {
+                valueStyle: {
+                  fontWeight: 700,
+                  color: tempVal != null && Number(tempVal) <= -18 ? '#15803d' : '#b91c1c'
+                }
+              }
+            )}
+            {formField('Box Count', boxCount)}
+            {formField('Supervisor Name', log.monitor_supervisor_name || '-')}
+            {formField('Warehouse', log.warehouse_name || 'Generic')}
+            {formField('Operator', renderOperatorEmail(log.operator_email))}
+            {formField(
+              'Photo Capture Time',
+              log.photo_capture_time ? formatDateTimeStr(log.photo_capture_time) : '-'
+            )}
+            {formField(
+              'Time Variance',
+              log.time_variance_minutes !== undefined && log.time_variance_minutes !== null
+                ? `${log.time_variance_minutes} mins`
+                : '-'
+            )}
+            {formField('Submission Delay', log.overdue_time || 'same day', {
+              valueStyle:
+                log.overdue_time && log.overdue_time !== 'same day'
+                  ? { color: '#dc2626', fontWeight: 700 }
+                  : undefined
+            })}
+            {formField('Source', Number(log.is_native) === 1 ? 'Mobile Native App' : 'Web / Monitor')}
+            {formField('Created At', formatDateTimeStr(log.created_at) || '-')}
+            {formField('Updated At', log.updated_at ? formatDateTimeStr(log.updated_at) : '-')}
+            {formField(
+              'Update Count',
+              Number(log.update_count) > 0 ? String(log.update_count) : '0'
+            )}
+            {formField('Remarks', log.remarks || '—', { full: true })}
+          </div>
+        </div>
+      </>
     );
   };
 
@@ -795,10 +900,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const handleApproveDenyPermission = async (id, status) => {
     setLogsError('');
     try {
-      const label = status === 'Approved' ? 'allow' : 'deny';
-      const remark =
-        window.prompt(`Optional remark for ${label} decision (saved in DB):`, '') || '';
-      const res = await updatePermissionRequest(id, status, remark.trim());
+      const res = await updatePermissionRequest(id, status);
       loadPermissionRequests();
       loadActivities();
       // Chamber Add approve bumps chamber_limit — refresh Operators Directory
@@ -7412,6 +7514,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       const filteredPendingRequests = pendingRequests.filter(pr => {
                         // Client master = notify only; Master Setup = no allow gate
                         if (pr.record_type === 'ClientMaster' || pr.record_type === 'MasterSetup') {
+                          return false;
+                        }
+                        // Ignore duplicate notify rows (DO_CHANGE) — real requests use Chamber / ChamberMaster / etc.
+                        if (pr.record_type === 'DO_CHANGE' || pr.record_type === 'activity') {
                           return false;
                         }
                         if (selectedWarehouseFilter === 'All') return true;
