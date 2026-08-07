@@ -739,6 +739,31 @@ export const fetchOperators = async () => {
   return await res.json();
 };
 
+/** Chamber master list (id, name, total_clients) */
+export const fetchChambers = async () => {
+  const res = await fetch(`${API_BASE_URL}/chambers`, { credentials: 'include' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || err.error || 'Failed to fetch chambers.');
+  }
+  const body = await res.json();
+  return Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : []);
+};
+
+/** Update chamber name and/or total_clients */
+export const updateChamber = async (id, data) => {
+  const res = await fetch(`${API_BASE_URL}/chambers/${id}`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to update chamber.'));
+  }
+  return await res.json();
+};
+
 export const createOperator = async (data) => {
   const res = await fetch(`${API_BASE_URL}/do-operators`, {
     method: 'POST',
@@ -911,15 +936,29 @@ export const fetchPermissionRequests = async (cacheBustQuery = '') => {
   return await res.json();
 };
 
-export const updatePermissionRequest = async (id, status) => {
+export const updatePermissionRequest = async (id, status, remark = '') => {
   const res = await fetch(`${API_BASE_URL}/permission-requests/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status })
+    body: JSON.stringify({ status, remark: remark || undefined })
   });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to update permission request.');
+  }
+  return await res.json();
+};
+
+/** Super Allow / request / update trail for a History or Profile log record */
+export const fetchRecordPermissionHistory = async (recordType, recordId) => {
+  const qs = new URLSearchParams({
+    record_type: String(recordType || ''),
+    record_id: String(recordId || '')
+  });
+  const res = await fetch(`${API_BASE_URL}/permission-requests/record-history?${qs.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to fetch Super Allow history.');
   }
   return await res.json();
 };

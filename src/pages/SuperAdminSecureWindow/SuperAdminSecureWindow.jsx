@@ -17,6 +17,7 @@ import {
   fetchOperators, createOperator, updateOperator, deleteOperator, fetchOperatorActivities,
   fetchAllOperatorActivities,
   fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
+  fetchRecordPermissionHistory,
   fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats,
   fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs,
   deleteChamberLog, deleteInwardLog, deleteOutwardLog,
@@ -209,6 +210,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [appliedToDate, setAppliedToDate] = useState('');
   const [selectedDetailLog, setSelectedDetailLog] = useState(null);
   const [detailType, setDetailType] = useState('');
+  const [recordAllowHistory, setRecordAllowHistory] = useState([]);
+  const [loadingAllowHistory, setLoadingAllowHistory] = useState(false);
   const [lightboxImg, setLightboxImg] = useState(null);
   /** Super Admin direct edit (no permission): { type: 'daily'|'inward'|'outward', data } */
   const [saEditLog, setSaEditLog] = useState(null);
@@ -264,30 +267,98 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
   /**
    * Parses "Field: old ➔ new, Field2: old2 ➔ new2" into readable rows.
+   * Also supports →, -> and pipe-separated multi-update history.
    */
   const parseUpdateDetails = (raw) => {
     if (!raw || !String(raw).trim()) return [];
     const text = String(raw).trim();
-    const parts = text.split(/\s*,\s*(?=[^,:]+:\s)/);
-    return parts.map((part) => {
-      const arrowMatch = part.match(/^(.*?):\s*(.*?)\s*➔\s*(.*)$/);
-      if (arrowMatch) {
-        return {
-          field: arrowMatch[1].trim(),
-          from: shortenUpdateValue(arrowMatch[2]),
-          to: shortenUpdateValue(arrowMatch[3])
-        };
-      }
-      const colonIdx = part.indexOf(':');
-      if (colonIdx === -1) {
-        return { field: 'Change', from: '—', to: shortenUpdateValue(part) };
-      }
-      return {
-        field: part.slice(0, colonIdx).trim(),
-        from: '—',
-        to: shortenUpdateValue(part.slice(colonIdx + 1))
-      };
-    }).filter((row) => row.field);
+    // Split multi-edit history segments first
+    const segments = text.split(/\s*\|\s*/);
+    const rows = [];
+    segments.forEach((segment) => {
+      const parts = String(segment).split(/\s*,\s*(?=[^,:]+:\s)/);
+      parts.forEach((part) => {
+        const arrowMatch = part.match(/^(.*?):\s*(.*?)\s*(?:➔|→|->)\s*(.*)$/);
+        if (arrowMatch) {
+          rows.push({
+            field: arrowMatch[1].trim(),
+            from: shortenUpdateValue(arrowMatch[2]),
+            to: shortenUpdateValue(arrowMatch[3])
+          });
+          return;
+        }
+        const colonIdx = part.indexOf(':');
+        if (colonIdx === -1) {
+          if (part.trim()) rows.push({ field: 'Change', from: '—', to: shortenUpdateValue(part) });
+          return;
+        }
+        rows.push({
+          field: part.slice(0, colonIdx).trim(),
+          from: '—',
+          to: shortenUpdateValue(part.slice(colonIdx + 1))
+        });
+      });
+    });
+    return rows.filter((row) => row.field);
+  };
+
+  const renderFieldCompareTable = (rows, { title = 'Data Compare (Before → After)' } = {}) => {
+    if (!rows || rows.length === 0) return null;
+    return (
+      <div style={{ marginTop: 8 }}>
+        <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', marginBottom: 6 }}>
+          {title}
+        </div>
+        <div
+          style={{
+            width: '100%',
+            border: '1px solid #bfdbfe',
+            borderRadius: 8,
+            overflow: 'hidden',
+            backgroundColor: '#f8fafc'
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1.1fr 1fr 1fr',
+              padding: '8px 10px',
+              backgroundColor: '#dbeafe',
+              borderBottom: '1px solid #bfdbfe',
+              fontSize: '0.68rem',
+              fontWeight: 800,
+              color: '#1e3a8a',
+              textTransform: 'uppercase'
+            }}
+          >
+            <span>Field</span>
+            <span>Before (Old)</span>
+            <span>After (New)</span>
+          </div>
+          {rows.map((row, idx) => (
+            <div
+              key={`${row.field}-${idx}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1.1fr 1fr 1fr',
+                gap: 8,
+                padding: '9px 10px',
+                borderBottom: idx === rows.length - 1 ? 'none' : '1px solid #e2e8f0',
+                backgroundColor: idx % 2 === 0 ? '#fff' : '#f8fafc'
+              }}
+            >
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>{row.field}</span>
+              <span style={{ fontSize: '0.78rem', color: '#b91c1c', textDecoration: 'line-through', wordBreak: 'break-word' }}>
+                {row.from}
+              </span>
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#15803d', wordBreak: 'break-word' }}>
+                {row.to}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const renderUpdateDetailsReadable = (raw) => {
@@ -299,63 +370,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         </span>
       );
     }
-
-    return (
-      <div
-        style={{
-          width: '100%',
-          marginTop: '4px',
-          border: '1px solid var(--border)',
-          borderRadius: '8px',
-          overflow: 'hidden',
-          backgroundColor: 'var(--bg-main, #f8fafc)'
-        }}
-      >
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1.1fr 1fr 1fr',
-            gap: '0',
-            padding: '8px 10px',
-            backgroundColor: 'var(--surface)',
-            borderBottom: '1px solid var(--border)',
-            fontSize: '0.68rem',
-            fontWeight: 800,
-            color: 'var(--text-muted)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em'
-          }}
-        >
-          <span>Field</span>
-          <span>Before</span>
-          <span>After</span>
-        </div>
-        {rows.map((row, idx) => (
-          <div
-            key={`${row.field}-${idx}`}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1.1fr 1fr 1fr',
-              gap: '8px',
-              padding: '9px 10px',
-              borderBottom: idx === rows.length - 1 ? 'none' : '1px solid var(--border)',
-              alignItems: 'start',
-              backgroundColor: idx % 2 === 0 ? 'transparent' : 'rgba(148,163,184,0.08)'
-            }}
-          >
-            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-dark)' }}>
-              {row.field}
-            </span>
-            <span style={{ fontSize: '0.78rem', color: '#64748b', wordBreak: 'break-word' }}>
-              {row.from}
-            </span>
-            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a', wordBreak: 'break-word' }}>
-              {row.to}
-            </span>
-          </div>
-        ))}
-      </div>
-    );
+    return renderFieldCompareTable(rows, { title: 'Update Details — Before → After' });
   };
 
   const resolveShiftLabel = (shift, inspectionTime, createdAt) => {
@@ -780,9 +795,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const handleApproveDenyPermission = async (id, status) => {
     setLogsError('');
     try {
-      const res = await updatePermissionRequest(id, status);
+      const label = status === 'Approved' ? 'allow' : 'deny';
+      const remark =
+        window.prompt(`Optional remark for ${label} decision (saved in DB):`, '') || '';
+      const res = await updatePermissionRequest(id, status, remark.trim());
       loadPermissionRequests();
       loadActivities();
+      // Chamber Add approve bumps chamber_limit — refresh Operators Directory
+      if (status === 'Approved') {
+        loadOperatorsData();
+      }
+      if (res?.chamber_add?.ok) {
+        setOpSuccess(
+          `Chamber "${res.chamber_add.name}" added. Operator limit → ${res.chamber_add.chamber_limit}.`
+        );
+      }
     } catch (err) {
       console.error('Failed to update permission request:', err);
       setLogsError(err.message || 'Failed to update permission request.');
@@ -790,8 +817,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
   const [systemConfig, setSystemConfig] = useState({
-    Chamber_Edit: 'Require Approval',
+      Chamber_Edit: 'Require Approval',
     Chamber_Delete: 'Require Approval',
+    ChamberMaster_Edit: 'Require Approval',
+    ChamberMaster_Delete: 'Require Approval',
+    ClientMaster_Edit: 'Allow',
+    ClientMaster_Delete: 'Allow',
     Inward_Edit: 'Require Approval',
     Inward_Delete: 'Require Approval',
     Outward_Edit: 'Require Approval',
@@ -829,27 +860,71 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
-  const parseRequestDescription = (descText) => {
+  const parseRequestDescription = (descText, recordType = '') => {
     const info = {
       module: '-',
       client: '-',
       refNo: '',
       extra: '-'
     };
-    if (!descText) return info;
+    if (!descText && !recordType) return info;
     
-    const parts = descText.split(' | ');
+    const parts = (descText || '').split(' | ');
     
-    if (descText.includes('Chamber')) {
+    if (recordType === 'MasterSetup' || (descText || '').includes('Master Setup') || (descText || '').includes('chambers & clients')) {
+      info.module = 'Master Setup';
+      info.client = 'Chambers & Clients';
+      info.refNo = 'OPEN';
+      info.extra = descText || 'Master Setup opens without Super Admin allow.';
+      return info;
+    } else if (
+      recordType === 'ChamberMaster' ||
+      (descText || '').includes('delete chamber') ||
+      (descText || '').includes('ADD chamber')
+    ) {
+      if (/ADD chamber/i.test(descText || '')) info.module = 'Chamber Add';
+      else info.module = 'Chamber Delete';
+      const nameMatch =
+        (descText || '').match(/ADD chamber "([^"]+)"/i) ||
+        (descText || '').match(/delete chamber "([^"]+)"/i);
+      info.client = nameMatch ? nameMatch[1] : 'Chamber';
+      info.refNo = info.module === 'Chamber Add' ? 'ADD' : 'DELETE';
+      info.extra = descText || 'DO requested Super Admin allow for chamber master.';
+      return info;
+    } else if (
+      recordType === 'ClientMaster' ||
+      (descText || '').includes('client master') ||
+      (descText || '').includes('EDIT client') ||
+      (descText || '').includes('DELETE client') ||
+      (descText || '').includes('edited client')
+    ) {
+      const isDelete = /DELETE client/i.test(descText || '');
+      info.module = isDelete ? 'Client Notify' : 'Client Notify';
+      const clientMatch =
+        (descText || '').match(/EDIT client "([^"]+)"/i) ||
+        (descText || '').match(/DELETE client "([^"]+)"/i) ||
+        (descText || '').match(/client master "([^"]+)"/i) ||
+        (descText || '').match(/client "([^"]+)"/i);
+      const chamberMatch = (descText || '').match(/on chamber "([^"]+)"/i);
+      const renameTo = (descText || '').match(/EDIT client "[^"]+"\s*(?:→|->)\s*"([^"]+)"/i);
+      info.client = renameTo
+        ? `${clientMatch ? clientMatch[1] : 'Client'} → ${renameTo[1]}`
+        : (clientMatch ? clientMatch[1] : 'Client');
+      info.refNo = 'NOTIFY';
+      info.extra = chamberMatch
+        ? `${chamberMatch[1]} · Notify only (no allow)`
+        : (descText || 'Client master change notified to Super Admin (no allow).');
+      return info;
+    } else if ((descText || '').includes('Chamber')) {
       info.module = 'Chamber Temp';
-    } else if (descText.includes('Inward')) {
+    } else if ((descText || '').includes('Inward')) {
       info.module = 'Inward DO Log';
-    } else if (descText.includes('Outward')) {
+    } else if ((descText || '').includes('Outward')) {
       info.module = 'Outward DO Log';
     }
     
     // Match Ref: RF-XX-26-XXXX or ID: XX
-    const refMatch = descText.match(/\((?:Ref|ID):\s*([^\)]+)\)/i);
+    const refMatch = (descText || '').match(/\((?:Ref|ID):\s*([^\)]+)\)/i);
     if (refMatch) {
       info.refNo = refMatch[1].trim();
     }
@@ -865,6 +940,215 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
     
     return info;
+  };
+
+  const loadRecordAllowHistory = async (type, log) => {
+    if (!log) {
+      setRecordAllowHistory([]);
+      return;
+    }
+    const recordType =
+      type === 'daily' || type === 'Chamber' ? 'Chamber' :
+      type === 'inward' || type === 'Inward' ? 'Inward' :
+      type === 'outward' || type === 'Outward' ? 'Outward' :
+      type || 'Chamber';
+    const recordId =
+      recordType === 'Inward'
+        ? (log.inward_id || log.id)
+        : recordType === 'Outward'
+          ? (log.outward_id || log.id)
+          : (log.id || log.chamber_id);
+    if (!recordId) {
+      setRecordAllowHistory([]);
+      return;
+    }
+    setLoadingAllowHistory(true);
+    try {
+      const data = await fetchRecordPermissionHistory(recordType, recordId);
+      setRecordAllowHistory(Array.isArray(data?.items) ? data.items : []);
+    } catch (_) {
+      setRecordAllowHistory([]);
+    } finally {
+      setLoadingAllowHistory(false);
+    }
+  };
+
+  const formatAllowDate = (value) => {
+    if (!value) return '—';
+    try {
+      return new Date(value).toLocaleString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch (_) {
+      return String(value);
+    }
+  };
+
+  /** Structured Super Allow / update trail for History Log + Profile Lookup */
+  const renderSuperAllowSection = (logForCompare = null) => {
+    const latestCompareRows = parseUpdateDetails(logForCompare?.update_details);
+    const hasTrail = recordAllowHistory.length > 0;
+    const hasCompare = latestCompareRows.length > 0;
+
+    return (
+    <div
+      className="profile-group-card"
+      style={{
+        marginTop: 12,
+        border: '1px solid #bfdbfe',
+        background: 'linear-gradient(180deg, #eff6ff 0%, #ffffff 48%)'
+      }}
+    >
+      <div className="profile-group-title" style={{ color: '#1d4ed8', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <ShieldCheck size={16} color="#1d4ed8" />
+        Super Allow / Update Compare
+      </div>
+      <p style={{ margin: '0 0 12px 0', fontSize: '0.74rem', color: '#64748b' }}>
+        After Super Admin allow — compare old vs new values, remarks, and decision date
+      </p>
+
+      {hasCompare ? (
+        <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, border: '1px solid #86efac', background: '#f0fdf4' }}>
+          <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#15803d', marginBottom: 4 }}>
+            Latest field changes after allow / update
+            {Number(logForCompare?.update_count) > 0 ? ` · Edit #${logForCompare.update_count}` : ''}
+          </div>
+          {renderFieldCompareTable(latestCompareRows, { title: 'Compare: Before → After' })}
+          {logForCompare?.updated_at || logForCompare?.inward_updated_at || logForCompare?.outward_updated_at ? (
+            <div style={{ marginTop: 8, fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
+              Last updated: {formatAllowDate(
+                logForCompare.updated_at || logForCompare.inward_updated_at || logForCompare.outward_updated_at
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {loadingAllowHistory ? (
+        <div style={{ padding: '12px 0', color: '#64748b', fontSize: '0.8rem' }}>Loading allow history…</div>
+      ) : !hasTrail ? (
+        <div style={{ padding: '10px 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b', fontSize: '0.8rem' }}>
+          {hasCompare
+            ? 'Field compare is available above. No separate Super Allow request trail for this record yet.'
+            : 'No Super Admin allow / update trail stored for this record yet.'}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {recordAllowHistory.map((ev) => {
+            const decision = String(ev.decision || '');
+            const badgeBg =
+              decision === 'Approved' ? '#dcfce7' :
+              decision === 'Denied' ? '#fee2e2' :
+              decision === 'Pending' ? '#fef9c3' :
+              decision === 'Used' || decision === 'UPDATE' ? '#e0e7ff' :
+              '#e2e8f0';
+            const badgeFg =
+              decision === 'Approved' ? '#15803d' :
+              decision === 'Denied' ? '#b91c1c' :
+              decision === 'Pending' ? '#a16207' :
+              decision === 'Used' || decision === 'UPDATE' ? '#3730a3' :
+              '#475569';
+            const changeRows = Array.isArray(ev.change_rows) && ev.change_rows.length
+              ? ev.change_rows
+              : parseUpdateDetails(ev.changes || '');
+            return (
+              <div
+                key={ev.id}
+                style={{
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  background: '#fff'
+                }}
+              >
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    background: badgeBg,
+                    color: badgeFg
+                  }}>
+                    {ev.event_label || ev.action}
+                  </span>
+                  <span style={{
+                    display: 'inline-block',
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: '0.66rem',
+                    fontWeight: 700,
+                    background: '#f1f5f9',
+                    color: '#475569'
+                  }}>
+                    {ev.request_type || '—'}
+                  </span>
+                  <span style={{ marginLeft: 'auto', fontSize: '0.72rem', fontWeight: 700, color: '#0f172a' }}>
+                    {formatAllowDate(ev.date)}
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, fontSize: '0.78rem' }}>
+                  <div>
+                    <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Decision</div>
+                    <div style={{ fontWeight: 700, color: '#0f172a' }}>{ev.decision || ev.action || '—'}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Operator</div>
+                    <div style={{ fontWeight: 600, color: '#334155' }}>{renderOperatorEmail(ev.operator_email)}</div>
+                  </div>
+                  {ev.decided_by ? (
+                    <div>
+                      <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Decided By</div>
+                      <div style={{ fontWeight: 600, color: '#334155' }}>{ev.decided_by}</div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {changeRows.length > 0
+                  ? renderFieldCompareTable(changeRows, { title: 'Changed fields after allow' })
+                  : (ev.changes ? (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>What updated</div>
+                      <div style={{ fontSize: '0.78rem', color: '#0f172a', fontWeight: 600 }}>{ev.changes}</div>
+                    </div>
+                  ) : null)}
+
+                {(ev.remark || ev.sa_remark) ? (
+                  <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                    {ev.remark ? (
+                      <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 10px' }}>
+                        <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#047857', textTransform: 'uppercase' }}>Remark</div>
+                        <div style={{ fontSize: '0.8rem', color: '#065f46', fontWeight: 600 }}>{ev.remark}</div>
+                      </div>
+                    ) : null}
+                    {ev.sa_remark ? (
+                      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>
+                        <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase' }}>SA Remark</div>
+                        <div style={{ fontSize: '0.8rem', color: '#1e3a8a', fontWeight: 600 }}>{ev.sa_remark}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {ev.description && !changeRows.length ? (
+                  <div style={{ marginTop: 8, fontSize: '0.72rem', color: '#64748b', lineHeight: 1.45 }}>
+                    {ev.description}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+    );
   };
 
   const showLogDetailsByRef = async (refNo, fallbackId, moduleType) => {
@@ -934,7 +1218,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     if (foundLog) {
       setSelectedDetailLog(foundLog);
       setDetailType(type);
+      loadRecordAllowHistory(type, foundLog);
     } else {
+      setRecordAllowHistory([]);
       alert(`Record details not loaded in system view yet. Reference: ${refNo || ('ID #' + fallbackId)}. Please view it inside History Logs tab or Profile Lookup.`);
     }
   };
@@ -1105,6 +1391,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     } else if (activeMenu === 'customer_reports') {
       loadCustomerReportsData();
     } else if (activeMenu === 'data_operators') {
+      loadAccessScopeOptions();
       loadOperatorsData();
     } else if (activeMenu === 'user_management') {
       loadSubAdminsData();
@@ -1240,8 +1527,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       if (results.length === 1) {
         setSearchedRecord(results[0].original);
         setSearchedRecordType(results[0].type);
+        loadRecordAllowHistory(results[0].type, results[0].original);
       } else {
         setSearchedRecord(null);
+        setRecordAllowHistory([]);
       }
     } catch (err) {
       console.error('Lookup failed:', err);
@@ -1335,8 +1624,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         'Full Name',
         'Phone No.',
         'Email Address',
-        'Warehouse',
-        'Data Access Scope',
+        'Warehouse / Data Access',
+        'Chambers Assigned',
         'Registration Date'
       ];
       csvContent += headers.map((h) => `"${h.replace(/"/g, '""')}"`).join(',') + '\n';
@@ -1345,7 +1634,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         const warehouse = op.warehouse_name || 'Not Configured';
         const accessScope = op.warehouse_name
           ? `Access: ${op.warehouse_name} Logs Only`
-          : 'Access: All Warehouses';
+          : 'Access: Not Configured';
+        const chambers = `1 to ${op.chamber_limit || 4}`;
         const registered = op.created_at
           ? new Date(op.created_at).toLocaleDateString('en-GB')
           : '-';
@@ -1354,8 +1644,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           op.full_name || '-',
           op.phone_no || '-',
           op.email || '-',
-          warehouse,
-          accessScope,
+          `${warehouse} | ${accessScope}`,
+          chambers,
           registered
         ];
         csvContent += row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(',') + '\n';
@@ -1758,7 +2048,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpSuccess('');
 
     if (!opEmail || !opFullName || !opPhoneNo || !opWarehouseName) {
-      setOpError('All fields (Full Name, Phone No., Email ID, Warehouse Name) are required.');
+      setOpError('All fields (Full Name, Phone No., Email ID, Warehouse / Data Access) are required.');
       return;
     }
 
@@ -1774,14 +2064,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         password: opPassword,
         full_name: opFullName,
         phone_no: opPhoneNo,
-        warehouse_name: opWarehouseName,
+        warehouse_name: String(opWarehouseName || '').trim(),
         chamber_limit: opChamberLimit
       };
 
       if (editingOp) {
-        setOpProcessStatus('Updating operator profile…');
-        await updateOperator(editingOp.id, payload);
-        setOpSuccess('Operator profile updated successfully.');
+        setOpProcessStatus('Updating operator profile & Warehouse / Data Access…');
+        const updated = await updateOperator(editingOp.id, payload);
+        const synced = Number(updated?.past_logs_synced || 0);
+        setOpSuccess(
+          synced > 0
+            ? `Operator updated. Warehouse / Data Access applied to profile and ${synced} past log(s).`
+            : 'Operator profile & Warehouse / Data Access updated successfully.'
+        );
       } else {
         setOpProcessStatus('Creating operator account…');
         // Yield so overlay paints before the network/email wait
@@ -1790,7 +2085,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         const created = await createOperator(payload);
         if (created?.emailSent) {
           setOpProcessStatus('Email sent successfully.');
-          setOpSuccess('Data operator registered. Login credentials emailed successfully.');
+          setOpSuccess('Data operator registered with Warehouse / Data Access. Login credentials emailed successfully.');
         } else if (created?.emailSkipped) {
           setOpSuccess(
             created?.emailError
@@ -1805,6 +2100,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
       cancelEditOperator();
       loadOperatorsData();
+      loadAccessScopeOptions();
     } catch (err) {
       setOpError(err.message || 'Action failed.');
     } finally {
@@ -2186,6 +2482,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         onClick={() => {
           setSelectedDetailLog(log);
           setDetailType(type);
+          loadRecordAllowHistory(type, log);
         }}
         title="View Data Profile & Photos"
         style={{
@@ -2247,7 +2544,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     </div>
   );
 
-  const hasPendingRequests = permissionRequests.some(pr => pr.status === 'Pending');
+  const hasPendingRequests = permissionRequests.some(
+    (pr) =>
+      pr.status === 'Pending' &&
+      pr.record_type !== 'ClientMaster' &&
+      pr.record_type !== 'MasterSetup'
+  );
 
   const clearSaEditLog = async () => {
     setSaEditLog(null);
@@ -5337,6 +5639,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   <button 
                     onClick={() => {
                       setSearchedRecord(null);
+                      setRecordAllowHistory([]);
                     }}
                     style={{
                       padding: '8px 16px',
@@ -5427,6 +5730,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     )}
 
                     {searchedRecordType === 'daily' && renderChamberLogFormView(searchedRecord, { enableCopyRef: true })}
+
+                    {renderSuperAllowSection(searchedRecord)}
 
                     {searchedRecordType === 'inward' && (
                       <>
@@ -5942,6 +6247,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           onClick={() => {
                             setSearchedRecord(res.original);
                             setSearchedRecordType(res.type);
+                            loadRecordAllowHistory(res.type, res.original);
                           }}
                           style={{
                             padding: '16px 20px',
@@ -6261,6 +6567,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               <option value="UPDATE_CLIENT">UPDATE_CLIENT</option>
                               <option value="ADD_CHAMBER">ADD_CHAMBER</option>
                               <option value="DELETE_CHAMBER">DELETE_CHAMBER</option>
+                              <option value="REQUEST_EDIT">REQUEST_EDIT</option>
+                              <option value="REQUEST_DELETE">REQUEST_DELETE</option>
+                              <option value="GRANT_PERMISSION">GRANT (Allow Edit)</option>
+                              <option value="GRANT_DELETE">GRANT (Allow Delete)</option>
+                              <option value="DENY_PERMISSION">DENY Edit</option>
+                              <option value="DENY_DELETE">DENY Delete</option>
                             </>
                           ) : (
                             <>
@@ -6412,6 +6724,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Action</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Module/Log</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Activity Description</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Remark</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Timestamp</th>
                               </tr>
                             </thead>
@@ -6420,12 +6733,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 if (!act) return null;
                                 let actionColor = '#3b82f6';
                                 let actionBg = '#dbeafe';
-                                if (act.action === 'CREATE' || act.action === 'ADD_CLIENT' || act.action === 'ADD_CHAMBER') {
+                                if (act.action === 'CREATE' || act.action === 'ADD_CLIENT' || act.action === 'ADD_CHAMBER' || act.action === 'GRANT_PERMISSION' || act.action === 'GRANT_DELETE') {
                                   actionColor = '#10b981';
                                   actionBg = '#d1fae5';
-                                } else if (act.action === 'DELETE' || act.action === 'DELETE_CLIENT' || act.action === 'DELETE_CHAMBER') {
+                                } else if (act.action === 'DELETE' || act.action === 'DELETE_CLIENT' || act.action === 'DELETE_CHAMBER' || act.action === 'DENY_PERMISSION' || act.action === 'DENY_DELETE') {
                                   actionColor = '#ef4444';
                                   actionBg = '#fee2e2';
+                                } else if (act.action === 'REQUEST_EDIT' || act.action === 'REQUEST_DELETE') {
+                                  actionColor = '#a16207';
+                                  actionBg = '#fef9c3';
                                 }
 
                                 return (
@@ -6478,6 +6794,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                         }
                                         return highlightAddedDeletedWords(descStr);
                                       })()}
+                                    </td>
+                                    <td style={{ padding: '6px 8px', color: '#0f766e', fontWeight: 600, fontSize: '0.72rem', maxWidth: 180 }}>
+                                      {act.remark || '—'}
                                     </td>
                                     <td style={{ padding: '6px 8px', color: '#64748b', fontSize: '0.72rem' }}>
                                       {new Date(act.created_at).toLocaleString('en-GB', {
@@ -7091,6 +7410,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     {(() => {
                       const pendingRequests = permissionRequests.filter(pr => pr.status === 'Pending');
                       const filteredPendingRequests = pendingRequests.filter(pr => {
+                        // Client master = notify only; Master Setup = no allow gate
+                        if (pr.record_type === 'ClientMaster' || pr.record_type === 'MasterSetup') {
+                          return false;
+                        }
                         if (selectedWarehouseFilter === 'All') return true;
                         const operatorEmail = pr.operator_email ? pr.operator_email.toLowerCase() : '';
                         const wh = operatorWarehouseMap[operatorEmail];
@@ -7129,7 +7452,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 <tbody>
                                   {filteredPendingRequests.map((pr) => {
                                     if (!pr) return null;
-                                    const parsed = parseRequestDescription(pr.description);
+                                    const parsed = parseRequestDescription(pr.description || pr.request_description, pr.record_type);
+                                    const isMasterSetup = pr.record_type === 'MasterSetup';
+                                    const isChamberMaster = pr.record_type === 'ChamberMaster';
+                                    const isClientMaster = pr.record_type === 'ClientMaster';
+                                    const isAllowStyle = isMasterSetup || isChamberMaster || isClientMaster;
+                                    const badgeBg = isClientMaster
+                                      ? (pr.raw_action === 'REQUEST_DELETE' ? '#fef2f2' : '#eff6ff')
+                                      : isChamberMaster
+                                        ? (parsed.refNo === 'ADD' ? '#eff6ff' : '#fef2f2')
+                                        : (isMasterSetup ? '#f0fdf4' : '#f1f5f9');
+                                    const badgeFg = isClientMaster
+                                      ? (pr.raw_action === 'REQUEST_DELETE' ? '#b91c1c' : '#1d4ed8')
+                                      : isChamberMaster
+                                        ? (parsed.refNo === 'ADD' ? '#1d4ed8' : '#b91c1c')
+                                        : (isMasterSetup ? '#15803d' : '#475569');
                                     
                                     return (
                                       <tr key={pr.id} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -7138,31 +7475,55 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                           {operatorWarehouseMap[pr.operator_email ? pr.operator_email.toLowerCase() : ''] || 'System / Admin'}
                                         </td>
                                         <td style={{ padding: '6px 8px' }}>
-                                          <span className="status-badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', fontWeight: 700 }}>
+                                          <span className="status-badge" style={{ backgroundColor: badgeBg, color: badgeFg, fontWeight: 700 }}>
                                             {parsed.module}
                                           </span>
                                         </td>
                                         <td 
-                                          style={{ padding: '6px 8px', color: 'var(--primary)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}
-                                          onClick={() => showLogDetailsByRef(parsed.refNo, pr.record_id, parsed.module)}
-                                          title="Click to view data profile"
+                                          style={{ padding: '6px 8px', color: isAllowStyle ? badgeFg : 'var(--primary)', fontWeight: 700, cursor: isAllowStyle ? 'default' : 'pointer', textDecoration: isAllowStyle ? 'none' : 'underline' }}
+                                          onClick={() => {
+                                            if (isAllowStyle) return;
+                                            showLogDetailsByRef(parsed.refNo, pr.record_id, parsed.module);
+                                          }}
+                                          title={isClientMaster ? 'Client master notify only' : (isChamberMaster ? (parsed.refNo === 'ADD' ? 'Chamber add allow request' : 'Chamber delete allow request') : (isMasterSetup ? 'Master Setup opens without allow' : 'Click to view data profile'))}
                                         >
-                                          {parsed.refNo || `#${pr.record_id}`}
+                                          {isMasterSetup ? 'OPEN' : (isChamberMaster || isClientMaster ? (parsed.client || parsed.refNo) : (parsed.refNo || `#${pr.record_id}`))}
                                         </td>
                                         <td style={{ padding: '6px 8px', fontWeight: '700', color: '#0f172a' }}>{parsed.client}</td>
                                         <td style={{ padding: '6px 8px' }}>
                                           <span className="status-badge" style={{ 
-                                            backgroundColor: pr.raw_action === 'REQUEST_DELETE' ? '#fee2e2' : '#e0f2fe', 
-                                            color: pr.raw_action === 'REQUEST_DELETE' ? '#dc2626' : '#0369a1', 
+                                            backgroundColor: isMasterSetup
+                                              ? '#e0f2fe'
+                                              : isClientMaster
+                                                ? '#eff6ff'
+                                              : (parsed.refNo === 'ADD'
+                                                ? '#dbeafe'
+                                                : (pr.raw_action === 'REQUEST_DELETE' || parsed.refNo === 'DELETE'
+                                                  ? '#fee2e2'
+                                                  : '#e0f2fe')),
+                                            color: isMasterSetup
+                                              ? '#0369a1'
+                                              : isClientMaster
+                                                ? '#1d4ed8'
+                                              : (parsed.refNo === 'ADD'
+                                                ? '#1d4ed8'
+                                                : (pr.raw_action === 'REQUEST_DELETE' || parsed.refNo === 'DELETE'
+                                                  ? '#dc2626'
+                                                  : '#0369a1')),
                                             fontWeight: 800 
                                           }}>
-                                            {pr.raw_action === 'REQUEST_DELETE' ? 'DELETE' : 'EDIT'}
+                                            {isMasterSetup ? 'OPEN' : (isChamberMaster ? (parsed.refNo || 'ALLOW') : (isClientMaster ? (parsed.refNo || 'NOTIFY') : (pr.raw_action === 'REQUEST_DELETE' ? 'DELETE' : 'EDIT')))}
                                           </span>
                                         </td>
                                         <td style={{ padding: '6px 8px', color: '#334155' }}>
                                           <div style={{ fontWeight: '600', color: '#1e293b' }}>
                                             {(pr.description || '').split(' | ')[0]}
                                           </div>
+                                          {(pr.remark || pr.request_remark) ? (
+                                            <div style={{ fontSize: '0.66rem', color: '#0f766e', marginTop: '2px', fontWeight: 600 }}>
+                                              Remark: {pr.remark || pr.request_remark}
+                                            </div>
+                                          ) : null}
                                           {parsed.extra !== '-' && (
                                             <div style={{ fontSize: '0.66rem', color: '#64748b', marginTop: '2px', fontStyle: 'italic' }}>
                                               {parsed.extra}
@@ -7742,7 +8103,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       <span>{editingOp ? `Modify Operator Profile: ${editingOp.email}` : 'Register New Data Operator'}</span>
                     </h2>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      {editingOp ? 'Update account details, phone number, warehouse allocation or change password.' : 'All horizontal fields are mandatory. Registered credentials grant access to Operator Portals.'}
+                      {editingOp ? 'Update account details, phone, Warehouse / Data Access, chambers, or password.' : 'All horizontal fields are mandatory. Warehouse / Data Access scopes this operator to one warehouse.'}
                     </p>
                   </div>
 
@@ -7871,12 +8232,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </div>
                       </div>
 
-                      {/* Warehouse Name */}
+                      {/* Warehouse / Data Access */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse Name *</label>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse / Data Access *</label>
                         <input 
                           type="text"
                           name="op-warehouse"
+                          list="op-warehouse-suggestions"
                           inputMode="text"
                           autoComplete="organization"
                           placeholder="e.g. Delhi Warehouse"
@@ -7893,6 +8255,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             backgroundColor: 'var(--bg-main)'
                           }}
                         />
+                        <datalist id="op-warehouse-suggestions">
+                          {Array.from(new Set([
+                            ...(accessScopeOptions.warehouses || []),
+                            ...((operators || []).map((o) => o?.warehouse_name).filter(Boolean))
+                          ]))
+                            .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }))
+                            .map((wh) => (
+                              <option key={wh} value={wh} />
+                            ))}
+                        </datalist>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
+                          {editingOp
+                            ? 'Updates profile + past logs for this operator. New tasks also use this warehouse.'
+                            : 'New operator can only access logs for this warehouse.'}
+                        </span>
                       </div>
 
                       {/* Assigned Chambers Limit */}
@@ -8107,7 +8484,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                         padding: '2px 8px',
                                         borderRadius: '100px'
                                       }}>
-                                        {op.warehouse_name ? `Access: ${op.warehouse_name} Logs Only` : 'Access: All Warehouses'}
+                                        {op.warehouse_name
+                                          ? `Access: ${op.warehouse_name} Logs Only`
+                                          : 'Access: Not Configured — edit profile'}
                                       </span>
                                       <span className="status-badge" style={{ 
                                         backgroundColor: '#f1f5f9', 
@@ -8410,7 +8789,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
       {/* Detailed Data Profile Modal */}
       {selectedDetailLog && (
-        <div className="profile-modal-overlay" onClick={() => setSelectedDetailLog(null)}>
+        <div className="profile-modal-overlay" onClick={() => {
+          setSelectedDetailLog(null);
+          setRecordAllowHistory([]);
+        }}>
           <div className="profile-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="profile-modal-header">
               <h3>
@@ -8434,7 +8816,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 >
                   <Trash2 size={14} /> Delete
                 </button>
-                <button className="profile-modal-close-btn" onClick={() => setSelectedDetailLog(null)}>
+                <button className="profile-modal-close-btn" onClick={() => {
+                  setSelectedDetailLog(null);
+                  setRecordAllowHistory([]);
+                }}>
                   <X size={20} />
                 </button>
               </div>
@@ -8497,6 +8882,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 )}
 
                 {detailType === 'daily' && renderChamberLogFormView(selectedDetailLog)}
+
+                {renderSuperAllowSection(selectedDetailLog)}
 
                 {detailType === 'inward' && (
                   <>
@@ -8924,7 +9311,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             </div>
 
             <div className="profile-modal-footer">
-              <button className="profile-close-btn" onClick={() => setSelectedDetailLog(null)}>Close View</button>
+              <button className="profile-close-btn" onClick={() => {
+                setSelectedDetailLog(null);
+                setRecordAllowHistory([]);
+              }}>Close View</button>
             </div>
           </div>
         </div>
