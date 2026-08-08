@@ -59,7 +59,7 @@ async function readApiError(res, fallback) {
     if (/^an error occurred/i.test(text.trim())) {
       return 'Server timed out or failed (common on free deploy when email/DB is slow). Retry — account may already be created.';
     }
-    if (res.status >= 500) return 'Server error. Please try again or check deploy logs.';
+    if (res.status >= 500) return 'Server error. Please try again later.';
     if (text && text.length < 200) return text;
     return fallback;
   }
@@ -958,7 +958,7 @@ export const fetchRecordPermissionHistory = async (recordType, recordId) => {
   const res = await fetch(`${API_BASE_URL}/permission-requests/record-history?${qs.toString()}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Failed to fetch Super Allow history.');
+    throw new Error(err.error || 'Failed to load approval history.');
   }
   return await res.json();
 };

@@ -353,8 +353,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             }}
           >
             <span>Field</span>
-            <span>Pehle (Before)</span>
-            <span>Baad me (After)</span>
+            <span>Before</span>
+            <span>After</span>
           </div>
           {rows.map((row, idx) => (
             <div
@@ -541,10 +541,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 {log.updated_at ? ` · Last: ${formatDateTimeStr(log.updated_at)}` : ''}
               </div>
               {updateRows.length > 0
-                ? renderFieldCompareTable(updateRows, { title: 'Pehle kya tha → Update ke baad kya hai' })
+                ? renderFieldCompareTable(updateRows, { title: 'Before → After' })
                 : (
                   <div style={{ fontSize: '0.78rem', color: '#9a3412' }}>
-                    Update hua, lekin field-level before/after detail save nahi hai.
+                    This record was updated, but field-level before/after details were not saved.
                   </div>
                 )}
             </div>
@@ -977,7 +977,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       info.module = 'Master Setup';
       info.client = 'Chambers & Clients';
       info.refNo = 'OPEN';
-      info.extra = descText || 'Master Setup opens without Super Admin allow.';
+      info.extra = descText || 'Master Setup opens without Super Admin approval.';
       return info;
     } else if (
       recordType === 'ChamberMaster' ||
@@ -991,7 +991,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         (descText || '').match(/delete chamber "([^"]+)"/i);
       info.client = nameMatch ? nameMatch[1] : 'Chamber';
       info.refNo = info.module === 'Chamber Add' ? 'ADD' : 'DELETE';
-      info.extra = descText || 'DO requested Super Admin allow for chamber master.';
+      info.extra = descText || 'Data Operator requested Super Admin approval for chamber master.';
       return info;
     } else if (
       recordType === 'ClientMaster' ||
@@ -1014,8 +1014,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         : (clientMatch ? clientMatch[1] : 'Client');
       info.refNo = 'NOTIFY';
       info.extra = chamberMatch
-        ? `${chamberMatch[1]} · Notify only (no allow)`
-        : (descText || 'Client master change notified to Super Admin (no allow).');
+        ? `${chamberMatch[1]} · Notification only (approval not required)`
+        : (descText || 'Client master change notified to Super Admin (approval not required).');
       return info;
     } else if ((descText || '').includes('Chamber')) {
       info.module = 'Chamber Temp';
@@ -1108,16 +1108,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     >
       <div className="profile-group-title" style={{ color: '#1d4ed8', display: 'flex', alignItems: 'center', gap: 8 }}>
         <ShieldCheck size={16} color="#1d4ed8" />
-        Super Allow / Update Compare
+        Approval & Update Comparison
       </div>
       <p style={{ margin: '0 0 12px 0', fontSize: '0.74rem', color: '#64748b' }}>
-        After Super Admin allow — compare old vs new values, remarks, and decision date
+        After Super Admin approval — compare previous and updated values, remarks, and decision date
       </p>
 
       {hasCompare ? (
         <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, border: '1px solid #86efac', background: '#f0fdf4' }}>
           <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#15803d', marginBottom: 4 }}>
-            Latest field changes after allow / update
+            Latest field changes after approval / update
             {Number(logForCompare?.update_count) > 0 ? ` · Edit #${logForCompare.update_count}` : ''}
           </div>
           {renderFieldCompareTable(latestCompareRows, { title: 'Compare: Before → After' })}
@@ -1132,12 +1132,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       ) : null}
 
       {loadingAllowHistory ? (
-        <div style={{ padding: '12px 0', color: '#64748b', fontSize: '0.8rem' }}>Loading allow history…</div>
+        <div style={{ padding: '12px 0', color: '#64748b', fontSize: '0.8rem' }}>Loading approval history…</div>
       ) : !hasTrail ? (
         <div style={{ padding: '10px 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b', fontSize: '0.8rem' }}>
           {hasCompare
-            ? 'Field compare is available above. No separate Super Allow request trail for this record yet.'
-            : 'No Super Admin allow / update trail stored for this record yet.'}
+            ? 'Field comparison is available above. No separate approval request history for this record yet.'
+            : 'No Super Admin approval or update history is stored for this record yet.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1214,7 +1214,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </div>
 
                 {changeRows.length > 0
-                  ? renderFieldCompareTable(changeRows, { title: 'Changed fields after allow' })
+                  ? renderFieldCompareTable(changeRows, { title: 'Changed fields after approval' })
                   : (ev.changes ? (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>What updated</div>
@@ -1232,7 +1232,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     ) : null}
                     {ev.sa_remark ? (
                       <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px' }}>
-                        <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase' }}>SA Remark</div>
+                        <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase' }}>Super Admin Remark</div>
                         <div style={{ fontSize: '0.8rem', color: '#1e3a8a', fontWeight: 600 }}>{ev.sa_remark}</div>
                       </div>
                     ) : null}
@@ -4243,7 +4243,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </div>
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    Is filter ke liye koi client box data nahi.
+                    No client box data matches this filter.
                   </div>
                 </div>
               );
@@ -4748,7 +4748,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       Daily Box Inventory Tracker
                     </h2>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      Warehouse select karo — us warehouse ka box inventory data neeche dikhega.
+                      Select a warehouse to view its box inventory below.
                     </p>
                   </div>
                   <button
@@ -5003,7 +5003,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   </div>
                 ) : filteredRows.length === 0 ? (
                   <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-                    Is filter ke liye koi box inventory data nahi mila.
+                    No box inventory data matches this filter.
                   </div>
                 ) : (
                   <>
