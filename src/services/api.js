@@ -801,49 +801,49 @@ export const deleteOperator = async (id) => {
 };
 
 // ====================================================================
-// Sub-Admin CRUD APIs (Super Admin only)
+// Customer CRUD APIs (Super Admin only; formerly Sub-Admin)
 // ====================================================================
 export const fetchSubAdmins = async () => {
-  const res = await fetch(`${API_BASE_URL}/sub-admins`);
+  const res = await fetch(`${API_BASE_URL}/customers`);
   if (!res.ok) {
     const err = await res.json();
-    throw new Error(err.error || 'Failed to fetch sub-admins.');
+    throw new Error(err.error || 'Failed to fetch customers.');
   }
   return await res.json();
 };
 
 export const createSubAdmin = async (data) => {
-  const res = await fetch(`${API_BASE_URL}/sub-admins`, {
+  const res = await fetch(`${API_BASE_URL}/customers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   if (!res.ok) {
-    throw new Error(await readApiError(res, 'Failed to create sub-admin.'));
+    throw new Error(await readApiError(res, 'Failed to create customer.'));
   }
   return await res.json();
 };
 
 export const updateSubAdmin = async (id, data) => {
-  const res = await fetch(`${API_BASE_URL}/sub-admins/${id}`, {
+  const res = await fetch(`${API_BASE_URL}/customers/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   if (!res.ok) {
     const err = await res.json();
-    throw new Error(err.error || 'Failed to update sub-admin.');
+    throw new Error(err.error || 'Failed to update customer.');
   }
   return await res.json();
 };
 
 export const deleteSubAdmin = async (id) => {
-  const res = await fetch(`${API_BASE_URL}/sub-admins/${id}`, {
+  const res = await fetch(`${API_BASE_URL}/customers/${id}`, {
     method: 'DELETE'
   });
   if (!res.ok) {
     const err = await res.json();
-    throw new Error(err.error || 'Failed to delete sub-admin.');
+    throw new Error(err.error || 'Failed to delete customer.');
   }
   return await res.json();
 };

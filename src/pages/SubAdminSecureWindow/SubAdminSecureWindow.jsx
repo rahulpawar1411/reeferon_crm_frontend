@@ -1,6 +1,6 @@
 // ====================================================================
-// Sub Admin Secure Window (simple panel, same theme as Super Admin)
-// Login: sub-admin email + password from sub_admins table
+// Customer Secure Window (simple panel, same theme as Super Admin)
+// Login: customer email + password from customers table (legacy: sub_admins)
 // ====================================================================
 
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
@@ -93,7 +93,7 @@ export default function SubAdminSecureWindow({ user, onLogout }) {
     ? user.allowed_warehouses.split(',').map((w) => w.trim()).filter(Boolean)
     : [];
 
-  const displayName = user?.full_name || user?.email?.split('@')[0] || 'Sub Admin';
+  const displayName = user?.full_name || user?.email?.split('@')[0] || 'Customer';
 
   const loadScopeTotals = useCallback(async () => {
     try {

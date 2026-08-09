@@ -39,18 +39,24 @@ function PageLoader() {
 export default function App() {
   const [user, setUser] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('user')) || null;
+      const parsed = JSON.parse(localStorage.getItem('user')) || null;
+      if (parsed?.role === 'sub_admin') {
+        parsed.role = 'customer';
+        localStorage.setItem('user', JSON.stringify(parsed));
+      }
+      return parsed;
     } catch (e) {
       return null;
     }
   });
 
   const getWindowFromURL = () => {
-    if (user && user.role === 'do_operator') return 'do_window';
-    if (user && user.role === 'sub_admin') return 'sub_admin';
+    const role = user?.role === 'sub_admin' ? 'customer' : user?.role;
+    if (user && role === 'do_operator') return 'do_window';
+    if (user && role === 'customer') return 'customer';
     const path = window.location.pathname.toLowerCase();
     if (path.includes('do-operator') || path.includes('/do')) return 'do_window';
-    if (path.includes('sub-admin') || path.includes('subadmin')) return 'sub_admin';
+    if (path.includes('/customer') || path.includes('sub-admin') || path.includes('subadmin')) return 'customer';
     if (path.includes('admin')) return 'super_admin';
     return 'portal_entry';
   };
@@ -66,13 +72,14 @@ export default function App() {
   const [hasDoNotifAlert, setHasDoNotifAlert] = useState(false);
 
   useEffect(() => {
-    if (user && user.role === 'do_operator' && selectedWindow !== 'do_window') {
+    const role = user?.role === 'sub_admin' ? 'customer' : user?.role;
+    if (user && role === 'do_operator' && selectedWindow !== 'do_window') {
       setSelectedWindow('do_window');
       window.history.pushState({}, '', '/do-operator');
     }
-    if (user && user.role === 'sub_admin' && selectedWindow !== 'sub_admin') {
-      setSelectedWindow('sub_admin');
-      window.history.pushState({}, '', '/sub-admin');
+    if (user && role === 'customer' && selectedWindow !== 'customer') {
+      setSelectedWindow('customer');
+      window.history.pushState({}, '', '/customer');
     }
   }, [user, selectedWindow]);
 
@@ -140,13 +147,14 @@ export default function App() {
   }, [user?.role, selectedWindow, activeDOMenu]);
 
   const navigateToWindow = (win) => {
-    if (user && user.role === 'do_operator' && win !== 'do_window') return;
-    if (user && user.role === 'sub_admin' && win !== 'sub_admin') return;
+    const role = user?.role === 'sub_admin' ? 'customer' : user?.role;
+    if (user && role === 'do_operator' && win !== 'do_window') return;
+    if (user && role === 'customer' && win !== 'customer') return;
     setSelectedWindow(win);
     let targetPath = '/';
     if (win === 'do_window') targetPath = '/do-operator';
     if (win === 'super_admin') targetPath = '/admin';
-    if (win === 'sub_admin') targetPath = '/sub-admin';
+    if (win === 'customer') targetPath = '/customer';
     window.history.pushState({}, '', targetPath);
   };
 
@@ -206,8 +214,8 @@ export default function App() {
   }
 
   /*
-  // Commented out Sub-Admin / Customer web window access
-  if (user.role === 'sub_admin') {
+  // Commented out Customer web window access
+  if (user.role === 'customer' || user.role === 'sub_admin') {
     return (
       <ErrorBoundary>
         <Suspense fallback={<PageLoader />}>
@@ -218,8 +226,8 @@ export default function App() {
   }
   */
 
-  // Block mobile application roles (do_operator, sub_admin) from accessing the web app views
-  if (user.role === 'do_operator' || user.role === 'sub_admin') {
+  // Block mobile application roles (do_operator, customer) from accessing the web app views
+  if (user.role === 'do_operator' || user.role === 'customer' || user.role === 'sub_admin') {
     return (
       <ErrorBoundary>
         <div style={{

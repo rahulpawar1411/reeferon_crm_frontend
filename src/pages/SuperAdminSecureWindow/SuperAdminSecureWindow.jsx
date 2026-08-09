@@ -4,7 +4,7 @@
 // Strictly accessible by role: 'super_admin' only.
 // ====================================================================
 
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { 
   ShieldCheck, Clock, LogOut, Database, Lock,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
@@ -70,17 +70,23 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [time, setTime] = useState(new Date());
   const [activeMenu, setActiveMenu] = useState(() => {
     const saved = localStorage.getItem('super_admin_active_menu');
-    if (saved === 'sub_admins' || saved === 'data_operators') {
+    if (saved === 'customers' || saved === 'sub_admins' || saved === 'data_operators') {
       return 'user_management';
     }
     return saved || 'dashboard';
   });
   const [userTab, setUserTab] = useState(() => {
     const savedMenu = localStorage.getItem('super_admin_active_menu');
-    if (savedMenu === 'sub_admins' || savedMenu === 'data_operators') {
-      return savedMenu;
+    if (savedMenu === 'data_operators') {
+      return 'operators';
     }
-    return localStorage.getItem('super_admin_user_tab') || 'sub_admins';
+    if (savedMenu === 'customers' || savedMenu === 'sub_admins') {
+      return 'customers';
+    }
+    const savedTab = localStorage.getItem('super_admin_user_tab');
+    if (savedTab === 'sub_admins') return 'customers';
+    if (savedTab === 'data_operators') return 'operators';
+    return savedTab || 'customers';
   });
   const [auditSubTab, setAuditSubTab] = useState(() => {
     return localStorage.getItem('super_admin_audit_sub_tab') || 'activity_log';
@@ -713,7 +719,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
 
-  // Sub-Admins Management States
+  // Customers Management States
   const [subAdmins, setSubAdmins] = useState([]);
   const [subAdminSearch, setSubAdminSearch] = useState('');
   const [loadingSubAdmins, setLoadingSubAdmins] = useState(false);
@@ -728,11 +734,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [editingSubAdmin, setEditingSubAdmin] = useState(null);
 
   // Access Scope States (Client & Warehouse restrictions)
-  const [accessScopeOptions, setAccessScopeOptions] = useState({ clients: [], warehouses: [] });
+  const [accessScopeOptions, setAccessScopeOptions] = useState({
+    clients: [],
+    warehouses: [],
+    warehouseClients: {}
+  });
   const [subAdminSelectedClients, setSubAdminSelectedClients] = useState([]);
   const [subAdminSelectedWarehouses, setSubAdminSelectedWarehouses] = useState([]);
 
-  // Customer Reports (from Sub Admin portal → customer_reports table)
+  // Customer Reports (from Customer portal → customer_reports table)
   const [customerReports, setCustomerReports] = useState([]);
   const [loadingCustomerReports, setLoadingCustomerReports] = useState(false);
   const [customerReportsError, setCustomerReportsError] = useState('');
@@ -1487,7 +1497,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadSubAdminsData();
       loadCustomerReportsData();
       checkNewDOChanges();
-    } else if (activeMenu === 'sub_admins') {
+    } else if (activeMenu === 'customers') {
       loadSubAdminsData();
       loadAccessScopeOptions();
     } else if (activeMenu === 'customer_reports') {
@@ -2255,7 +2265,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOperatorSearch('');
   };
 
-  // Sub-Admins CRUD handlers
+  // Customers CRUD handlers
   const loadSubAdminsData = async () => {
     setLoadingSubAdmins(true);
     setSubAdminError('');
@@ -2263,7 +2273,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       const data = await fetchSubAdmins();
       setSubAdmins(data || []);
     } catch (err) {
-      setSubAdminError(err.message || 'Failed to fetch sub-admins.');
+      setSubAdminError(err.message || 'Failed to fetch customers.');
     } finally {
       setLoadingSubAdmins(false);
     }
@@ -2272,11 +2282,64 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const loadAccessScopeOptions = async () => {
     try {
       const data = await fetchAccessScopeOptions();
-      setAccessScopeOptions(data || { clients: [], warehouses: [] });
+      setAccessScopeOptions({
+        clients: Array.isArray(data?.clients) ? data.clients : [],
+        warehouses: Array.isArray(data?.warehouses) ? data.warehouses : [],
+        warehouseClients:
+          data?.warehouseClients && typeof data.warehouseClients === 'object'
+            ? data.warehouseClients
+            : {}
+      });
     } catch (err) {
       console.error('Failed to load access scope options:', err);
+      setAccessScopeOptions({ clients: [], warehouses: [], warehouseClients: {} });
     }
   };
+
+  // Clients shown in Customer form = only those linked to selected warehouses
+  const subAdminClientOptions = useMemo(() => {
+    const map = accessScopeOptions.warehouseClients || {};
+    if (!subAdminSelectedWarehouses.length) return [];
+
+    const merged = new Set();
+    const selectedKeys = subAdminSelectedWarehouses.map((w) => String(w).trim().toLowerCase());
+
+    Object.entries(map).forEach(([wh, clients]) => {
+      const key = String(wh).trim().toLowerCase();
+      if (!selectedKeys.includes(key)) return;
+      (clients || []).forEach((c) => {
+        if (c) merged.add(String(c).trim());
+      });
+    });
+
+    // Case-insensitive unique
+    const unique = [];
+    const seen = new Set();
+    [...merged]
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+      .forEach((name) => {
+        const k = name.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        unique.push(name);
+      });
+    return unique;
+  }, [accessScopeOptions.warehouseClients, subAdminSelectedWarehouses]);
+
+  // Drop selected clients that no longer belong to selected warehouses
+  useEffect(() => {
+    if (!subAdminSelectedWarehouses.length) {
+      setSubAdminSelectedClients((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    if (!subAdminClientOptions.length) return;
+    setSubAdminSelectedClients((prev) => {
+      const allowed = new Set(subAdminClientOptions.map((c) => c.toLowerCase()));
+      const next = prev.filter((c) => allowed.has(String(c).trim().toLowerCase()));
+      if (next.length === prev.length && next.every((v, i) => v === prev[i])) return prev;
+      return next;
+    });
+  }, [subAdminSelectedWarehouses, subAdminClientOptions]);
 
   const handleSaveSubAdmin = async (e) => {
     e.preventDefault();
@@ -2305,25 +2368,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       };
 
       if (editingSubAdmin) {
-        setSubAdminProcessStatus('Updating Sub-Admin profile…');
+        setSubAdminProcessStatus('Updating Customer profile…');
         await updateSubAdmin(editingSubAdmin.id, payload);
-        setSubAdminSuccess('Sub-Admin profile updated successfully.');
+        setSubAdminSuccess('Customer profile updated successfully.');
       } else {
-        setSubAdminProcessStatus('Creating Sub-Admin account…');
+        setSubAdminProcessStatus('Creating Customer account…');
         await new Promise((r) => setTimeout(r, 50));
         setSubAdminProcessStatus('Creating account & sending credentials email…');
         const created = await createSubAdmin(payload);
         if (created?.emailSent) {
           setSubAdminProcessStatus('Email sent successfully.');
-          setSubAdminSuccess('Sub-Admin registered. Login credentials emailed successfully.');
+          setSubAdminSuccess('Customer registered. Login credentials emailed successfully.');
         } else if (created?.emailSkipped) {
           setSubAdminSuccess(
             created?.emailError
-              || 'Sub-Admin registered. Email skipped — set SMTP_USER and SMTP_PASS (Gmail App Password) in backend .env and restart server.'
+              || 'Customer registered. Email skipped — set SMTP_USER and SMTP_PASS (Gmail App Password) in backend .env and restart server.'
           );
         } else {
           setSubAdminSuccess(
-            `Sub-Admin registered, but email failed${created?.emailError ? `: ${created.emailError}` : '.'}`
+            `Customer registered, but email failed${created?.emailError ? `: ${created.emailError}` : '.'}`
           );
         }
       }
@@ -2340,21 +2403,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
   const handleDeleteSubAdmin = async (id) => {
-    if (!window.confirm('Are you sure you want to revoke workspace access for this sub-admin?')) {
+    if (!window.confirm('Are you sure you want to revoke workspace access for this customer?')) {
       return;
     }
     setSubAdminError('');
     setSubAdminSuccess('');
     try {
       await deleteSubAdmin(id);
-      setSubAdminSuccess('Sub-Admin credentials deleted successfully.');
+      setSubAdminSuccess('Customer credentials deleted successfully.');
       loadSubAdminsData();
       loadDashboardStatsData();
       if (editingSubAdmin && editingSubAdmin.id === id) {
         cancelEditSubAdmin();
       }
     } catch (err) {
-      setSubAdminError(err.message || 'Failed to delete sub-admin.');
+      setSubAdminError(err.message || 'Failed to delete customer.');
     }
   };
 
@@ -2822,7 +2885,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Users size={18} />
-                <span>Admins & Operators</span>
+                <span>Customers & Operators</span>
               </div>
             </button>
 
@@ -3108,7 +3171,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             >
               <div className="item-left">
                 <Users size={18} className="item-icon" />
-                <span>Admins & Operators</span>
+                <span>Customers & Operators</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -3526,7 +3589,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </div>
               </div>
 
-              {/* Card 3: Customers (Sub-Admins) */}
+              {/* Card 3: Customers */}
               <div className="diagnostic-card" style={{ padding: '12px 16px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customers</span>
@@ -3536,7 +3599,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </div>
                 <div>
                   <h3 style={{ fontSize: '1.4rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{subAdmins.length}</h3>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Registered Customers (Sub-Admins)</span>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Registered Customers</span>
                 </div>
               </div>
             </div>
@@ -7705,7 +7768,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
         {activeMenu === 'user_management' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Top Toggle Buttons: Sub-Admins and Data Operators */}
+            {/* Top Toggle Buttons: Customers and Data Operators */}
             <div style={{
               display: 'flex',
               gap: '12px',
@@ -7718,13 +7781,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             }}>
               <button
                 type="button"
-                onClick={() => setUserTab('sub_admins')}
+                onClick={() => setUserTab('customers')}
                 style={{
                   padding: '8px 16px',
                   borderRadius: 'var(--radius-md)',
                   border: 'none',
-                  backgroundColor: userTab === 'sub_admins' ? 'var(--primary)' : 'transparent',
-                  color: userTab === 'sub_admins' ? '#fff' : 'var(--text-dark)',
+                  backgroundColor: userTab === 'customers' ? 'var(--primary)' : 'transparent',
+                  color: userTab === 'customers' ? '#fff' : 'var(--text-dark)',
                   fontWeight: '700',
                   fontSize: '0.82rem',
                   cursor: 'pointer',
@@ -7735,7 +7798,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 }}
               >
                 <ShieldCheck size={16} />
-                Sub-Admins
+                Customers
               </button>
               <button
                 type="button"
@@ -7761,17 +7824,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             </div>
 
             {/* Render the appropriate view based on userTab */}
-            {userTab === 'sub_admins' ? (
+            {userTab === 'customers' ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                {/* Top: Register New Sub-Admin Horizontal Form */}
+                {/* Top: Register New Customer Horizontal Form */}
                 <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div>
                     <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
                       {editingSubAdmin ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
-                      <span>{editingSubAdmin ? `Modify Sub-Admin Profile: ${editingSubAdmin.email}` : 'Register New Sub-Admin'}</span>
+                      <span>{editingSubAdmin ? `Modify Customer Profile: ${editingSubAdmin.email}` : 'Register New Customer'}</span>
                     </h2>
                     <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      All fields are mandatory. Registered credentials grant dashboard and inquiry management access to Sub-Admins.
+                      All fields are mandatory. Registered credentials grant dashboard and inquiry management access to Customers.
                     </p>
                   </div>
 
@@ -7900,61 +7963,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </div>
                       </div>
 
-                      {/* Client Filter Access (dropdown selection) */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Clients</label>
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val && !subAdminSelectedClients.includes(val)) {
-                              setSubAdminSelectedClients((prev) => [...prev, val]);
-                            }
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            backgroundColor: 'var(--bg-main)',
-                            fontSize: '0.85rem',
-                            color: 'var(--text-dark)',
-                            outline: 'none',
-                            minWidth: 0,
-                            cursor: 'pointer',
-                            appearance: 'auto'
-                          }}
-                        >
-                          <option value="">
-                            {(accessScopeOptions.clients || []).length === 0
-                              ? 'No client names yet — save a DO inward/outward/chamber log first'
-                              : 'Select client name from DO records…'}
-                          </option>
-                          {(accessScopeOptions.clients || [])
-                            .filter((c) => !subAdminSelectedClients.includes(c))
-                            .map((client) => (
-                              <option key={client} value={client}>
-                                {client}
-                              </option>
-                            ))}
-                        </select>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
-                          {subAdminSelectedClients.length === 0 ? (
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No clients selected — full client access</span>
-                          ) : (
-                            subAdminSelectedClients.map((client, idx) => (
-                              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
-                                {client}
-                                <button type="button" onClick={() => setSubAdminSelectedClients(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
-                                  <X size={12} />
-                                </button>
-                              </span>
-                            ))
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Warehouse Filter Access (dropdown selection) */}
+                      {/* Warehouse Filter Access — select first; clients cascade from these */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Warehouses</label>
                         <select
@@ -8000,6 +8009,65 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
                                 {wh}
                                 <button type="button" onClick={() => setSubAdminSelectedWarehouses(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                  <X size={12} />
+                                </button>
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Client Filter Access — options depend on selected warehouses */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Clients</label>
+                        <select
+                          value=""
+                          disabled={subAdminSelectedWarehouses.length === 0}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val && !subAdminSelectedClients.includes(val)) {
+                              setSubAdminSelectedClients((prev) => [...prev, val]);
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border)',
+                            backgroundColor: subAdminSelectedWarehouses.length === 0 ? '#f1f5f9' : 'var(--bg-main)',
+                            fontSize: '0.85rem',
+                            color: 'var(--text-dark)',
+                            outline: 'none',
+                            minWidth: 0,
+                            cursor: subAdminSelectedWarehouses.length === 0 ? 'not-allowed' : 'pointer',
+                            appearance: 'auto'
+                          }}
+                        >
+                          <option value="">
+                            {subAdminSelectedWarehouses.length === 0
+                              ? 'Select warehouse(s) first to see clients…'
+                              : subAdminClientOptions.length === 0
+                                ? 'No clients found for selected warehouse(s)'
+                                : `Select client (${subAdminClientOptions.length} for selected warehouse(s))…`}
+                          </option>
+                          {subAdminClientOptions
+                            .filter((c) => !subAdminSelectedClients.includes(c))
+                            .map((client) => (
+                              <option key={client} value={client}>
+                                {client}
+                              </option>
+                            ))}
+                        </select>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                          {subAdminSelectedWarehouses.length === 0 ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pick warehouses above — clients will list for those warehouses only</span>
+                          ) : subAdminSelectedClients.length === 0 ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No clients selected — all clients in selected warehouse(s)</span>
+                          ) : (
+                            subAdminSelectedClients.map((client, idx) => (
+                              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                                {client}
+                                <button type="button" onClick={() => setSubAdminSelectedClients(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
                                   <X size={12} />
                                 </button>
                               </span>
@@ -8053,13 +8121,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             <Loader2 size={16} className="spinner-icon" />
                             {subAdminProcessStatus || 'Processing…'}
                           </>
-                        ) : (editingSubAdmin ? 'Update Sub-Admin' : 'Register Sub-Admin')}
+                        ) : (editingSubAdmin ? 'Update Customer' : 'Register Customer')}
                       </button>
                     </div>
                   </form>
                 </div>
 
-                {/* Bottom: Sub-Admins Directory List */}
+                {/* Bottom: Customers Directory List */}
                 {(() => {
                   const filteredSubAdminsList = subAdmins.filter(sa => {
                     const term = subAdminSearch.toLowerCase();
@@ -8074,7 +8142,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                         <div>
-                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Sub-Admins Directory</h2>
+                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Customers Directory</h2>
                           <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage customer account credentials and system access permissions.</p>
                         </div>
 
@@ -8110,12 +8178,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
                       {loadingSubAdmins ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                          <span>Loading sub-admins directory...</span>
+                          <span>Loading customers directory...</span>
                         </div>
                       ) : filteredSubAdminsList.length === 0 ? (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
                           <ShieldAlert size={32} color="#94a3b8" />
-                          <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching sub-admins found.</p>
+                          <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching customers found.</p>
                         </div>
                       ) : (
                         <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
@@ -8139,7 +8207,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                   <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.email}</td>
                                   <td style={{ padding: '12px 16px' }}>
                                     <span className="status-badge" style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 800 }}>
-                                      Sub-Admin / Customer
+                                      Customer
                                     </span>
                                   </td>
                                   <td style={{ padding: '12px 16px' }}>
@@ -8173,7 +8241,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                         className="btn-edit-log"
                                         type="button"
                                         onClick={() => startEditSubAdmin(sa)}
-                                        title="Edit Sub-Admin Profile"
+                                        title="Edit Customer Profile"
                                         style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                                       >
                                         <Edit size={14} />

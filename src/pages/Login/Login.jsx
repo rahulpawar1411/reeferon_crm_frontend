@@ -1,7 +1,7 @@
 // ====================================================================
 // Login Page Component (src/pages/Login/Login.jsx)
 // Paired with: src/pages/Login/Login.css
-// Renders secure login portal for Super Admin, Sub Admin, and DO Operator.
+// Renders secure login portal for Super Admin, Customer, and DO Operator.
 // ====================================================================
 
 import React, { useState } from 'react';
@@ -45,18 +45,22 @@ export default function Login({ onLoginSuccess }) {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        // Save user session details locally
-        localStorage.setItem('user', JSON.stringify(data.user));
+        // Save user session details locally (normalize legacy role)
+        const sessionUser =
+          data.user?.role === 'sub_admin'
+            ? { ...data.user, role: 'customer' }
+            : data.user;
+        localStorage.setItem('user', JSON.stringify(sessionUser));
         
         // Notify parent application of successful login
         if (onLoginSuccess) {
-          onLoginSuccess(data.user);
+          onLoginSuccess(sessionUser);
         }
-        if (data.user?.role === 'sub_admin') {
-          window.history.replaceState({}, '', '/sub-admin');
-        } else if (data.user?.role === 'super_admin') {
+        if (sessionUser?.role === 'customer') {
+          window.history.replaceState({}, '', '/customer');
+        } else if (sessionUser?.role === 'super_admin') {
           window.history.replaceState({}, '', '/admin');
-        } else if (data.user?.role === 'do_operator') {
+        } else if (sessionUser?.role === 'do_operator') {
           window.history.replaceState({}, '', '/do-operator');
         }
       } else if (data.locked || response.status === 429) {
@@ -99,7 +103,7 @@ export default function Login({ onLoginSuccess }) {
               <Mail size={16} className="field-icon" />
               <input
                 type="email"
-                placeholder="e.g. subadmin@reeferon.com"
+                placeholder="e.g. customer@reeferon.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
