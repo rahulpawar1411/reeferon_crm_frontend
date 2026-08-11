@@ -4,12 +4,12 @@
 // Strictly accessible by role: 'super_admin' only.
 // ====================================================================
 
-import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy, useRef } from 'react';
 import { 
   ShieldCheck, Clock, LogOut, Database, Lock,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
   Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard,
-  Copy, Check, Loader2, CheckCircle, MessageSquareWarning, Smartphone, Package, Users, LayoutGrid
+  Copy, Check, Loader2, CheckCircle, MessageSquareWarning, MessageSquare, Smartphone, Package, Users, LayoutGrid
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
 import PaginationBar from '../../components/PaginationBar/PaginationBar';
@@ -24,9 +24,11 @@ import {
   toApiDateParam,
   fetchSubAdmins, createSubAdmin, updateSubAdmin, deleteSubAdmin, fetchAccessScopeOptions,
   changeSuperAdminPassword, verifySuperAdminProfileAccess,
-  fetchCustomerReports, updateCustomerReportStatus,
+  fetchCustomerReports, updateCustomerReportStatus, deleteCustomerReport,
+  fetchCustomerNoteThreads, fetchCustomerNotes, postCustomerNote, deleteCustomerNote,
   fetchDailyInspections, deleteDailyInspection,
-  fetchInventoryReconciliation, fetchInventoryFilterOptions, fetchDailyInventoryDeltas
+  fetchInventoryReconciliation, fetchInventoryFilterOptions, fetchDailyInventoryDeltas,
+  fetchAppSubAdmins, createAppSubAdmin, deleteAppSubAdmin
 } from '../../services/api';
 import {
   requireExportDates,
@@ -37,6 +39,7 @@ import {
   isRetryableExportError
 } from '../../utils/exportCsv';
 import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
+import LoadErrorBanner from '../../components/LoadErrorBanner/LoadErrorBanner';
 import '../../components/DOSidebar/DOSidebar.css';
 import './SuperAdminSecureWindow.css';
 
@@ -128,6 +131,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       setProfileConfirmSummary(null);
       setProfileEmail(user?.email || '');
       setOldProfileEmail(user?.email || '');
+      loadAppSubAdminsList();
     }
   }, [activeMenu, user?.email]);
 
@@ -170,6 +174,18 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [showConfirmAdminPassword, setShowConfirmAdminPassword] = useState(false);
   const [showProfileConfirm, setShowProfileConfirm] = useState(false);
   const [profileConfirmSummary, setProfileConfirmSummary] = useState(null);
+
+  // Mobile Sub-Admin registration (full app access)
+  const [appSubAdmins, setAppSubAdmins] = useState([]);
+  const [appSubAdminLoading, setAppSubAdminLoading] = useState(false);
+  const [appSubAdminSaving, setAppSubAdminSaving] = useState(false);
+  const [appSubAdminMsg, setAppSubAdminMsg] = useState('');
+  const [appSubAdminErr, setAppSubAdminErr] = useState('');
+  const [appSubFullName, setAppSubFullName] = useState('');
+  const [appSubPhone, setAppSubPhone] = useState('');
+  const [appSubEmail, setAppSubEmail] = useState('');
+  const [appSubPassword, setAppSubPassword] = useState('');
+  const [showAppSubPassword, setShowAppSubPassword] = useState(false);
   const [editingOp, setEditingOp] = useState(null);
   const [opError, setOpError] = useState('');
   const [opSuccess, setOpSuccess] = useState('');
@@ -208,6 +224,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [logsExportLoading, setLogsExportLoading] = useState(false);
   const [logsExportProgressLabel, setLogsExportProgressLabel] = useState('Exporting…');
   const [exportError, setExportError] = useState(null); // { message, retryable, retryKey }
+  const exportAbortRef = useRef(null);
   const [logsSearch, setLogsSearch] = useState('');
   const [selectedWarehouse, setSelectedWarehouse] = useState('All');
   const [fromDate, setFromDate] = useState('');
@@ -749,6 +766,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [customerReportSearch, setCustomerReportSearch] = useState('');
   const [customerReportStatusFilter, setCustomerReportStatusFilter] = useState('All');
   const [updatingReportId, setUpdatingReportId] = useState(null);
+  const [customerReportsTab, setCustomerReportsTab] = useState('issues'); // issues | notes
+  const [noteThreads, setNoteThreads] = useState([]);
+  const [noteMessages, setNoteMessages] = useState([]);
+  const [selectedNoteCustomer, setSelectedNoteCustomer] = useState('All');
+  const [noteDraft, setNoteDraft] = useState('');
+  const [loadingNotes, setLoadingNotes] = useState(false);
+  const [sendingNote, setSendingNote] = useState(false);
+  const [notesError, setNotesError] = useState('');
+  const notesChatEndRef = useRef(null);
 
   // Real-time ticking clock for header
   useEffect(() => {
@@ -784,6 +810,138 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       setCustomerReportsError(err.message || 'Failed to update status.');
     } finally {
       setUpdatingReportId(null);
+    }
+  };
+
+  const handleDeleteCustomerReport = async (id) => {
+    if (!window.confirm('Delete this customer report permanently?')) return;
+    setUpdatingReportId(id);
+    setCustomerReportsError('');
+    try {
+      await deleteCustomerReport(id);
+      await loadCustomerReportsData();
+    } catch (err) {
+      setCustomerReportsError(err.message || 'Failed to delete report.');
+    } finally {
+      setUpdatingReportId(null);
+    }
+  };
+
+  const loadNoteThreads = async () => {
+    setLoadingNotes(true);
+    setNotesError('');
+    try {
+      const data = await fetchCustomerNoteThreads();
+      setNoteThreads(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setNotesError(err.message || 'Failed to load note threads.');
+      setNoteThreads([]);
+    } finally {
+      setLoadingNotes(false);
+    }
+  };
+
+  const loadNoteMessages = async (email) => {
+    const clean = String(email || '').trim();
+    setLoadingNotes(true);
+    setNotesError('');
+    try {
+      const data =
+        !clean || clean === 'All'
+          ? await fetchCustomerNotes({})
+          : await fetchCustomerNotes({ customer_email: clean.toLowerCase() });
+      setNoteMessages(Array.isArray(data) ? data : []);
+      setTimeout(() => notesChatEndRef.current?.scrollIntoView?.({ behavior: 'smooth' }), 80);
+    } catch (err) {
+      setNotesError(err.message || 'Failed to load notes.');
+      setNoteMessages([]);
+    } finally {
+      setLoadingNotes(false);
+    }
+  };
+
+  const handleSelectNoteCustomer = async (email) => {
+    const raw = String(email || '').trim();
+    const clean = raw === 'All' || !raw ? 'All' : raw.toLowerCase();
+    setSelectedNoteCustomer(clean);
+    setNoteDraft('');
+    await loadNoteMessages(clean);
+  };
+
+  const handleSendCustomerNote = async () => {
+    const msg = String(noteDraft || '').trim();
+    if (!msg) {
+      setNotesError('Type a note message.');
+      return;
+    }
+    const isBroadcast = !selectedNoteCustomer || selectedNoteCustomer === 'All';
+    setSendingNote(true);
+    setNotesError('');
+    try {
+      if (isBroadcast) {
+        let customers = Array.isArray(subAdmins) ? subAdmins : [];
+        if (!customers.length) {
+          try {
+            customers = (await fetchSubAdmins()) || [];
+            setSubAdmins(customers);
+          } catch (_) {
+            /* keep empty */
+          }
+        }
+        const emails = [
+          ...new Set(
+            customers
+              .map((c) => String(c?.email || '').trim().toLowerCase())
+              .filter(Boolean)
+          )
+        ];
+        if (!emails.length) {
+          setNotesError('No customers found. Add customers first, then send to All.');
+          return;
+        }
+        const ok = window.confirm(
+          `All customers selected.\n\nSend this note to ${emails.length} customer(s)?`
+        );
+        if (!ok) return;
+
+        // Prefer server broadcast; if unavailable, send one note per customer.
+        let sentCount = 0;
+        try {
+          const result = await postCustomerNote({
+            message: msg,
+            broadcast: true,
+            customer_email: 'All'
+          });
+          sentCount = Number(result?.count) || emails.length;
+        } catch (_) {
+          for (const email of emails) {
+            await postCustomerNote({ customer_email: email, message: msg });
+            sentCount += 1;
+          }
+        }
+
+        setNoteDraft('');
+        await Promise.all([loadNoteMessages('All'), loadNoteThreads()]);
+        window.alert(`Note sent to ${sentCount} customer(s).`);
+      } else {
+        await postCustomerNote({ customer_email: selectedNoteCustomer, message: msg });
+        setNoteDraft('');
+        await Promise.all([loadNoteMessages(selectedNoteCustomer), loadNoteThreads()]);
+      }
+    } catch (err) {
+      setNotesError(err.message || 'Failed to send note.');
+    } finally {
+      setSendingNote(false);
+    }
+  };
+
+  const handleDeleteCustomerNote = async (id) => {
+    if (!window.confirm('Delete this note?')) return;
+    try {
+      await deleteCustomerNote(id);
+      await Promise.all([loadNoteMessages(selectedNoteCustomer), loadNoteThreads()]);
+    } catch (err) {
+      setNotesError(err.message || 'Failed to delete note.');
     }
   };
 
@@ -903,7 +1061,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     loadPermissionRequests(true);
     const interval = setInterval(() => {
       loadPermissionRequests(true);
-    }, 10000);
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1448,7 +1606,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     checkNewDOChanges();
     const interval = setInterval(() => {
       checkNewDOChanges();
-    }, 10000);
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1502,6 +1660,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadAccessScopeOptions();
     } else if (activeMenu === 'customer_reports') {
       loadCustomerReportsData();
+      loadSubAdminsData();
+      loadNoteThreads();
+      loadNoteMessages('All');
     } else if (activeMenu === 'data_operators') {
       loadAccessScopeOptions();
       loadOperatorsData();
@@ -1914,8 +2075,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setLogsExportLoading(true);
     setLogsExportProgressLabel('Exporting…');
     setExportError(null);
+    if (exportAbortRef.current) exportAbortRef.current.abort();
+    exportAbortRef.current = new AbortController();
+    const { signal } = exportAbortRef.current;
     try {
-      // Use dates currently selected in the filters (not only after Find)
       const { from, to } = requireExportDates(fromDate, toDate);
       setAppliedFromDate(fromDate);
       setAppliedToDate(toDate);
@@ -1925,7 +2088,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         search: logsSearch,
         fromDate: from,
         toDate: to,
-        warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined
+        warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined,
+        signal
       };
       const onProgress = (p) => setLogsExportProgressLabel(formatExportProgress(p));
 
@@ -2464,6 +2628,81 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setShowConfirmAdminPassword(false);
     setShowProfileConfirm(false);
     setProfileConfirmSummary(null);
+  };
+
+  const resetAppSubAdminForm = () => {
+    setAppSubFullName('');
+    setAppSubPhone('');
+    setAppSubEmail('');
+    setAppSubPassword('');
+    setShowAppSubPassword(false);
+  };
+
+  const loadAppSubAdminsList = async () => {
+    setAppSubAdminLoading(true);
+    setAppSubAdminErr('');
+    try {
+      const rows = await fetchAppSubAdmins();
+      setAppSubAdmins(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      setAppSubAdmins([]);
+      setAppSubAdminErr(err.message || 'Failed to load Sub-Admins.');
+    } finally {
+      setAppSubAdminLoading(false);
+    }
+  };
+
+  const handleCreateAppSubAdmin = async (e) => {
+    e.preventDefault();
+    setAppSubAdminErr('');
+    setAppSubAdminMsg('');
+    if (!appSubFullName.trim() || !appSubPhone.trim() || !appSubEmail.trim() || !appSubPassword) {
+      setAppSubAdminErr('Name, number, email and password are all required.');
+      return;
+    }
+    setAppSubAdminSaving(true);
+    try {
+      const created = await createAppSubAdmin({
+        full_name: appSubFullName.trim(),
+        phone_no: appSubPhone.trim(),
+        email: appSubEmail.trim().toLowerCase(),
+        password: appSubPassword
+      });
+      setAppSubAdminMsg('Sub-Admin registered for mobile (full app access).');
+      resetAppSubAdminForm();
+      // Optimistic row so UI updates even if list refresh is slow
+      if (created?.id) {
+        setAppSubAdmins((prev) => [
+          {
+            id: created.id,
+            email: created.email,
+            full_name: created.full_name,
+            phone_no: created.phone_no,
+            created_at: new Date().toISOString()
+          },
+          ...prev.filter((r) => r.id !== created.id)
+        ]);
+      }
+      await loadAppSubAdminsList();
+    } catch (err) {
+      setAppSubAdminErr(err.message || 'Failed to create Sub-Admin.');
+    } finally {
+      setAppSubAdminSaving(false);
+    }
+  };
+
+  const handleDeleteAppSubAdmin = async (id) => {
+    if (!window.confirm('Delete this Sub-Admin account? They will lose mobile access.')) return;
+    setAppSubAdminErr('');
+    setAppSubAdminMsg('');
+    try {
+      await deleteAppSubAdmin(id);
+      setAppSubAdminMsg('Sub-Admin deleted.');
+      setAppSubAdmins((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      setAppSubAdminErr(err.message || 'Failed to delete Sub-Admin.');
+      await loadAppSubAdminsList();
+    }
   };
 
   const openSuperAdminProfileWindow = () => {
@@ -3311,6 +3550,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   <strong>Super Admin</strong>
                 </div>
                 <div className="sa-profile-info-row">
+                  <span>Email</span>
+                  <strong>{user?.email || '—'}</strong>
+                </div>
+                <div className="sa-profile-info-row">
                   <span>Name</span>
                   <strong>{user?.full_name || 'Super Administrator'}</strong>
                 </div>
@@ -3452,6 +3695,165 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </button>
                     </form>
                   </>
+                )}
+              </div>
+            </div>
+
+            <div className="sa-profile-subadmin-card">
+              <div className="sa-profile-subadmin-head">
+                <div>
+                  <h3>Register Mobile Sub-Admin</h3>
+                  <p>
+                    Sub-Admins get full mobile app access (view and process all data). Separate from Customers.
+                  </p>
+                </div>
+                <Smartphone size={22} color="#00a2e8" />
+              </div>
+
+              <form className="sa-profile-form" onSubmit={handleCreateAppSubAdmin} autoComplete="off">
+                <div className="sa-profile-subadmin-grid">
+                  <div>
+                    <label>Name *</label>
+                    <div className="sa-profile-input-wrap">
+                      <input
+                        type="text"
+                        value={appSubFullName}
+                        onChange={(e) => setAppSubFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
+                        placeholder="Full name"
+                        name="app-sub-name"
+                        autoComplete="off"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label>Number *</label>
+                    <div className="sa-profile-input-wrap">
+                      <input
+                        type="tel"
+                        value={appSubPhone}
+                        onChange={(e) => setAppSubPhone(e.target.value.replace(/[^\d+]/g, ''))}
+                        placeholder="Phone number"
+                        name="app-sub-phone"
+                        autoComplete="off"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label>Email *</label>
+                    <div className="sa-profile-input-wrap">
+                      <input
+                        type="email"
+                        value={appSubEmail}
+                        onChange={(e) => setAppSubEmail(e.target.value)}
+                        placeholder="subadmin@company.com"
+                        name="app-sub-email"
+                        autoComplete="off"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label>Password *</label>
+                    <div className="sa-profile-input-wrap">
+                      <input
+                        type={showAppSubPassword ? 'text' : 'password'}
+                        value={appSubPassword}
+                        onChange={(e) => setAppSubPassword(e.target.value)}
+                        placeholder="Login password"
+                        name="app-sub-password"
+                        autoComplete="new-password"
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="sa-profile-eye-btn"
+                        onClick={() => setShowAppSubPassword((p) => !p)}
+                        title={showAppSubPassword ? 'Hide Password' : 'Show Password'}
+                      >
+                        {showAppSubPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {appSubAdminErr && <div className="sa-profile-error">{appSubAdminErr}</div>}
+                {appSubAdminMsg && <div className="sa-profile-success">{appSubAdminMsg}</div>}
+
+                <button type="submit" className="sa-profile-submit" disabled={appSubAdminSaving}>
+                  {appSubAdminSaving ? (
+                    <>
+                      <Loader2 size={16} className="sa-profile-spin" />
+                      Creating…
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus size={16} />
+                      Create Sub-Admin
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="sa-profile-subadmin-list">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                  <h4 style={{ margin: 0 }}>Registered Sub-Admins</h4>
+                  <button
+                    type="button"
+                    className="sa-profile-window-back"
+                    onClick={loadAppSubAdminsList}
+                    disabled={appSubAdminLoading}
+                    title="Refresh list"
+                  >
+                    {appSubAdminLoading ? 'Loading…' : 'Refresh'}
+                  </button>
+                </div>
+                {appSubAdminErr && <div className="sa-profile-error">{appSubAdminErr}</div>}
+                {appSubAdminLoading ? (
+                  <p className="sa-profile-security-sub">Loading…</p>
+                ) : appSubAdmins.length === 0 && !appSubAdminErr ? (
+                  <p className="sa-profile-security-sub">No Sub-Admins yet.</p>
+                ) : appSubAdmins.length === 0 ? null : (
+                  <div className="table-responsive">
+                    <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left', padding: '10px 12px' }}>Name</th>
+                          <th style={{ textAlign: 'left', padding: '10px 12px' }}>Number</th>
+                          <th style={{ textAlign: 'left', padding: '10px 12px' }}>Email</th>
+                          <th style={{ textAlign: 'center', padding: '10px 12px' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {appSubAdmins.map((row) => (
+                          <tr key={row.id}>
+                            <td style={{ padding: '10px 12px', fontWeight: 600 }}>{row.full_name || '—'}</td>
+                            <td style={{ padding: '10px 12px' }}>{row.phone_no || '—'}</td>
+                            <td style={{ padding: '10px 12px' }}>{row.email}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteAppSubAdmin(row.id)}
+                                style={{
+                                  border: 'none',
+                                  background: '#fee2e2',
+                                  color: '#dc2626',
+                                  borderRadius: 8,
+                                  padding: '6px 10px',
+                                  cursor: 'pointer',
+                                  fontWeight: 700,
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             </div>
@@ -3982,9 +4384,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
                 {/* Error Banner */}
                 {inventoryError && (
-                  <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#ef4444', fontSize: '0.8rem', fontWeight: '700' }}>
-                    {inventoryError}
-                  </div>
+                  <LoadErrorBanner
+                    message={inventoryError}
+                    onRetry={loadInventoryReconciliationData}
+                    onDismiss={() => setInventoryError('')}
+                  />
                 )}
 
                 {(() => {
@@ -4838,9 +5242,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </div>
 
                 {deltasError && (
-                  <div style={{ padding: '10px 14px', backgroundColor: '#fef2f2', border: '1px solid #fee2e2', borderRadius: 'var(--radius-sm)', color: '#dc2626', fontSize: '0.8rem', fontWeight: 700 }}>
-                    {deltasError}
-                  </div>
+                  <LoadErrorBanner
+                    message={deltasError}
+                    onRetry={() => loadDailyBoxTrackerData()}
+                    onDismiss={() => setDeltasError('')}
+                  />
                 )}
               </div>
 
@@ -5481,6 +5887,28 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   <Download size={14} />
                   {logsExportLoading ? logsExportProgressLabel : 'Export'}
                 </button>
+                {logsExportLoading && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      exportAbortRef.current?.abort();
+                      setLogsExportLoading(false);
+                      setLogsExportProgressLabel('Exporting…');
+                    }}
+                    style={{
+                      padding: '9px 14px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid #fecaca',
+                      backgroundColor: '#fef2f2',
+                      color: '#dc2626',
+                      fontWeight: '700',
+                      fontSize: '0.8rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             </div>
 
@@ -6510,21 +6938,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
             {/* Error Banner */}
             {logsError && (
-              <div style={{
-                backgroundColor: '#fef2f2',
-                border: '1px solid #fee2e2',
-                color: '#dc2626',
-                padding: '12px 16px',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: '0.82rem',
-                fontWeight: '600',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <ShieldAlert size={16} color="#dc2626" />
-                <span>Error: {logsError}</span>
-              </div>
+              <LoadErrorBanner
+                message={logsError}
+                onRetry={() => {
+                  if (auditSubTab === 'permission_log') loadPermissionRequests();
+                  else if (auditSubTab === 'system_errors') loadSystemConfig();
+                  else loadActivities();
+                }}
+                onDismiss={() => setLogsError('')}
+              />
             )}
 
             {/* Sub-tab Selection & Warehouse Filter Buttons */}
@@ -8602,9 +9024,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </div>
                       )}
                       {opError && (
-                        <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                          {opError}
-                        </div>
+                        <LoadErrorBanner
+                          message={opError}
+                          onRetry={loadOperatorsData}
+                          onDismiss={() => setOpError('')}
+                        />
                       )}
 
                       {loadingOps ? (
@@ -8718,6 +9142,237 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
         {activeMenu === 'customer_reports' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {[
+                { id: 'issues', label: 'Issue reports', icon: MessageSquareWarning },
+                { id: 'notes', label: 'Notes & updates', icon: MessageSquare }
+              ].map((tab) => {
+                const Icon = tab.icon;
+                const active = customerReportsTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setCustomerReportsTab(tab.id);
+                      if (tab.id === 'notes') {
+                        loadSubAdminsData();
+                        loadNoteThreads();
+                        loadNoteMessages(selectedNoteCustomer || 'All');
+                      } else {
+                        loadCustomerReportsData();
+                      }
+                    }}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 999,
+                      border: active ? '1px solid var(--primary)' : '1px solid var(--border)',
+                      background: active ? 'var(--primary-light)' : '#fff',
+                      color: active ? 'var(--primary)' : 'var(--text-dark)',
+                      fontWeight: 800,
+                      fontSize: '0.8rem',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <Icon size={14} />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {customerReportsTab === 'notes' ? (
+              <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '16px' }}>
+                  <div>
+                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <MessageSquare size={18} color="#00a2e8" />
+                      <span>Customer Notes & Updates</span>
+                    </h2>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                      Chat-style notes from Super Admin to customers. Customers see these on mobile Dashboard → Updates (read only).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      loadNoteThreads();
+                      loadNoteMessages(selectedNoteCustomer || 'All');
+                    }}
+                    disabled={loadingNotes}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      background: '#fff',
+                      fontWeight: 700,
+                      fontSize: '0.8rem',
+                      cursor: loadingNotes ? 'wait' : 'pointer'
+                    }}
+                  >
+                    Refresh
+                  </button>
+                </div>
+                {notesError && (
+                  <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', fontWeight: 600 }}>
+                    {notesError}
+                  </div>
+                )}
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 16, minHeight: 420 }}>
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-main)', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontWeight: 800, fontSize: '0.75rem', color: '#64748b' }}>
+                      CUSTOMERS
+                    </div>
+                    <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
+                      <select
+                        value={selectedNoteCustomer || 'All'}
+                        onChange={(e) => handleSelectNoteCustomer(e.target.value)}
+                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: '0.8rem', fontWeight: 600 }}
+                      >
+                        <option value="All">All</option>
+                        {(subAdmins || []).map((c) => (
+                          <option key={c.id || c.email} value={String(c.email || '').toLowerCase()}>
+                            {c.full_name || c.email} ({c.email})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                      {noteThreads.length === 0 ? (
+                        <div style={{ padding: 16, fontSize: '0.78rem', color: '#94a3b8' }}>No note threads yet.</div>
+                      ) : (
+                        noteThreads.map((t) => {
+                          const email = String(t.customer_email || '').toLowerCase();
+                          const active =
+                            selectedNoteCustomer !== 'All' && email === selectedNoteCustomer;
+                          return (
+                            <button
+                              key={email}
+                              type="button"
+                              onClick={() => handleSelectNoteCustomer(email)}
+                              style={{
+                                width: '100%',
+                                textAlign: 'left',
+                                padding: '12px',
+                                border: 'none',
+                                borderBottom: '1px solid var(--border)',
+                                background: active ? '#e0f2fe' : 'transparent',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#0f172a' }}>
+                                {t.customer_name || email}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>{email}</div>
+                              <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {t.last_message || '—'}
+                              </div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 12, display: 'flex', flexDirection: 'column', minHeight: 420, background: '#fff' }}>
+                    <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 800, fontSize: '0.85rem', color: '#0f172a' }}>
+                      {selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                        ? `Chat · ${selectedNoteCustomer}`
+                        : `All customers selected · send goes to everyone (${(subAdmins || []).length || 0})`}
+                    </div>
+                    <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 10, background: '#f8fafc' }}>
+                      {noteMessages.length === 0 ? (
+                        <div style={{ margin: 'auto', color: '#94a3b8', fontSize: '0.85rem' }}>
+                          {selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                            ? 'No notes yet. Send the first update.'
+                            : 'No notes yet.'}
+                        </div>
+                      ) : (
+                        noteMessages.map((m) => {
+                          const fromAdmin = m.author_role === 'super_admin';
+                          const showCustomer =
+                            selectedNoteCustomer === 'All' || !selectedNoteCustomer;
+                          return (
+                            <div
+                              key={m.id}
+                              style={{
+                                alignSelf: fromAdmin ? 'flex-end' : 'flex-start',
+                                maxWidth: '78%',
+                                background: fromAdmin ? '#003580' : '#fff',
+                                color: fromAdmin ? '#fff' : '#0f172a',
+                                border: fromAdmin ? 'none' : '1px solid #e2e8f0',
+                                borderRadius: 12,
+                                padding: '10px 12px'
+                              }}
+                            >
+                              <div style={{ fontSize: '0.68rem', opacity: 0.85, fontWeight: 700, marginBottom: 4 }}>
+                                {showCustomer
+                                  ? `${m.customer_name || m.customer_email || 'Customer'} · `
+                                  : ''}
+                                {fromAdmin ? 'Super Admin' : (m.author_name || 'Customer')}
+                                {' · '}
+                                {m.created_at ? new Date(m.created_at).toLocaleString() : ''}
+                              </div>
+                              <div style={{ fontSize: '0.84rem', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                {m.message}
+                              </div>
+                              {fromAdmin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCustomerNote(m.id)}
+                                  style={{ marginTop: 6, border: 'none', background: 'transparent', color: '#fecaca', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                                >
+                                  Delete
+                                </button>
+                              ) : null}
+                            </div>
+                          );
+                        })
+                      )}
+                      <div ref={notesChatEndRef} />
+                    </div>
+                    <div style={{ padding: 12, borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
+                      <textarea
+                        value={noteDraft}
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                        placeholder={
+                          selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                            ? 'Write an update / note for this customer…'
+                            : 'Write a note — will send to ALL customers…'
+                        }
+                        disabled={sendingNote}
+                        rows={2}
+                        style={{ flex: 1, resize: 'vertical', minHeight: 44, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', fontSize: '0.84rem', fontFamily: 'inherit' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSendCustomerNote}
+                        disabled={sendingNote || !String(noteDraft || '').trim()}
+                        style={{
+                          padding: '0 18px',
+                          borderRadius: 10,
+                          border: 'none',
+                          background: 'var(--primary)',
+                          color: '#fff',
+                          fontWeight: 800,
+                          fontSize: '0.84rem',
+                          cursor: sendingNote ? 'not-allowed' : 'pointer',
+                          opacity: sendingNote ? 0.6 : 1
+                        }}
+                      >
+                        {sendingNote
+                          ? 'Sending…'
+                          : selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                            ? 'Send'
+                            : 'Send to all'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
             <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '16px' }}>
                 <div>
@@ -8726,7 +9381,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     <span>Customer Reports</span>
                   </h2>
                   <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                    Issues submitted from the Customer portal. Each row identifies the customer account, Ref No., and issue message.
+                    Issues & queries from the Customer profile. Each row shows the customer, Ref No. (or Query), and message.
                   </p>
                 </div>
                 <button
@@ -8855,6 +9510,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <th style={{ padding: '10px 12px', fontWeight: 800 }}>Status</th>
                         <th style={{ padding: '10px 12px', fontWeight: 800 }}>Submitted</th>
                         <th style={{ padding: '10px 12px', fontWeight: 800 }}>Update</th>
+                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Delete</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -8945,6 +9601,27 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 <option value="Closed">Closed</option>
                               </select>
                             </td>
+                            <td style={{ padding: '12px' }}>
+                              <button
+                                type="button"
+                                title="Delete report"
+                                disabled={updatingReportId === report.id}
+                                onClick={() => handleDeleteCustomerReport(report.id)}
+                                style={{
+                                  backgroundColor: '#fee2e2',
+                                  border: '1px solid #fecaca',
+                                  color: '#b91c1c',
+                                  padding: '6px 8px',
+                                  borderRadius: 6,
+                                  cursor: updatingReportId === report.id ? 'wait' : 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
                           </tr>
                         );
                       })}
@@ -8953,8 +9630,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </div>
                   )}
                 </div>
-              </div>
             )}
+          </div>
+        )}
           </>
         )}
       </main>

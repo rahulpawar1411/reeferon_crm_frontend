@@ -1,9 +1,46 @@
 // ====================================================================
-// Frontend API Service Layer (src/services/api.js)
-// Supports FormData Image Uploads for Daily Chamber Temp Logs.
+// Frontend API Service Layer (frontend/src/services/api.js)
+// --------------------------------------------------------------------
+// RULES FOR DEVELOPERS:
+//   1) Mutations (POST/PUT/DELETE) MUST use assertOk() — never fake "Saved (local)"
+//   2) Failed API = throw Error so UI can show alert / error banner
+//   3) Successful save means MySQL actually stored the row (or clear server error)
+//   4) VITE_API_BASE_URL defaults to '/api' (Vite proxy → backend :5000)
+//
+// assertOk(res, fallbackMsg):
+//   - res.ok → parse JSON body (or {})
+//   - !res.ok → throw Error with server message / fallback
 // ====================================================================
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+
+const AUTH_TOKEN_KEY = 'auth_token';
+
+export function getAuthToken() {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+export function setAuthToken(token) {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (_) {
+    /* ignore storage errors */
+  }
+}
+
+export function clearAuthSession() {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem('user');
+  } catch (_) {
+    /* ignore */
+  }
+}
 
 /** Let the browser paint between heavy export/page loops. */
 export const yieldToMain = () =>
@@ -91,22 +128,29 @@ async function fetchLogListEndpoint(path, params = {}) {
   return normalizeLogListResponse(data);
 }
 
-/** Fetch every page for export (chunked, yields to UI). Caps at maxRows. */
+/** Fetch every page for export (chunked, yields to UI). Supports AbortSignal via params.signal */
 export async function fetchAllLogPages(path, params = {}, onProgress) {
   const pageLimit = params.limit ?? 500;
   const maxRows = params.maxRows ?? 100000;
+  const signal = params.signal;
   let page = 1;
   const all = [];
   let total = 0;
   let warned = false;
 
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new Error('Export cancelled.');
+  };
+
   for (;;) {
+    throwIfAborted();
     const chunk = await fetchLogListEndpoint(path, {
       ...params,
       page,
       limit: pageLimit,
       export: true
     });
+    throwIfAborted();
     if (page === 1) {
       total = chunk.total;
       if (total > maxRows) {
@@ -149,14 +193,20 @@ export const fetchAllInwardLogs = (params, onProgress) =>
 export const fetchAllOutwardLogs = (params, onProgress) =>
   fetchAllLogPages('/outward-logs', params, onProgress);
 
-// Globally override fetch to enforce HttpOnly Cookies credentials passing in development & production
+// Globally override fetch: cookies + Bearer token (cookie alone can fail on LAN IP / some browsers)
 const originalFetch = window.fetch;
 window.fetch = async function (url, options = {}) {
-  options.credentials = 'include';
+  const nextOptions = { ...options, credentials: 'include' };
+  const headers = new Headers(options.headers || {});
+  if (!headers.has('Authorization')) {
+    const token = getAuthToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+  }
+  nextOptions.headers = headers;
   try {
-    const res = await originalFetch(url, options);
+    const res = await originalFetch(url, nextOptions);
     const urlStr = typeof url === 'string' ? url : (url && url.url ? url.url : '');
-    
+
     // If unauthorized (401) and not a login request, clear storage and log out
     if (
       res.status === 401 &&
@@ -164,9 +214,18 @@ window.fetch = async function (url, options = {}) {
       !urlStr.includes('/auth/verify-profile-access') &&
       !urlStr.includes('/permission-requests/check')
     ) {
-      console.warn('⚠️ Session expired (401). Logging out...');
-      localStorage.removeItem('user');
-      window.dispatchEvent(new Event('unauthorized-session-expired'));
+      // Only force logout when a web session actually existed
+      let hadSession = false;
+      try {
+        hadSession = Boolean(localStorage.getItem('user') || localStorage.getItem(AUTH_TOKEN_KEY));
+      } catch (_) {
+        hadSession = false;
+      }
+      if (hadSession) {
+        console.warn('⚠️ Session expired (401). Logging out...');
+        clearAuthSession();
+        window.dispatchEvent(new Event('unauthorized-session-expired'));
+      }
     }
     return res;
   } catch (err) {
@@ -174,11 +233,33 @@ window.fetch = async function (url, options = {}) {
   }
 };
 
-// In-memory fallback for Chamber Logs
-let fallbackChamberLogs = [];
+/**
+ * Parse JSON on success; throw a user-readable Error on failure.
+ * Use on every write path so the UI never thinks data was saved when it was not.
+ *
+ * @param {Response} res - fetch Response
+ * @param {string} [fallback] - message if body has no error/message
+ * @returns {Promise<object>}
+ */
+async function assertOk(res, fallback) {
+  if (res.ok) {
+    const text = await res.text().catch(() => '');
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return {};
+    }
+  }
+  const message = await readApiError(res, fallback || `Request failed (${res.status}).`);
+  const err = new Error(message);
+  err.status = res.status;
+  throw err;
+}
 
 // ====================================================================
 // 1. Daily Chamber Temperature Monitoring APIs
+//    GET list / POST create / PUT update / DELETE — all hit MySQL via backend
 // ====================================================================
 export const fetchChamberLogs = async (search = '', options = {}) => {
   const params = {
@@ -189,104 +270,57 @@ export const fetchChamberLogs = async (search = '', options = {}) => {
     toDate: options.toDate,
     warehouse: options.warehouse
   };
-  try {
-    const result = await fetchChamberLogsPage(params);
-    if (options.paginated) return result;
-    return result.items;
-  } catch (err) {
-    if (options.paginated) throw err;
-  }
-  let result = [...fallbackChamberLogs];
-  if (search) {
-    const q = search.toLowerCase();
-    result = result.filter(l => 
-      (l.client_name && l.client_name.toLowerCase().includes(q)) ||
-      (l.chamber_name && l.chamber_name.toLowerCase().includes(q)) ||
-      (l.inspection_time && l.inspection_time.toLowerCase().includes(q)) ||
-      (l.monitor_supervisor_name && l.monitor_supervisor_name.toLowerCase().includes(q))
-    );
-  }
-  return result;
+  const result = await fetchChamberLogsPage(params);
+  if (options.paginated) return result;
+  return result.items;
 };
 
 export const addChamberLog = async (logData) => {
-  try {
-    let bodyData;
-    let headers = {};
+  let bodyData;
+  let headers = {};
 
-    if (logData instanceof FormData) {
-      bodyData = logData; // Multer FormData with image
-    } else {
-      bodyData = JSON.stringify(logData);
-      headers['Content-Type'] = 'application/json';
-    }
+  if (logData instanceof FormData) {
+    bodyData = logData;
+  } else {
+    bodyData = JSON.stringify(logData);
+    headers['Content-Type'] = 'application/json';
+  }
 
-    const res = await fetch(`${API_BASE_URL}/chamber-temp`, {
-      method: 'POST',
-      headers,
-      body: bodyData
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-
-  const newEntry = {
-    id: Date.now(),
-    entry_date: logData.entry_date || new Date().toISOString().split('T')[0],
-    client_name: logData.client_name || '',
-    chamber_name: logData.chamber_name || '',
-    inspection_time: logData.inspection_time || '11:00 AM',
-    box_temp: parseFloat(logData.box_temp || 0),
-    monitor_supervisor_name: logData.monitor_supervisor_name || '',
-    chamber_image: null,
-    created_at: new Date().toISOString()
-  };
-  fallbackChamberLogs.unshift(newEntry);
-  return { id: newEntry.id, message: 'Saved (local)' };
+  const res = await fetch(`${API_BASE_URL}/chamber-temp`, {
+    method: 'POST',
+    headers,
+    body: bodyData
+  });
+  return assertOk(res, 'Failed to save chamber log. Data was not stored.');
 };
 
 export const updateChamberLog = async (id, updateData) => {
-  try {
-    let bodyData;
-    let headers = {};
+  let bodyData;
+  let headers = {};
 
-    if (updateData instanceof FormData) {
-      bodyData = updateData;
-    } else {
-      bodyData = JSON.stringify(updateData);
-      headers['Content-Type'] = 'application/json';
-    }
-
-    const res = await fetch(`${API_BASE_URL}/chamber-temp/${id}`, {
-      method: 'PUT',
-      headers,
-      body: bodyData
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  const item = fallbackChamberLogs.find(l => l.id == id);
-  if (item) {
-    if (updateData.chamber_name) item.chamber_name = updateData.chamber_name;
-    if (updateData.inspection_time) item.inspection_time = updateData.inspection_time;
-    if (updateData.chamber_temp !== undefined) item.chamber_temp = updateData.chamber_temp !== '' ? parseFloat(updateData.chamber_temp) : null;
-    if (updateData.monitor_supervisor_name) item.monitor_supervisor_name = updateData.monitor_supervisor_name;
+  if (updateData instanceof FormData) {
+    bodyData = updateData;
+  } else {
+    bodyData = JSON.stringify(updateData);
+    headers['Content-Type'] = 'application/json';
   }
-  return { message: 'Updated (local)' };
+
+  const res = await fetch(`${API_BASE_URL}/chamber-temp/${id}`, {
+    method: 'PUT',
+    headers,
+    body: bodyData
+  });
+  return assertOk(res, 'Failed to update chamber log.');
 };
 
 export const deleteChamberLog = async (id) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/chamber-temp/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  fallbackChamberLogs = fallbackChamberLogs.filter(l => l.id != id);
-  return { message: 'Deleted (local)' };
+  const res = await fetch(`${API_BASE_URL}/chamber-temp/${id}`, { method: 'DELETE' });
+  return assertOk(res, 'Failed to delete chamber log.');
 };
 
 // ====================================================================
 // Inward DO Logs APIs
 // ====================================================================
-let fallbackInwardLogs = [];
-
 export const fetchInwardLogs = async (search = '', options = {}) => {
   const params = {
     search: search || options.search || '',
@@ -296,121 +330,30 @@ export const fetchInwardLogs = async (search = '', options = {}) => {
     toDate: options.toDate,
     warehouse: options.warehouse
   };
-  try {
-    const result = await fetchInwardLogsPage(params);
-    if (options.paginated) return result;
-    return result.items;
-  } catch (err) {
-    if (options.paginated) throw err;
-  }
-  let list = [...fallbackInwardLogs];
-  if (search) {
-    const q = search.toLowerCase();
-    list = list.filter(l => 
-      (l.inward_vehicle_no && l.inward_vehicle_no.toLowerCase().includes(q)) ||
-      (l.inward_client_name && l.inward_client_name.toLowerCase().includes(q))
-    );
-  }
-  return list;
+  const result = await fetchInwardLogsPage(params);
+  if (options.paginated) return result;
+  return result.items;
 };
 
 export const addInwardLog = async (formData) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/inward-logs`, {
-      method: 'POST',
-      body: formData
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  
-  // Local fallback entry mapping
-  const newLog = {
-    inward_id: Date.now(),
-    inward_entry_date: formData.get('inward_entry_date'),
-    inward_vehicle_no: formData.get('inward_vehicle_no'),
-    inward_client_name: formData.get('inward_client_name'),
-    inward_seal_no: formData.get('inward_seal_no'),
-    inward_vehicle_temp: formData.get('inward_vehicle_temp'),
-    inward_material_temp: formData.get('inward_material_temp'),
-    inward_transporter_name: formData.get('inward_transporter_name'),
-    inward_driver_name: formData.get('inward_driver_name'),
-    inward_driver_no: formData.get('inward_driver_no'),
-    inward_dock_no: formData.get('inward_dock_no'),
-    inward_vehicle_reporting_time: formData.get('inward_vehicle_reporting_time'),
-    inward_unloading_start_time: formData.get('inward_unloading_start_time'),
-    inward_unloading_duration_hours: formData.get('inward_unloading_duration_hours'),
-    inward_unloading_duration_mins: formData.get('inward_unloading_duration_mins'),
-    inward_unloading_end_time: formData.get('inward_unloading_end_time'),
-    inward_pallets_in_qty: formData.get('inward_pallets_in_qty') || 0,
-    inward_invoice_qty: formData.get('inward_invoice_qty') || 0,
-    inward_received_qty: formData.get('inward_received_qty') || 0,
-    inward_received_boxes_qty: formData.get('inward_received_boxes_qty') || 0,
-    inward_short_received_boxes_qty: formData.get('inward_short_received_boxes_qty') || 0,
-    inward_excess_received_boxes_qty: formData.get('inward_excess_received_boxes_qty') || 0,
-    inward_damage_received_boxes_qty: formData.get('inward_damage_received_boxes_qty') || 0,
-    inward_material_type: formData.get('inward_material_type'),
-    inward_unloading_supervisor_name: formData.get('inward_unloading_supervisor_name'),
-    inward_remarks: formData.get('inward_remarks'),
-    inward_vehicle_back_side_photo: formData.get('inward_vehicle_back_side_photo'),
-    inward_vehicle_back_side_photo_with_material: formData.get('inward_vehicle_back_side_photo_with_material'),
-    inward_count_sheet_photo: formData.get('inward_count_sheet_photo')
-  };
-  fallbackInwardLogs.unshift(newLog);
-  return { id: newLog.inward_id, message: 'Saved (local)' };
+  const res = await fetch(`${API_BASE_URL}/inward-logs`, {
+    method: 'POST',
+    body: formData
+  });
+  return assertOk(res, 'Failed to save inward log. Data was not stored.');
 };
 
 export const deleteInwardLog = async (id) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  fallbackInwardLogs = fallbackInwardLogs.filter(l => l.inward_id != id);
-  return { message: 'Deleted (local)' };
+  const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, { method: 'DELETE' });
+  return assertOk(res, 'Failed to delete inward log.');
 };
 
 export const updateInwardLog = async (id, formData) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, {
-      method: 'PUT',
-      body: formData
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  
-  // Local fallback entry mapping
-  const idx = fallbackInwardLogs.findIndex(l => l.inward_id == id);
-  if (idx !== -1) {
-    const updated = {
-      inward_id: id,
-      inward_entry_date: formData.get('inward_entry_date'),
-      inward_vehicle_no: formData.get('inward_vehicle_no'),
-      inward_client_name: formData.get('inward_client_name'),
-      inward_seal_no: formData.get('inward_seal_no'),
-      inward_vehicle_temp: formData.get('inward_vehicle_temp'),
-      inward_material_temp: formData.get('inward_material_temp'),
-      inward_transporter_name: formData.get('inward_transporter_name'),
-      inward_driver_name: formData.get('inward_driver_name'),
-      inward_driver_no: formData.get('inward_driver_no'),
-      inward_dock_no: formData.get('inward_dock_no'),
-      inward_vehicle_reporting_time: formData.get('inward_vehicle_reporting_time'),
-      inward_unloading_start_time: formData.get('inward_unloading_start_time'),
-      inward_unloading_duration_hours: formData.get('inward_unloading_duration_hours'),
-      inward_unloading_duration_mins: formData.get('inward_unloading_duration_mins'),
-      inward_unloading_end_time: formData.get('inward_unloading_end_time'),
-      inward_pallets_in_qty: formData.get('inward_pallets_in_qty') || 0,
-      inward_invoice_qty: formData.get('inward_invoice_qty') || 0,
-      inward_received_qty: formData.get('inward_received_qty') || 0,
-      inward_received_boxes_qty: formData.get('inward_received_boxes_qty') || 0,
-      inward_short_received_boxes_qty: formData.get('inward_short_received_boxes_qty') || 0,
-      inward_excess_received_boxes_qty: formData.get('inward_excess_received_boxes_qty') || 0,
-      inward_damage_received_boxes_qty: formData.get('inward_damage_received_boxes_qty') || 0,
-      inward_material_type: formData.get('inward_material_type'),
-      inward_unloading_supervisor_name: formData.get('inward_unloading_supervisor_name'),
-      inward_remarks: formData.get('inward_remarks')
-    };
-    fallbackInwardLogs[idx] = updated;
-  }
-  return { message: 'Updated (local)' };
+  const res = await fetch(`${API_BASE_URL}/inward-logs/${id}`, {
+    method: 'PUT',
+    body: formData
+  });
+  return assertOk(res, 'Failed to update inward log.');
 };
 
 /** POD-only update — no admin edit permission required. */
@@ -421,11 +364,7 @@ export const updateInwardPodPhoto = async (id, file) => {
     method: 'PUT',
     body: formData
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || data.message || `Failed to update POD photo (${res.status}).`);
-  }
-  return data;
+  return assertOk(res, `Failed to update POD photo (${res.status}).`);
 };
 
 export const updateOutwardPodPhoto = async (id, file) => {
@@ -435,18 +374,12 @@ export const updateOutwardPodPhoto = async (id, file) => {
     method: 'PUT',
     body: formData
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || data.message || `Failed to update POD photo (${res.status}).`);
-  }
-  return data;
+  return assertOk(res, `Failed to update POD photo (${res.status}).`);
 };
 
 // ====================================================================
 // Outward DO Logs APIs
 // ====================================================================
-let fallbackOutwardLogs = [];
-
 export const fetchOutwardLogs = async (search = '', options = {}) => {
   const params = {
     search: search || options.search || '',
@@ -456,252 +389,109 @@ export const fetchOutwardLogs = async (search = '', options = {}) => {
     toDate: options.toDate,
     warehouse: options.warehouse
   };
-  try {
-    const result = await fetchOutwardLogsPage(params);
-    if (options.paginated) return result;
-    return result.items;
-  } catch (err) {
-    if (options.paginated) throw err;
-  }
-  let list = [...fallbackOutwardLogs];
-  if (search) {
-    const q = search.toLowerCase();
-    list = list.filter(l => 
-      (l.outward_vehicle_no && l.outward_vehicle_no.toLowerCase().includes(q)) ||
-      (l.outward_client_name && l.outward_client_name.toLowerCase().includes(q))
-    );
-  }
-  return list;
+  const result = await fetchOutwardLogsPage(params);
+  if (options.paginated) return result;
+  return result.items;
 };
 
 export const addOutwardLog = async (formData) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/outward-logs`, {
-      method: 'POST',
-      body: formData
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  
-  // Local fallback entry mapping
-  const newLog = {
-    outward_id: Date.now(),
-    outward_entry_date: formData.get('outward_entry_date'),
-    outward_vehicle_no: formData.get('outward_vehicle_no'),
-    outward_client_name: formData.get('outward_client_name'),
-    outward_seal_no: formData.get('outward_seal_no'),
-    outward_vehicle_temp: formData.get('outward_vehicle_temp'),
-    outward_material_temp: formData.get('outward_material_temp'),
-    outward_transporter_name: formData.get('outward_transporter_name'),
-    outward_driver_name: formData.get('outward_driver_name'),
-    outward_driver_no: formData.get('outward_driver_no'),
-    outward_dock_no: formData.get('outward_dock_no'),
-    outward_vehicle_reporting_time: formData.get('outward_vehicle_reporting_time'),
-    outward_loading_start_time: formData.get('outward_loading_start_time'),
-    outward_loading_duration_hours: formData.get('outward_loading_duration_hours'),
-    outward_loading_duration_mins: formData.get('outward_loading_duration_mins'),
-    outward_loading_end_time: formData.get('outward_loading_end_time'),
-    outward_pallets_in_qty: formData.get('outward_pallets_in_qty') || 0,
-    outward_invoice_qty: formData.get('outward_invoice_qty') || 0,
-    outward_received_qty: formData.get('outward_received_qty') || 0,
-    outward_received_boxes_qty: formData.get('outward_received_boxes_qty') || 0,
-    outward_short_received_boxes_qty: formData.get('outward_short_received_boxes_qty') || 0,
-    outward_excess_received_boxes_qty: formData.get('outward_excess_received_boxes_qty') || 0,
-    outward_damage_received_boxes_qty: formData.get('outward_damage_received_boxes_qty') || 0,
-    outward_material_type: formData.get('outward_material_type'),
-    outward_loading_supervisor_name: formData.get('outward_loading_supervisor_name'),
-    outward_remarks: formData.get('outward_remarks'),
-    outward_vehicle_back_side_photo: formData.get('outward_vehicle_back_side_photo'),
-    outward_vehicle_back_side_photo_with_material: formData.get('outward_vehicle_back_side_photo_with_material'),
-    outward_count_sheet_photo: formData.get('outward_count_sheet_photo')
-  };
-  fallbackOutwardLogs.unshift(newLog);
-  return { id: newLog.outward_id, message: 'Saved (local)' };
+  const res = await fetch(`${API_BASE_URL}/outward-logs`, {
+    method: 'POST',
+    body: formData
+  });
+  return assertOk(res, 'Failed to save outward log. Data was not stored.');
 };
 
 export const deleteOutwardLog = async (id) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/outward-logs/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  fallbackOutwardLogs = fallbackOutwardLogs.filter(l => l.outward_id != id);
-  return { message: 'Deleted (local)' };
+  const res = await fetch(`${API_BASE_URL}/outward-logs/${id}`, { method: 'DELETE' });
+  return assertOk(res, 'Failed to delete outward log.');
 };
 
 export const updateOutwardLog = async (id, formData) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/outward-logs/${id}`, {
-      method: 'PUT',
-      body: formData
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  
-  // Local fallback entry mapping
-  const idx = fallbackOutwardLogs.findIndex(l => l.outward_id == id);
-  if (idx !== -1) {
-    const updated = {
-      outward_id: id,
-      outward_entry_date: formData.get('outward_entry_date'),
-      outward_vehicle_no: formData.get('outward_vehicle_no'),
-      outward_client_name: formData.get('outward_client_name'),
-      outward_seal_no: formData.get('outward_seal_no'),
-      outward_vehicle_temp: formData.get('outward_vehicle_temp'),
-      outward_material_temp: formData.get('outward_material_temp'),
-      outward_transporter_name: formData.get('outward_transporter_name'),
-      outward_driver_name: formData.get('outward_driver_name'),
-      outward_driver_no: formData.get('outward_driver_no'),
-      outward_dock_no: formData.get('outward_dock_no'),
-      outward_vehicle_reporting_time: formData.get('outward_vehicle_reporting_time'),
-      outward_loading_start_time: formData.get('outward_loading_start_time'),
-      outward_loading_duration_hours: formData.get('outward_loading_duration_hours'),
-      outward_loading_duration_mins: formData.get('outward_loading_duration_mins'),
-      outward_loading_end_time: formData.get('outward_loading_end_time'),
-      outward_pallets_in_qty: formData.get('outward_pallets_in_qty') || 0,
-      outward_invoice_qty: formData.get('outward_invoice_qty') || 0,
-      outward_received_qty: formData.get('outward_received_qty') || 0,
-      outward_received_boxes_qty: formData.get('outward_received_boxes_qty') || 0,
-      outward_short_received_boxes_qty: formData.get('outward_short_received_boxes_qty') || 0,
-      outward_excess_received_boxes_qty: formData.get('outward_excess_received_boxes_qty') || 0,
-      outward_damage_received_boxes_qty: formData.get('outward_damage_received_boxes_qty') || 0,
-      outward_material_type: formData.get('outward_material_type'),
-      outward_loading_supervisor_name: formData.get('outward_loading_supervisor_name'),
-      outward_remarks: formData.get('outward_remarks')
-    };
-    fallbackOutwardLogs[idx] = updated;
-  }
-  return { message: 'Updated (local)' };
+  const res = await fetch(`${API_BASE_URL}/outward-logs/${id}`, {
+    method: 'PUT',
+    body: formData
+  });
+  return assertOk(res, 'Failed to update outward log.');
 };
 
 // ====================================================================
 // 2. Legacy Inward & Outward DO Logs APIs
 // ====================================================================
-let fallbackTempLogs = [];
-
 export const fetchTempLogs = async (type = 'All', search = '') => {
-  try {
-    const query = `?type=${encodeURIComponent(type)}&search=${encodeURIComponent(search)}`;
-    const res = await fetch(`${API_BASE_URL}/temp-logs${query}`);
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  let res = [...fallbackTempLogs];
-  if (type && type !== 'All') {
-    res = res.filter(l => l.entry_type === type);
-  }
-  if (search) {
-    const q = search.toLowerCase();
-    res = res.filter(l => 
-      (l.container_number && l.container_number.toLowerCase().includes(q)) ||
-      (l.client_name && l.client_name.toLowerCase().includes(q))
-    );
-  }
-  return res;
+  const query = `?type=${encodeURIComponent(type)}&search=${encodeURIComponent(search)}`;
+  const res = await fetch(`${API_BASE_URL}/temp-logs${query}`);
+  return assertOk(res, 'Failed to fetch temperature logs.');
 };
 
 export const addTempLog = async (logData) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/temp-logs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(logData)
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  const newLog = { id: Date.now(), ...logData, created_at: new Date().toISOString() };
-  fallbackTempLogs.unshift(newLog);
-  return { id: newLog.id, message: 'Saved (local)', success: true };
+  const res = await fetch(`${API_BASE_URL}/temp-logs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(logData)
+  });
+  return assertOk(res, 'Failed to save temperature log. Data was not stored.');
 };
 
 export const createTempLog = addTempLog;
 
 export const deleteTempLog = async (id) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/temp-logs/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  fallbackTempLogs = fallbackTempLogs.filter(l => l.id != id);
-  return { message: 'Deleted (local)' };
+  const res = await fetch(`${API_BASE_URL}/temp-logs/${id}`, { method: 'DELETE' });
+  return assertOk(res, 'Failed to delete temperature log.');
 };
 
 // ====================================================================
 // 3. Sales Leads APIs
 // ====================================================================
-let fallbackLeads = [];
-
 export const fetchLeads = async () => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/leads`);
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  return fallbackLeads;
+  const res = await fetch(`${API_BASE_URL}/leads`);
+  return assertOk(res, 'Failed to fetch leads.');
 };
 
 export const addLead = async (leadData) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/leads`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(leadData)
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  const newLead = { id: Date.now(), ...leadData, status: 'New', created_at: new Date().toISOString() };
-  fallbackLeads.unshift(newLead);
-  return { id: newLead.id, message: 'Saved (local)' };
+  const res = await fetch(`${API_BASE_URL}/leads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(leadData)
+  });
+  return assertOk(res, 'Failed to save lead. Data was not stored.');
 };
 
 export const createLead = addLead;
 
 export const updateLeadStatus = async (id, status) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/leads/${id}/status`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  const lead = fallbackLeads.find(l => l.id == id);
-  if (lead) lead.status = status;
-  return { message: 'Updated (local)' };
+  const res = await fetch(`${API_BASE_URL}/leads/${id}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  return assertOk(res, 'Failed to update lead status.');
 };
 
 export const updateLead = async (id, data) => {
   if (typeof data === 'string') {
     return updateLeadStatus(id, data);
   }
-  const lead = fallbackLeads.find(l => l.id == id);
-  if (lead) Object.assign(lead, data);
-  return { message: 'Updated (local)' };
+  const res = await fetch(`${API_BASE_URL}/leads/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  return assertOk(res, 'Failed to update lead.');
 };
 
 export const deleteLead = async (id) => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/leads/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (err) {}
-  fallbackLeads = fallbackLeads.filter(l => l.id != id);
-  return { message: 'Deleted (local)' };
+  const res = await fetch(`${API_BASE_URL}/leads/${id}`, { method: 'DELETE' });
+  return assertOk(res, 'Failed to delete lead.');
 };
 
 // ====================================================================
 // 4. Sales Dashboard Summary APIs
 // ====================================================================
 export const fetchDashboardStats = async () => {
-  try {
-    const res = await fetch(`${API_BASE_URL}/dashboard`);
-    if (res.ok) {
-      const data = await res.json();
-      return data.stats || data;
-    }
-  } catch (err) {}
-  return {
-    totalLeads: fallbackLeads.length,
-    newLeads: fallbackLeads.filter(l => l.status === 'New').length,
-    inProgress: fallbackLeads.filter(l => l.status === 'In-Progress' || l.status === 'Contacted').length,
-    wonLeads: fallbackLeads.filter(l => l.status === 'Won').length,
-    recentLeads: fallbackLeads.slice(0, 5)
-  };
+  const res = await fetch(`${API_BASE_URL}/dashboard`);
+  const data = await assertOk(res, 'Failed to fetch dashboard stats.');
+  return data.stats || data;
 };
 
 export const fetchInventoryReconciliation = async ({ search, warehouse } = {}) => {
@@ -848,6 +638,52 @@ export const deleteSubAdmin = async (id) => {
   return await res.json();
 };
 
+// ====================================================================
+// Mobile Sub-Admin CRUD (full app access — Super Admin only)
+// ====================================================================
+export const fetchAppSubAdmins = async () => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins`);
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to fetch Sub-Admins.'));
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+};
+
+export const createAppSubAdmin = async (data) => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to create Sub-Admin.'));
+  }
+  return await res.json();
+};
+
+export const updateAppSubAdmin = async (id, data) => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to update Sub-Admin.'));
+  }
+  return await res.json();
+};
+
+export const deleteAppSubAdmin = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/sub-admins/${id}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to delete Sub-Admin.'));
+  }
+  return await res.json();
+};
+
 export const fetchAccessScopeOptions = async () => {
   const res = await fetch(`${API_BASE_URL}/dashboard/access-options`);
   if (!res.ok) {
@@ -891,6 +727,63 @@ export const updateCustomerReportStatus = async (id, status) => {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.error || 'Failed to update report status.');
+  }
+  return data;
+};
+
+export const deleteCustomerReport = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/customer-reports/${id}`, {
+    method: 'DELETE'
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to delete report.');
+  }
+  return data;
+};
+
+export const fetchCustomerNoteThreads = async () => {
+  const res = await fetch(`${API_BASE_URL}/customer-notes/threads`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to fetch note threads.');
+  }
+  return Array.isArray(data.items) ? data.items : [];
+};
+
+export const fetchCustomerNotes = async ({ customer_email = '', search = '' } = {}) => {
+  const qs = new URLSearchParams();
+  if (customer_email) qs.set('customer_email', customer_email);
+  if (search) qs.set('search', search);
+  const query = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await fetch(`${API_BASE_URL}/customer-notes${query}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to fetch notes.');
+  }
+  return Array.isArray(data.items) ? data.items : [];
+};
+
+export const postCustomerNote = async ({ customer_email, message, broadcast = false } = {}) => {
+  const res = await fetch(`${API_BASE_URL}/customer-notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customer_email, message, broadcast })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to send note.');
+  }
+  return data;
+};
+
+export const deleteCustomerNote = async (id) => {
+  const res = await fetch(`${API_BASE_URL}/customer-notes/${id}`, {
+    method: 'DELETE'
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to delete note.');
   }
   return data;
 };

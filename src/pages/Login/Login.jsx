@@ -7,7 +7,7 @@
 import React, { useState } from 'react';
 import { Lock, Mail, ShieldAlert, Loader2, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
-import { API_BASE_URL } from '../../services/api';
+import { API_BASE_URL, setAuthToken } from '../../services/api';
 import './Login.css';
 
 export default function Login({ onLoginSuccess }) {
@@ -42,35 +42,56 @@ export default function Login({ onLoginSuccess }) {
         })
       });
 
-      const data = await response.json();
+      const raw = await response.text();
+      let data = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        setErrorMsg(
+          response.status >= 500
+            ? 'Server error during login. Check backend is running on port 5000.'
+            : 'Login failed: unexpected server response.'
+        );
+        return;
+      }
 
       if (response.ok && data.success) {
-        // Save user session details locally (normalize legacy role)
-        const sessionUser =
-          data.user?.role === 'sub_admin'
-            ? { ...data.user, role: 'customer' }
-            : data.user;
+        const sessionUser = data.user;
+        const role = sessionUser?.role;
+
+        // Mobile-only roles cannot use the web portal
+        if (role === 'sub_admin' || role === 'do_operator' || role === 'customer') {
+          setErrorMsg(
+            role === 'sub_admin'
+              ? 'Sub-Admin accounts use the mobile app only.'
+              : role === 'customer'
+                ? 'Customer accounts use the mobile app only.'
+                : 'Data Operator accounts use the mobile app only.'
+          );
+          return;
+        }
+
+        if (role !== 'super_admin') {
+          setErrorMsg('Access Denied: Invalid account role for this portal.');
+          return;
+        }
+
+        // Fresh token first — prevents stale cookie from kicking the session out
+        if (data.token) setAuthToken(data.token);
         localStorage.setItem('user', JSON.stringify(sessionUser));
-        
-        // Notify parent application of successful login
+
         if (onLoginSuccess) {
           onLoginSuccess(sessionUser);
         }
-        if (sessionUser?.role === 'customer') {
-          window.history.replaceState({}, '', '/customer');
-        } else if (sessionUser?.role === 'super_admin') {
-          window.history.replaceState({}, '', '/admin');
-        } else if (sessionUser?.role === 'do_operator') {
-          window.history.replaceState({}, '', '/do-operator');
-        }
+        window.history.replaceState({}, '', '/admin');
       } else if (data.locked || response.status === 429) {
         setErrorMsg(data.message || 'Account temporarily locked after too many failed attempts.');
       } else {
-        setErrorMsg(data.message || 'Login failed. Please verify credentials and role.');
+        setErrorMsg(data.message || data.error || 'Login failed. Please verify your email and password.');
       }
     } catch (err) {
       console.error('Login error:', err);
-      setErrorMsg('Network error: Unable to connect to authorization server.');
+      setErrorMsg('Network error: Unable to connect to authorization server. Is backend running?');
     } finally {
       setLoading(false);
     }

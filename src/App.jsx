@@ -9,7 +9,7 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 import Login from './pages/Login/Login';
 import Logo from './components/Logo/Logo';
-import { API_BASE_URL, fetchPermissionRequests } from './services/api';
+import { API_BASE_URL, clearAuthSession, fetchPermissionRequests } from './services/api';
 import './App.css';
 import './styles/shell-layout.css';
 
@@ -40,9 +40,14 @@ export default function App() {
   const [user, setUser] = useState(() => {
     try {
       const parsed = JSON.parse(localStorage.getItem('user')) || null;
-      if (parsed?.role === 'sub_admin') {
-        parsed.role = 'customer';
-        localStorage.setItem('user', JSON.stringify(parsed));
+      // Web is Super Admin only — clear mobile-role sessions from localStorage
+      if (
+        parsed?.role === 'sub_admin' ||
+        parsed?.role === 'customer' ||
+        parsed?.role === 'do_operator'
+      ) {
+        clearAuthSession();
+        return null;
       }
       return parsed;
     } catch (e) {
@@ -51,7 +56,7 @@ export default function App() {
   });
 
   const getWindowFromURL = () => {
-    const role = user?.role === 'sub_admin' ? 'customer' : user?.role;
+    const role = user?.role;
     if (user && role === 'do_operator') return 'do_window';
     if (user && role === 'customer') return 'customer';
     const path = window.location.pathname.toLowerCase();
@@ -72,7 +77,7 @@ export default function App() {
   const [hasDoNotifAlert, setHasDoNotifAlert] = useState(false);
 
   useEffect(() => {
-    const role = user?.role === 'sub_admin' ? 'customer' : user?.role;
+    const role = user?.role;
     if (user && role === 'do_operator' && selectedWindow !== 'do_window') {
       setSelectedWindow('do_window');
       window.history.pushState({}, '', '/do-operator');
@@ -89,7 +94,7 @@ export default function App() {
 
   useEffect(() => {
     const handleSessionExpired = () => {
-      localStorage.removeItem('user');
+      clearAuthSession();
       setUser(null);
       setSelectedWindow('portal_entry');
       window.history.pushState({}, '', '/');
@@ -147,7 +152,7 @@ export default function App() {
   }, [user?.role, selectedWindow, activeDOMenu]);
 
   const navigateToWindow = (win) => {
-    const role = user?.role === 'sub_admin' ? 'customer' : user?.role;
+    const role = user?.role;
     if (user && role === 'do_operator' && win !== 'do_window') return;
     if (user && role === 'customer' && win !== 'customer') return;
     setSelectedWindow(win);
@@ -164,7 +169,7 @@ export default function App() {
     } catch (err) {
       console.error('Logout error:', err);
     }
-    localStorage.removeItem('user');
+    clearAuthSession();
     setUser(null);
     setSelectedWindow('portal_entry');
     window.history.pushState({}, '', '/');
@@ -245,7 +250,7 @@ export default function App() {
           <Logo />
           <h2 style={{ marginTop: '24px', fontSize: '1.5rem', fontWeight: 800, color: '#0f172a' }}>Mobile Access Required</h2>
           <p style={{ marginTop: '8px', color: '#475569', fontSize: '0.9rem', maxWidth: '400px', lineHeight: 1.5 }}>
-            Data Operators and Customers must log in using the official **ReeferON Mobile Application**.
+            DO, Customer, and Sub-Admin accounts must log in using the ReeferON mobile app.
           </p>
           <button 
             onClick={handleLogout}
