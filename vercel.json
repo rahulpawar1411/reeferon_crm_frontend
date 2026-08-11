@@ -1,4 +1,16 @@
 {
+  "redirects": [
+    {
+      "source": "/https:/:path*",
+      "destination": "https://:path*",
+      "permanent": false
+    },
+    {
+      "source": "/http:/:path*",
+      "destination": "http://:path*",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",
