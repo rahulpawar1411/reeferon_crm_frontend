@@ -1176,9 +1176,8 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Download Button */}
             <a 
-              href={lightboxImg} 
+              href={lightboxImg && lightboxImg.includes('res.cloudinary.com') ? lightboxImg.replace('/upload/', '/upload/fl_attachment/') : lightboxImg} 
               download={`DO_Audit_Attachment_${new Date().getTime()}.png`}
               title="Download Photo"
               style={{

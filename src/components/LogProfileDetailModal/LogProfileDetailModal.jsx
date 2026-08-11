@@ -419,7 +419,7 @@ export default function LogProfileDetailModal({
         role="presentation"
       >
         <a
-          href={lightboxImg}
+          href={lightboxImg && lightboxImg.includes('res.cloudinary.com') ? lightboxImg.replace('/upload/', '/upload/fl_attachment/') : lightboxImg}
           download={`Audit_${Date.now()}.jpg`}
           title="Download"
           className="lightbox-download-btn"

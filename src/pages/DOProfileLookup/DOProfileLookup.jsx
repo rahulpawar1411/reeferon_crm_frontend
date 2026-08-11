@@ -1054,7 +1054,7 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
             onClick={(e) => e.stopPropagation()}
           >
             <a 
-              href={lightboxImg} 
+              href={lightboxImg && lightboxImg.includes('res.cloudinary.com') ? lightboxImg.replace('/upload/', '/upload/fl_attachment/') : lightboxImg} 
               download={`DO_Lookup_Attachment_${new Date().getTime()}.png`}
               title="Download Photo"
               style={{
