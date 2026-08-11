@@ -59,6 +59,6 @@ export function formatQty(val) {
 export function resolveImageSrc(path) {
   if (!path || !String(path).trim()) return null;
   const p = String(path).trim();
-  if (p.startsWith('data:')) return p;
+  if (p.startsWith('data:') || /^https?:\/\//i.test(p)) return p;
   return p.startsWith('/') ? p : `/${p}`;
 }

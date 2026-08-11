@@ -6599,9 +6599,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       ))) ? (
                       <div className="profile-photo-grid">
                         {searchedRecordType === 'daily' && searchedRecord.temp_sensor_image && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.temp_sensor_image.startsWith('data:') ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(searchedRecord.temp_sensor_image) ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`)}>
                             <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.temp_sensor_image.startsWith('data:') ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`} alt="Temp Sensor" />
+                              <img src={searchedRecord.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(searchedRecord.temp_sensor_image) ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`} alt="Temp Sensor" />
                             </div>
                             <div className="profile-photo-label">Temp Sensor</div>
                           </div>
@@ -9980,11 +9980,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     selectedDetailLog.outward_damage_boxes_photo
                   ))) ? (
                   <div className="profile-photo-grid">
-                    {/* Render Chamber Logs Photo */}
                     {detailType === 'daily' && selectedDetailLog.temp_sensor_image && (
-                      <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.temp_sensor_image.startsWith('data:') ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`)}>
+                      <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(selectedDetailLog.temp_sensor_image) ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`)}>
                         <div className="profile-photo-wrapper">
-                          <img src={selectedDetailLog.temp_sensor_image.startsWith('data:') ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`} alt="Temp Sensor" />
+                          <img src={selectedDetailLog.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(selectedDetailLog.temp_sensor_image) ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`} alt="Temp Sensor" />
                         </div>
                         <div className="profile-photo-label">Temp Sensor</div>
                       </div>
