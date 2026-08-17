@@ -9,7 +9,8 @@ import {
   ShieldCheck, Clock, LogOut, Database, Lock,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
   Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard,
-  Copy, Check, Loader2, CheckCircle, MessageSquareWarning, MessageSquare, Smartphone, Package, Users, LayoutGrid
+  Copy, Check, Loader2, CheckCircle, MessageSquareWarning, MessageSquare, Smartphone, Package, Users, LayoutGrid,
+  ChevronDown, ChevronUp, Plus, ArrowLeft
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
 import PaginationBar from '../../components/PaginationBar/PaginationBar';
@@ -19,7 +20,7 @@ import {
   fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
   fetchRecordPermissionHistory,
   fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats,
-  fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs,
+  fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs, fetchAllLogPages,
   deleteChamberLog, deleteInwardLog, deleteOutwardLog,
   toApiDateParam,
   fetchSubAdmins, createSubAdmin, updateSubAdmin, deleteSubAdmin, fetchAccessScopeOptions,
@@ -28,7 +29,9 @@ import {
   fetchCustomerNoteThreads, fetchCustomerNotes, postCustomerNote, deleteCustomerNote,
   fetchDailyInspections, deleteDailyInspection,
   fetchInventoryReconciliation, fetchInventoryFilterOptions, fetchDailyInventoryDeltas,
-  fetchAppSubAdmins, createAppSubAdmin, deleteAppSubAdmin
+  fetchAppSubAdmins, createAppSubAdmin, deleteAppSubAdmin,
+  fetchChamberAssignments, addChamberAssignment, deleteChamberAssignment,
+  fetchChambers, updateChamber
 } from '../../services/api';
 import {
   requireExportDates,
@@ -38,8 +41,18 @@ import {
   getExportErrorMessage,
   isRetryableExportError
 } from '../../utils/exportCsv';
+import {
+  formatPhotoCaptureMetadataForExport,
+  formatPhotoGpsForExport,
+} from '../../utils/photoCaptureExport';
 import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
 import LoadErrorBanner from '../../components/LoadErrorBanner/LoadErrorBanner';
+import {
+  computeDoTaskStatus,
+  getActiveOperatorAssignments,
+  getDefaultOpTaskRange,
+  localDateStr
+} from '../../utils/doTaskStatus';
 import '../../components/DOSidebar/DOSidebar.css';
 import './SuperAdminSecureWindow.css';
 
@@ -69,27 +82,370 @@ const highlightAddedDeletedWords = (text, extraNodes = null) => {
   );
 };
 
+const chamberNumberFromName = (name) => {
+  const m = String(name || '').match(/^Chamber\s+(\d+)$/i);
+  if (m) return parseInt(m[1], 10);
+  const any = String(name || '').match(/(\d+)/);
+  return any ? parseInt(any[1], 10) : null;
+};
+
+const isDeactiveAssignment = (row) =>
+  String(row?.status || 'active').trim().toLowerCase() === 'inactive';
+
+const assignmentClientKey = (row) =>
+  `${row?.chamber_id ?? ''}|${String(row?.client_name || '').trim().toLowerCase()}`;
+
+const uniqueClientsByName = (list) => {
+  const seen = new Set();
+  const out = [];
+  (list || []).forEach((row) => {
+    const key = String(row?.client_name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(row);
+  });
+  return out;
+};
+
+const resolveChamberIdFromList = (rows, chamberId, chamberName) => {
+  const list = Array.isArray(rows) ? rows : [];
+  const wantName = String(chamberName || '').trim().toLowerCase();
+  if (wantName) {
+    const byName = list.find((c) => String(c.name || c.chamber_name || '').trim().toLowerCase() === wantName);
+    if (byName?.id) return byName.id;
+  }
+  const wantNum = chamberNumberFromName(chamberName) || Number(chamberId);
+  if (Number.isFinite(wantNum)) {
+    const byNum = list.find((c) => chamberNumberFromName(c.name || c.chamber_name) === wantNum);
+    if (byNum?.id) return byNum.id;
+  }
+  const byId = list.find((c) => Number(c.id) === Number(chamberId));
+  if (byId?.id) return byId.id;
+  return chamberId;
+};
+
+const toLocalTenDigitPhone = (value) => {
+  let digits = String(value || '').replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length > 10) {
+    digits = digits.slice(2);
+  }
+  return digits.slice(0, 10);
+};
+
+const toStoredIndiaPhone = (value) => {
+  const local = toLocalTenDigitPhone(value);
+  return local.length === 10 ? `+91${local}` : local;
+};
+
+const formatIndiaPhoneDisplay = (value) => {
+  const local = toLocalTenDigitPhone(value);
+  if (!local) return '—';
+  return local.length === 10 ? `+91 ${local}` : local;
+};
+
+/** One row per chamber + client. Active wins over deactive; later row fills gaps. */
+const dedupeChamberAssignments = (rows) => {
+  const map = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!row) return;
+    const key = assignmentClientKey(row);
+    if (key.endsWith('|')) return;
+    const nextInactive = isDeactiveAssignment(row);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, row);
+      return;
+    }
+    const prevInactive = isDeactiveAssignment(prev);
+    if (prevInactive && !nextInactive) {
+      map.set(key, row);
+      return;
+    }
+    if (!prevInactive && nextInactive) return;
+    const prevWh = String(prev.warehouse_name || '').trim();
+    const nextWh = String(row.warehouse_name || '').trim();
+    if (!prevWh && nextWh) map.set(key, row);
+  });
+  return Array.from(map.values());
+};
+
+/** Pending DO permission rows Super Admin can approve/deny (excludes notify-only types). */
+const filterActionablePendingPermissionRequests = (
+  requests,
+  warehouseMap = {},
+  warehouseFilter = 'All'
+) => {
+  const pending = (requests || []).filter((pr) => pr?.status === 'Pending');
+  return pending
+    .filter((pr) => {
+      if (pr.record_type === 'ClientMaster' || pr.record_type === 'MasterSetup') return false;
+      if (pr.record_type === 'DO_CHANGE' || pr.record_type === 'activity') return false;
+      if (warehouseFilter === 'All') return true;
+      const operatorEmail = pr.operator_email ? pr.operator_email.toLowerCase() : '';
+      const wh = warehouseMap[operatorEmail];
+      if (warehouseFilter === 'System/Admin') return !wh || operatorEmail === 'system';
+      return wh === warehouseFilter;
+    })
+    .filter((pr, idx, list) => {
+      const key = `${String(pr.operator_email || '').toLowerCase()}|${pr.record_type}|${pr.record_id}|${pr.raw_action || ''}`;
+      return list.findIndex((other) => (
+        `${String(other.operator_email || '').toLowerCase()}|${other.record_type}|${other.record_id}|${other.raw_action || ''}` === key
+      )) === idx;
+    });
+};
+
+const MASTER_SETUP_ACTIONS = new Set([
+  'MASTER_SETUP',
+  'ADD_CLIENT',
+  'DELETE_CLIENT',
+  'UPDATE_CLIENT',
+  'ADD_CHAMBER',
+  'DELETE_CHAMBER',
+  'UPDATE_CHAMBER',
+  'UPDATE_CHAMBER_ZONE'
+]);
+
+const splitCsvNames = (value) =>
+  String(value || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const quotedMatch = (text, regex) => {
+  const match = String(text || '').match(regex);
+  return match ? String(match[1] || '').trim() : '';
+};
+
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const parseMasterActivity = (act) => {
+  const action = String(act?.action || '').toUpperCase();
+  const desc = String(act?.description || '');
+  const remarkFromDesc = (desc.match(/(?:Remark|Remarks?)\s*:\s*(.+)$/im) || [])[1];
+  const remark = String(act?.remark || remarkFromDesc || '').trim();
+  const titles = {
+    MASTER_SETUP: 'Master Setup saved',
+    ADD_CLIENT: 'Client added',
+    DELETE_CLIENT: 'Client deactivated',
+    UPDATE_CLIENT: 'Client renamed',
+    ADD_CHAMBER: 'Chamber added',
+    DELETE_CHAMBER: 'Chamber deleted',
+    UPDATE_CHAMBER: 'Chamber updated',
+    UPDATE_CHAMBER_ZONE: 'Chamber type changed'
+  };
+
+  const added = [];
+  const deleted = [];
+  const renamed = [];
+  let typeFrom = quotedMatch(desc, /Chamber type:\s*([A-Za-z]+)\s*→/i);
+  let typeTo =
+    quotedMatch(desc, /Chamber type:\s*[A-Za-z]+\s*→\s*([A-Za-z]+)/i) ||
+    quotedMatch(desc, /updated to "([^"]+)"/i) ||
+    quotedMatch(desc, /to "([^"]+)"/i);
+
+  const addedBlock = desc.match(/Client added:\s*([^.]+)/i);
+  if (addedBlock) added.push(...splitCsvNames(addedBlock[1]));
+  const deletedBlock = desc.match(/Client deleted:\s*([^.]+)/i);
+  if (deletedBlock) deleted.push(...splitCsvNames(deletedBlock[1]));
+  const renamedBlock = desc.match(/Client renamed:\s*([^.]+)/i);
+  if (renamedBlock) {
+    renamedBlock[1].split(',').forEach((chunk) => {
+      const pair = String(chunk).match(/(.+?)\s*(?:→|->)\s*(.+)/);
+      if (pair) renamed.push({ from: pair[1].trim(), to: pair[2].trim() });
+    });
+  }
+
+  if (action === 'ADD_CLIENT') {
+    const name = quotedMatch(desc, /Added client "([^"]+)"/i);
+    if (name && !added.includes(name)) added.push(name);
+    typeTo = typeTo || quotedMatch(desc, /Added client "[^"]+"\s*\(([^)]+)\)/i);
+  }
+  if (action === 'DELETE_CLIENT') {
+    const name = quotedMatch(desc, /deleted client(?: master)? "([^"]+)"/i);
+    if (name && !deleted.includes(name)) deleted.push(name);
+  }
+  if (action === 'UPDATE_CLIENT') {
+    const pair = desc.match(/edited client master "([^"]+)"\s*(?:→|->)\s*"([^"]+)"/i);
+    if (pair) renamed.push({ from: pair[1].trim(), to: pair[2].trim() });
+  }
+
+  const chamber =
+    quotedMatch(desc, /saved Master Setup for ([^.]+?)(?:\.|$)/i) ||
+    quotedMatch(desc, /\bto (Chamber\s+\d+)/i) ||
+    quotedMatch(desc, /\bon (Chamber\s+\d+)/i) ||
+    quotedMatch(desc, /\bfrom (Chamber\s+\d+)/i) ||
+    quotedMatch(desc, /deleted chamber "([^"]+)"/i) ||
+    quotedMatch(desc, /(?:ADD|added) chamber "([^"]+)"/i) ||
+    quotedMatch(desc, /temperature zone of (Chamber\s+\d+)/i) ||
+    quotedMatch(desc, /chamber type of (Chamber\s+\d+)/i);
+
+  return {
+    action,
+    title: titles[action] || action.replace(/_/g, ' '),
+    chamber: chamber.replace(/\s+only$/i, '').trim(),
+    added,
+    deleted,
+    renamed,
+    typeFrom,
+    typeTo,
+    remark,
+    when: act?.created_at || null,
+    summary: desc
+  };
+};
+
+const pickMasterSetupTimeline = (items) => {
+  const rows = Array.isArray(items) ? items : [];
+  const setupTimes = rows
+    .filter((row) => String(row?.action || '').toUpperCase() === 'MASTER_SETUP')
+    .map((row) => new Date(row.created_at).getTime())
+    .filter((time) => Number.isFinite(time));
+  const batchActions = new Set(['ADD_CLIENT', 'DELETE_CLIENT', 'UPDATE_CLIENT']);
+
+  return rows.filter((row) => {
+    const action = String(row?.action || '').toUpperCase();
+    if (!MASTER_SETUP_ACTIONS.has(action)) return false;
+    if (!batchActions.has(action)) return true;
+    const time = new Date(row.created_at).getTime();
+    if (!Number.isFinite(time)) return true;
+    return !setupTimes.some((setupTime) => Math.abs(setupTime - time) <= 45000);
+  }).sort((a, b) => {
+    const timeB = new Date(b?.created_at).getTime() || 0;
+    const timeA = new Date(a?.created_at).getTime() || 0;
+    if (timeB !== timeA) return timeB - timeA;
+    return Number(b?.id || 0) - Number(a?.id || 0);
+  });
+};
+
+const activitiesForOperatorEmail = (items, email) => {
+  const target = normalizeEmail(email);
+  if (!target) return [];
+  return pickMasterSetupTimeline(items).filter(
+    (row) => normalizeEmail(row.operator_email) === target
+  );
+};
+
+const MASTER_ACTIVITY_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'added', label: 'Client added' },
+  { id: 'removed', label: 'Client removed' },
+  { id: 'renamed', label: 'Client renamed' },
+  { id: 'type', label: 'Type change' },
+  { id: 'chamber', label: 'Chamber' }
+];
+const OP_MASTER_ACTIVITY_PAGE_SIZE = 20;
+
+const masterActivityMatchesFilter = (act, filterId) => {
+  if (!filterId || filterId === 'all') return true;
+  const parsed = parseMasterActivity(act);
+  const action = parsed.action;
+  if (filterId === 'added') return parsed.added.length > 0 || action === 'ADD_CLIENT';
+  if (filterId === 'removed') return parsed.deleted.length > 0 || action === 'DELETE_CLIENT';
+  if (filterId === 'renamed') return parsed.renamed.length > 0 || action === 'UPDATE_CLIENT';
+  if (filterId === 'type') return Boolean(parsed.typeFrom || parsed.typeTo) || action === 'UPDATE_CHAMBER_ZONE';
+  if (filterId === 'chamber') return action === 'ADD_CHAMBER' || action === 'DELETE_CHAMBER' || action === 'UPDATE_CHAMBER';
+  return true;
+};
+
+const masterActivityTone = (action) => {
+  if (action === 'ADD_CLIENT' || action === 'ADD_CHAMBER' || action === 'MASTER_SETUP') {
+    return { color: '#047857', bg: '#d1fae5', border: '#a7f3d0' };
+  }
+  if (action === 'DELETE_CLIENT' || action === 'DELETE_CHAMBER') {
+    return { color: '#b91c1c', bg: '#fee2e2', border: '#fecaca' };
+  }
+  if (action === 'UPDATE_CLIENT' || action === 'UPDATE_CHAMBER' || action === 'UPDATE_CHAMBER_ZONE') {
+    return { color: '#a16207', bg: '#fef9c3', border: '#fde68a' };
+  }
+  return { color: '#1d4ed8', bg: '#dbeafe', border: '#bfdbfe' };
+};
+
+const renderMasterActivityStructured = (act, { compact = false } = {}) => {
+  const parsed = parseMasterActivity(act);
+  const tone = masterActivityTone(parsed.action);
+  const timeLabel = parsed.when
+    ? new Date(parsed.when).toLocaleString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      })
+    : '';
+  const chip = (label, value, color, bg) => (
+    <div key={label} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: compact ? '0.72rem' : '0.78rem' }}>
+      <span style={{ minWidth: compact ? 64 : 76, fontWeight: 800, color, background: bg, padding: '1px 6px', borderRadius: 999, fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.03em', marginTop: 1 }}>
+        {label}
+      </span>
+      <span style={{ color: '#334155', fontWeight: 600, lineHeight: 1.45 }}>{value}</span>
+    </div>
+  );
+  const rows = [];
+  if (parsed.added.length) rows.push(chip('Added', parsed.added.join(', '), '#047857', '#dcfce7'));
+  if (parsed.deleted.length) rows.push(chip('Removed', parsed.deleted.join(', '), '#b91c1c', '#fee2e2'));
+  if (parsed.renamed.length) {
+    rows.push(chip(
+      'Renamed',
+      parsed.renamed.map((item) => `${item.from} → ${item.to}`).join(', '),
+      '#a16207',
+      '#fef9c3'
+    ));
+  }
+  if (parsed.typeFrom || parsed.typeTo) {
+    rows.push(chip('Type', parsed.typeFrom && parsed.typeTo ? `${parsed.typeFrom} → ${parsed.typeTo}` : parsed.typeTo || parsed.typeFrom, '#1d4ed8', '#dbeafe'));
+  }
+  if (parsed.remark) rows.push(chip('Remark', parsed.remark, '#0f766e', '#ccfbf1'));
+  if (!rows.length && parsed.summary) {
+    rows.push(
+      <div key="summary" style={{ fontSize: compact ? '0.72rem' : '0.78rem', color: '#475569', lineHeight: 1.45 }}>
+        {highlightAddedDeletedWords(parsed.summary)}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 6 : 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 999,
+            fontSize: '0.64rem',
+            fontWeight: 800,
+            color: tone.color,
+            backgroundColor: tone.bg,
+            textTransform: 'uppercase'
+          }}>
+            {parsed.title}
+          </span>
+          {parsed.chamber ? (
+            <span style={{ fontSize: compact ? '0.76rem' : '0.82rem', fontWeight: 800, color: '#0f172a' }}>
+              {parsed.chamber}
+            </span>
+          ) : null}
+        </div>
+        {timeLabel && !compact ? (
+          <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600 }}>{timeLabel}</span>
+        ) : null}
+      </div>
+      {rows}
+    </div>
+  );
+};
+
 export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate }) {
   const [time, setTime] = useState(new Date());
   const [activeMenu, setActiveMenu] = useState(() => {
     const saved = localStorage.getItem('super_admin_active_menu');
-    if (saved === 'customers' || saved === 'sub_admins' || saved === 'data_operators') {
-      return 'user_management';
+    if (saved === 'user_management') {
+      const savedTab = localStorage.getItem('super_admin_user_tab');
+      return savedTab === 'operators' ? 'data_operators' : 'customers';
     }
+    if (saved === 'sub_admins') return 'customers';
+    if (saved === 'customers' || saved === 'data_operators') return saved;
     return saved || 'dashboard';
-  });
-  const [userTab, setUserTab] = useState(() => {
-    const savedMenu = localStorage.getItem('super_admin_active_menu');
-    if (savedMenu === 'data_operators') {
-      return 'operators';
-    }
-    if (savedMenu === 'customers' || savedMenu === 'sub_admins') {
-      return 'customers';
-    }
-    const savedTab = localStorage.getItem('super_admin_user_tab');
-    if (savedTab === 'sub_admins') return 'customers';
-    if (savedTab === 'data_operators') return 'operators';
-    return savedTab || 'customers';
   });
   const [auditSubTab, setAuditSubTab] = useState(() => {
     return localStorage.getItem('super_admin_audit_sub_tab') || 'activity_log';
@@ -99,10 +455,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   useEffect(() => {
     localStorage.setItem('super_admin_active_menu', activeMenu);
   }, [activeMenu]);
-
-  useEffect(() => {
-    localStorage.setItem('super_admin_user_tab', userTab);
-  }, [userTab]);
 
   useEffect(() => {
     localStorage.setItem('super_admin_audit_sub_tab', auditSubTab);
@@ -150,6 +502,34 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   // Operator CRUD States
   const [operators, setOperators] = useState([]);
   const [loadingOps, setLoadingOps] = useState(false);
+
+  // Data Operator Mappings States
+  const [expandedOpMappingsId, setExpandedOpMappingsId] = useState(null);
+  const [opMappings, setOpMappings] = useState([]);
+  const [opMappingsLoading, setOpMappingsLoading] = useState(false);
+  const [opMappingsError, setOpMappingsError] = useState('');
+  const [opMappingsSuccess, setOpMappingsSuccess] = useState('');
+  const [opMasterActivities, setOpMasterActivities] = useState([]);
+  const [opMasterActivitiesLoading, setOpMasterActivitiesLoading] = useState(false);
+  const [opMasterActivitiesError, setOpMasterActivitiesError] = useState('');
+  const [opMasterActivityFilter, setOpMasterActivityFilter] = useState('all');
+  const [opMasterActivityPage, setOpMasterActivityPage] = useState(1);
+  const [opMasterEditMode, setOpMasterEditMode] = useState(false);
+  const [opMasterSessionChanges, setOpMasterSessionChanges] = useState([]);
+  const [opMasterDonePopup, setOpMasterDonePopup] = useState(null);
+  const [newClientInputs, setNewClientInputs] = useState({}); // { [chamberId]: 'clientName' }
+  const [newChamberTypes, setNewChamberTypes] = useState({}); // { [chamberId]: 'Frozen' }
+  const [addingMappingChamberId, setAddingMappingChamberId] = useState(null); // tracking loading during insert
+  const [updatingChamberTypeKey, setUpdatingChamberTypeKey] = useState(null);
+  const [opChamberTypeByNum, setOpChamberTypeByNum] = useState({});
+  const [opTaskFromDate, setOpTaskFromDate] = useState('');
+  const [opTaskToDate, setOpTaskToDate] = useState('');
+  const [opTaskAppliedFrom, setOpTaskAppliedFrom] = useState('');
+  const [opTaskAppliedTo, setOpTaskAppliedTo] = useState('');
+  const [opTaskLogs, setOpTaskLogs] = useState([]);
+  const [opTaskLogsLoading, setOpTaskLogsLoading] = useState(false);
+  const [opTaskLogsError, setOpTaskLogsError] = useState('');
+  const [opTaskFilter, setOpTaskFilter] = useState('all');
   const [opEmail, setOpEmail] = useState('');
   const [opPassword, setOpPassword] = useState('');
   const [opFullName, setOpFullName] = useState('');
@@ -187,6 +567,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [appSubPassword, setAppSubPassword] = useState('');
   const [showAppSubPassword, setShowAppSubPassword] = useState(false);
   const [editingOp, setEditingOp] = useState(null);
+  const [viewingOperator, setViewingOperator] = useState(null);
   const [opError, setOpError] = useState('');
   const [opSuccess, setOpSuccess] = useState('');
   const [savingOp, setSavingOp] = useState(false);
@@ -225,6 +606,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [logsExportProgressLabel, setLogsExportProgressLabel] = useState('Exporting…');
   const [exportError, setExportError] = useState(null); // { message, retryable, retryKey }
   const exportAbortRef = useRef(null);
+  const opMasterActivitiesEmailRef = useRef('');
   const [logsSearch, setLogsSearch] = useState('');
   const [selectedWarehouse, setSelectedWarehouse] = useState('All');
   const [fromDate, setFromDate] = useState('');
@@ -444,6 +826,96 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     return 'Morning';
   };
 
+  const formatPhotoGpsLink = (lat, lng, accuracy) => {
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '-';
+    const acc =
+      accuracy != null && accuracy !== '' && Number.isFinite(parseFloat(accuracy))
+        ? ` (±${Math.round(parseFloat(accuracy))}m)`
+        : '';
+    const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+    return (
+      <a href={mapsUrl} target="_blank" rel="noopener noreferrer">
+        {latitude.toFixed(5)}, {longitude.toFixed(5)}
+        {acc}
+      </a>
+    );
+  };
+
+  const parsePhotoCaptureMetadata = (raw) => {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw;
+    try {
+      return JSON.parse(String(raw));
+    } catch {
+      return null;
+    }
+  };
+
+  const PHOTO_META_FIELD_LABELS = {
+    inward_invoice_photos: 'Invoice Photo',
+    inward_pod_photo: 'POD Photo',
+    inward_vehicle_seal_photo: 'Seal Photo',
+    inward_vehicle_temp_photo: 'Vehicle Temp Photo',
+    inward_material_temp_photo: 'Material Temp Photo',
+    inward_vehicle_back_side_photo: 'Vehicle Back Photo',
+    inward_vehicle_back_side_photo_with_material: 'Loaded Vehicle Photo',
+    inward_count_sheet_photo: 'Count Sheet Photo',
+    inward_damage_boxes_photo: 'Damage Boxes Photo',
+    outward_invoice_photos: 'Invoice Photo',
+    outward_pod_photo: 'POD Photo',
+    outward_vehicle_seal_photo: 'Seal Photo',
+    outward_vehicle_temp_photo: 'Vehicle Temp Photo',
+    outward_pre_vehicle_temp_photo: 'Pre Vehicle Temp Photo',
+    outward_material_temp_photo: 'Material Temp Photo',
+    outward_vehicle_back_side_photo: 'Vehicle Back Photo',
+    outward_vehicle_back_side_photo_with_material: 'Loaded Vehicle Photo',
+    outward_count_sheet_photo: 'Count Sheet Photo',
+    outward_damage_boxes_photo: 'Damage Boxes Photo',
+  };
+
+  const renderPhotoCaptureMetadataPanel = (raw) => {
+    const meta = parsePhotoCaptureMetadata(raw);
+    if (!meta || typeof meta !== 'object') return null;
+
+    const rows = [];
+    Object.entries(meta).forEach(([key, val]) => {
+      const baseLabel = PHOTO_META_FIELD_LABELS[key] || key.replace(/_/g, ' ');
+      if (Array.isArray(val)) {
+        val.forEach((entry, idx) => {
+          rows.push({
+            label: val.length > 1 ? `${baseLabel} #${idx + 1}` : baseLabel,
+            entry,
+          });
+        });
+      } else if (val && typeof val === 'object') {
+        rows.push({ label: baseLabel, entry: val });
+      }
+    });
+
+    if (!rows.length) return null;
+
+    return (
+      <div className="profile-group-card">
+        <div className="profile-group-title">Photo capture time & location</div>
+        <div className="profile-grid-list">
+          {rows.map((row, idx) => (
+            <div className="profile-item" key={`photo-meta-${idx}`} style={{ gridColumn: 'span 2' }}>
+              <span className="profile-label">{row.label}</span>
+              <span className="profile-value">
+                <div>{row.entry.capturedAt ? formatDateTimeStr(row.entry.capturedAt) : '-'}</div>
+                <div style={{ fontSize: '0.78rem', marginTop: 4 }}>
+                  {formatPhotoGpsLink(row.entry.latitude, row.entry.longitude, row.entry.accuracy)}
+                </div>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   /** Chamber log detail — Quick Summary first, then full fields + update compare */
   const renderChamberLogFormView = (log, { enableCopyRef = false } = {}) => {
     if (!log) return null;
@@ -605,6 +1077,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             {formField(
               'Photo Capture Time',
               log.photo_capture_time ? formatDateTimeStr(log.photo_capture_time) : '-'
+            )}
+            {formField(
+              'Photo Location',
+              formatPhotoGpsLink(
+                log.photo_capture_latitude,
+                log.photo_capture_longitude,
+                log.photo_capture_accuracy
+              )
             )}
             {formField(
               'Time Variance',
@@ -952,11 +1432,262 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpError('');
     try {
       const data = await fetchOperators();
-      setOperators(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setOperators(list);
+      setViewingOperator((prev) => {
+        if (!prev?.id) return prev;
+        return list.find((o) => Number(o.id) === Number(prev.id)) || prev;
+      });
     } catch (err) {
       setOpError(err.message || 'Failed to fetch operators.');
     } finally {
       setLoadingOps(false);
+    }
+  };
+
+  const loadOpMappings = async (warehouseName, { silent = false } = {}) => {
+    if (!warehouseName) {
+      setOpMappings([]);
+      setOpChamberTypeByNum({});
+      return;
+    }
+    if (!silent) {
+      setOpMappingsLoading(true);
+      setOpMappingsError('');
+      setOpMappingsSuccess('');
+    }
+    try {
+      const [data, chambers] = await Promise.all([
+        fetchChamberAssignments(warehouseName),
+        fetchChambers().catch(() => [])
+      ]);
+      const typeByNum = {};
+      (Array.isArray(chambers) ? chambers : []).forEach((c) => {
+        const num = chamberNumberFromName(c.name || c.chamber_name);
+        if (num == null) return;
+        typeByNum[num] = String(c.chamber_type || c.chamberType || 'Frozen').trim() || 'Frozen';
+      });
+      setOpChamberTypeByNum(typeByNum);
+      setOpMappings(dedupeChamberAssignments(Array.isArray(data) ? data : []));
+    } catch (err) {
+      setOpMappingsError(err.message || 'Failed to load chamber client mappings.');
+    } finally {
+      if (!silent) setOpMappingsLoading(false);
+    }
+  };
+
+  const refreshOperatorProfileMaster = async (op, successMessage = '') => {
+    if (!op?.warehouse_name) return;
+    await loadOpMappings(op.warehouse_name, { silent: true });
+    if (successMessage) setOpMappingsSuccess(successMessage);
+  };
+
+  const finishOpMasterEdit = async (op) => {
+    const changes = Array.isArray(opMasterSessionChanges) ? [...opMasterSessionChanges] : [];
+    setOpMasterEditMode(false);
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setOpMasterDonePopup({
+      operatorName: op?.full_name || op?.email || 'Data Operator',
+      warehouseName: op?.warehouse_name || '',
+      changes
+    });
+    setOpMasterSessionChanges([]);
+    if (op?.email) {
+      await loadOpMasterActivities(op.email);
+    }
+  };
+
+  const loadOpMasterActivities = async (email) => {
+    const target = normalizeEmail(email);
+    opMasterActivitiesEmailRef.current = target;
+    if (!target) {
+      setOpMasterActivities([]);
+      setOpMasterActivitiesError('');
+      setOpMasterActivitiesLoading(false);
+      return;
+    }
+    setOpMasterActivities([]);
+    setOpMasterActivitiesLoading(true);
+    setOpMasterActivitiesError('');
+    try {
+      const data = await fetchOperatorActivities({
+        page: 1,
+        limit: 200,
+        category: 'do_changes',
+        operatorEmail: target
+      });
+      if (opMasterActivitiesEmailRef.current !== target) return;
+      setOpMasterActivities(activitiesForOperatorEmail(Array.isArray(data?.items) ? data.items : [], target));
+    } catch (err) {
+      if (opMasterActivitiesEmailRef.current !== target) return;
+      setOpMasterActivities([]);
+      setOpMasterActivitiesError(err.message || 'Failed to load Master Setup activity.');
+    } finally {
+      if (opMasterActivitiesEmailRef.current === target) {
+        setOpMasterActivitiesLoading(false);
+      }
+    }
+  };
+
+  const loadOpTaskStatus = async (op, fromDate, toDate) => {
+    if (!op?.warehouse_name) {
+      setOpTaskLogs([]);
+      setOpTaskLogsError('');
+      return;
+    }
+    const from = toApiDateParam(fromDate);
+    const to = toApiDateParam(toDate);
+    if (!from || !to) {
+      setOpTaskLogsError('Select a valid date range.');
+      return;
+    }
+    if (from > to) {
+      setOpTaskLogsError("'From Date' must be on or before 'To Date'.");
+      return;
+    }
+    setOpTaskLogsLoading(true);
+    setOpTaskLogsError('');
+    try {
+      let { items: rawItems = [] } = await fetchAllLogPages('/chamber-temp', {
+        fromDate: from,
+        toDate: to,
+        warehouse: op.warehouse_name,
+        operatorEmail: op.email,
+        limit: 500,
+        maxRows: 15000
+      });
+      if (rawItems.length === 0 && op.email) {
+        ({ items: rawItems = [] } = await fetchAllLogPages('/chamber-temp', {
+          fromDate: from,
+          toDate: to,
+          warehouse: op.warehouse_name,
+          limit: 500,
+          maxRows: 15000
+        }));
+      }
+      const targetEmail = normalizeEmail(op.email);
+      const emailMatched = rawItems.filter(
+        (log) => targetEmail && normalizeEmail(log.operator_email) === targetEmail
+      );
+      setOpTaskLogs(emailMatched.length > 0 ? emailMatched : rawItems);
+    } catch (err) {
+      setOpTaskLogs([]);
+      setOpTaskLogsError(err.message || 'Failed to load chamber task logs.');
+    } finally {
+      setOpTaskLogsLoading(false);
+    }
+  };
+
+  const handleToggleOpMappings = async (op) => {
+    if (expandedOpMappingsId === op.id) {
+      setExpandedOpMappingsId(null);
+      setOpMappings([]);
+      setOpMappingsError('');
+      setOpMappingsSuccess('');
+    } else {
+      setExpandedOpMappingsId(op.id);
+      setNewClientInputs({});
+      setNewChamberTypes({});
+      await loadOpMappings(op.warehouse_name);
+    }
+  };
+
+  const pushOpMasterChange = (kind, text) => {
+    setOpMasterSessionChanges((prev) => [...prev, { kind, text }]);
+  };
+
+  const handleAddOpMapping = async (op, chamberId, chamberName, inputKey = chamberId) => {
+    const clientName = (newClientInputs[inputKey] || newClientInputs[chamberId] || '').trim();
+    if (!clientName) {
+      setOpMappingsError('Please enter a client lot name.');
+      return;
+    }
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setAddingMappingChamberId(chamberId);
+    try {
+      const chambers = await fetchChambers().catch(() => []);
+      const resolvedId = resolveChamberIdFromList(chambers, chamberId, chamberName);
+      const chamberNum = chamberNumberFromName(chamberName);
+      const existingType = (
+        opMappings.find((row) =>
+          Number(row?.chamber_id) === Number(resolvedId) ||
+          chamberNumberFromName(row?.chamber_name) === chamberNum
+        )?.chamber_type
+      ) || (chamberNum != null ? opChamberTypeByNum[chamberNum] : null) || 'Frozen';
+      await addChamberAssignment({
+        chamber_id: resolvedId,
+        client_name: clientName,
+        remark: 'Added by Super Admin',
+        chamber_type: existingType,
+        warehouse_name: op.warehouse_name,
+        operator_email: op.email
+      });
+      setNewClientInputs(prev => ({ ...prev, [inputKey]: '', [chamberId]: '' }));
+      const addedLabel = `Added "${clientName}" to ${chamberName || `Chamber ${chamberId}`}.`;
+      pushOpMasterChange('client', addedLabel);
+      await refreshOperatorProfileMaster(op, addedLabel);
+    } catch (err) {
+      setOpMappingsError(err.message || 'Failed to add client mapping.');
+    } finally {
+      setAddingMappingChamberId(null);
+    }
+  };
+
+  const handleUpdateOpChamberType = async (op, chamberId, chamberName, currentType, inputKey = chamberId) => {
+    const nextType = String(newChamberTypes[inputKey] || newChamberTypes[chamberId] || currentType || 'Frozen').trim();
+    if (!nextType) {
+      setOpMappingsError('Please select a chamber type.');
+      return;
+    }
+    if (String(currentType || '').trim() === nextType) {
+      setOpMappingsError(`Chamber type is already ${nextType}.`);
+      return;
+    }
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setUpdatingChamberTypeKey(inputKey);
+    try {
+      const chambers = await fetchChambers().catch(() => []);
+      const resolvedId = resolveChamberIdFromList(chambers, chamberId, chamberName);
+      await updateChamber(resolvedId, {
+        chamber_type: nextType,
+        remark: `Updated by Super Admin for ${op.warehouse_name || 'operator'}`,
+        warehouse_name: op.warehouse_name,
+        operator_email: op.email
+      });
+      const typeLabel = `Updated ${chamberName} type ${currentType || 'Frozen'} → ${nextType}.`;
+      pushOpMasterChange('type', typeLabel);
+      await refreshOperatorProfileMaster(op, typeLabel);
+    } catch (err) {
+      setOpMappingsError(err.message || 'Failed to update chamber type.');
+    } finally {
+      setUpdatingChamberTypeKey(null);
+    }
+  };
+
+  const handleDeleteOpMapping = async (op, chamberId, clientName, chamberName) => {
+    if (!window.confirm(`Are you sure you want to remove "${clientName}" from ${chamberName}?`)) {
+      return;
+    }
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    try {
+      const chambers = await fetchChambers().catch(() => []);
+      const resolvedId = resolveChamberIdFromList(chambers, chamberId, chamberName);
+      await deleteChamberAssignment({
+        chamber_id: resolvedId,
+        client_name: clientName,
+        remark: 'Removed by Super Admin',
+        warehouse_name: op.warehouse_name,
+        operator_email: op.email
+      });
+      const removedLabel = `Removed "${clientName}" from ${chamberName}.`;
+      pushOpMasterChange('remove', removedLabel);
+      await refreshOperatorProfileMaster(op, removedLabel);
+    } catch (err) {
+      setOpMappingsError(err.message || 'Failed to delete client mapping.');
     }
   };
 
@@ -1044,7 +1775,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
     try {
       const data = await fetchPermissionRequests();
-      setPermissionRequests(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      const seen = new Set();
+      setPermissionRequests(list.filter((pr) => {
+        if (!pr || pr.id == null || seen.has(pr.id)) return false;
+        seen.add(pr.id);
+        return true;
+      }));
     } catch (err) {
       console.error('Failed to fetch permission requests:', err);
       if (!silent) {
@@ -1146,6 +1883,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       info.client = 'Chambers & Clients';
       info.refNo = 'OPEN';
       info.extra = descText || 'Master Setup opens without Super Admin approval.';
+      return info;
+    } else if (
+      recordType === 'ChamberType' ||
+      /EDIT chamber type/i.test(descText || '')
+    ) {
+      info.module = 'Chamber Type';
+      const nameMatch = (descText || '').match(/EDIT chamber type "([^"]+)"/i);
+      const fromTo = (descText || '').match(/from\s+([A-Za-z]+)\s+to\s+([A-Za-z]+)/i);
+      info.client = nameMatch ? nameMatch[1] : 'Chamber';
+      info.refNo = 'TYPE';
+      info.extra = fromTo
+        ? `${fromTo[1]} → ${fromTo[2]}`
+        : (descText || 'Data Operator requested Super Admin approval to change chamber type.');
       return info;
     } else if (
       recordType === 'ChamberMaster' ||
@@ -1565,6 +2315,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   });
   const warehousesList = Array.from(new Set((operators || []).map(op => op && op.warehouse_name).filter(Boolean)));
 
+  const dashboardPendingRequests = useMemo(
+    () => filterActionablePendingPermissionRequests(permissionRequests, operatorWarehouseMap, 'All'),
+    [permissionRequests, operators]
+  );
+
   const loadDashboardStatsData = async () => {
     try {
       const stats = await fetchDashboardStats();
@@ -1654,6 +2409,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadDashboardStatsData();
       loadSubAdminsData();
       loadCustomerReportsData();
+      loadPermissionRequests(true);
       checkNewDOChanges();
     } else if (activeMenu === 'customers') {
       loadSubAdminsData();
@@ -1664,10 +2420,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadNoteThreads();
       loadNoteMessages('All');
     } else if (activeMenu === 'data_operators') {
-      loadAccessScopeOptions();
-      loadOperatorsData();
-    } else if (activeMenu === 'user_management') {
-      loadSubAdminsData();
       loadAccessScopeOptions();
       loadOperatorsData();
     } else if (activeMenu === 'activity_logs') {
@@ -1906,7 +2658,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       list.forEach((op) => {
         const warehouse = op.warehouse_name || 'Not Configured';
         const accessScope = op.warehouse_name
-          ? `Access: ${op.warehouse_name} Logs Only`
+          ? `Access: ${op.warehouse_name}`
           : 'Access: Not Configured';
         const chambers = `1 to ${op.chamber_limit || 4}`;
         const registered = op.created_at
@@ -1915,7 +2667,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         const row = [
           op.id ?? '-',
           op.full_name || '-',
-          op.phone_no || '-',
+          op.phone_no ? formatIndiaPhoneDisplay(op.phone_no) : '-',
           op.email || '-',
           `${warehouse} | ${accessScope}`,
           chambers,
@@ -2156,7 +2908,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       const headers = [
         "Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Chamber Name", 
         "Client Name", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
-        "Sensor Photo Name", "Photo Capture Time", "Time Variance (minutes)", "Box Count", 
+        "Sensor Photo Name", "Photo Capture Time", "Photo Location (GPS)", "Time Variance (minutes)", "Box Count", 
         "Chamber Type", "Overdue Status/Time", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
@@ -2175,6 +2927,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.monitor_supervisor_name || '',
           extractFilenames(log.temp_sensor_image),
           log.photo_capture_time || '',
+          formatPhotoGpsForExport(
+            log.photo_capture_latitude,
+            log.photo_capture_longitude,
+            log.photo_capture_accuracy
+          ),
           log.time_variance_minutes !== undefined ? log.time_variance_minutes : '',
           log.box_count !== undefined ? log.box_count : '',
           log.chamber_type || '',
@@ -2195,7 +2952,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         "Received Boxes", "Short Received Boxes", "Excess Received Boxes", "Damage Received Boxes", "Material Type", 
         "Supervisor Name", "Remarks", "Invoice Photos", "POD Photo", "Vehicle Seal Photo", "Vehicle Temp Photo", 
         "Material Temp Photo", "Vehicle Back Side Photo", "Vehicle Back Side Photo with Material", "Count Sheet Photo", 
-        "Damage Boxes Photo", "Edit Details Log", "Edit Count", "Created At", "Updated At"
+        "Damage Boxes Photo", "Photo Capture Time & Location", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
@@ -2238,6 +2995,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           extractFilenames(log.inward_vehicle_back_side_photo_with_material),
           extractFilenames(log.inward_count_sheet_photo),
           extractFilenames(log.inward_damage_boxes_photo),
+          formatPhotoCaptureMetadataForExport(log.photo_capture_metadata),
           log.update_details || '',
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.inward_created_at),
@@ -2254,7 +3012,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Loaded Boxes", "Material Type", 
         "Supervisor Name", "Remarks", "Invoice Photos", "POD Photo", "Vehicle Seal Photo", "Vehicle Temp Photo", 
         "Pre-Cooling Temp Photo", "Material Temp Photo", "Vehicle Back Side Photo", "Vehicle Back Side Photo with Material", 
-        "Damage Boxes Photo", "Edit Details Log", "Edit Count", "Created At", "Updated At"
+        "Damage Boxes Photo", "Photo Capture Time & Location", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
@@ -2298,6 +3056,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           extractFilenames(log.outward_vehicle_back_side_photo),
           extractFilenames(log.outward_vehicle_back_side_photo_with_material),
           extractFilenames(log.outward_damage_boxes_photo),
+          formatPhotoCaptureMetadataForExport(log.photo_capture_metadata),
           log.update_details || '',
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.outward_created_at),
@@ -2327,6 +3086,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       setOpError('All fields (Full Name, Phone No., Email ID, Warehouse / Data Access) are required.');
       return;
     }
+    const phoneLocal = toLocalTenDigitPhone(opPhoneNo);
+    if (phoneLocal.length !== 10) {
+      setOpError('Phone No. must be exactly 10 digits.');
+      return;
+    }
 
     if (!editingOp && !opPassword) {
       setOpError('Password is required for registration.');
@@ -2339,7 +3103,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         email: opEmail,
         password: opPassword,
         full_name: opFullName,
-        phone_no: opPhoneNo,
+        phone_no: toStoredIndiaPhone(phoneLocal),
         warehouse_name: String(opWarehouseName || '').trim(),
         chamber_limit: opChamberLimit
       };
@@ -2398,21 +3162,134 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       if (editingOp && editingOp.id === id) {
         cancelEditOperator();
       }
+      if (viewingOperator && viewingOperator.id === id) {
+        closeOperatorProfile();
+      }
     } catch (err) {
       setOpError(err.message || 'Failed to delete operator.');
     }
   };
 
   const startEditOperator = (op) => {
+    setViewingOperator(null);
     setEditingOp(op);
     setOpEmail(op.email);
     setOpFullName(op.full_name || '');
-    setOpPhoneNo(op.phone_no || '');
+    setOpPhoneNo(toLocalTenDigitPhone(op.phone_no));
     setOpWarehouseName(op.warehouse_name || '');
     setOpChamberLimit(op.chamber_limit || 4);
     setOpPassword(''); // Leave blank unless updating
     setOpError('');
     setOpSuccess('');
+  };
+
+  const openOperatorProfile = async (op) => {
+    if (!op) return;
+    setEditingOp(null);
+    setViewingOperator(op);
+    setExpandedOpMappingsId(null);
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setOpMasterActivitiesError('');
+    setOpMasterActivityFilter('all');
+    setOpMasterActivityPage(1);
+    setOpMasterEditMode(false);
+    setOpMasterSessionChanges([]);
+    setOpMasterDonePopup(null);
+    setNewClientInputs({});
+    setNewChamberTypes({});
+    setOpMasterActivities([]);
+    setOpMasterActivitiesError('');
+    const { fromDate, toDate } = getDefaultOpTaskRange(7);
+    setOpTaskFromDate(fromDate);
+    setOpTaskToDate(toDate);
+    setOpTaskAppliedFrom(fromDate);
+    setOpTaskAppliedTo(toDate);
+    setOpTaskFilter('all');
+    setOpTaskLogs([]);
+    setOpTaskLogsError('');
+    if (op.warehouse_name) {
+      await loadOpMappings(op.warehouse_name);
+    } else {
+      setOpMappings([]);
+    }
+    await Promise.all([
+      loadOpMasterActivities(op.email),
+      loadOpTaskStatus(op, fromDate, toDate)
+    ]);
+  };
+
+  const openChamberTaskProfile = async (task, op) => {
+    const openDailyLog = (log) => {
+      if (!log) return;
+      setActiveMenu('profile_lookup');
+      setSearchedRecord(log);
+      setSearchedRecordType('daily');
+      loadRecordAllowHistory('daily', log);
+      setLookupQuery(log.reference_no || task.client_name || '');
+      setSearchResults([{
+        type: 'daily',
+        label: 'Chamber Temp',
+        reference_no: log.reference_no,
+        date: task.date,
+        facility: log.warehouse_name || op?.warehouse_name || 'Generic',
+        client: task.client_name,
+        details: `${task.chamber_name} · ${task.shift} · ${log.chamber_temp != null ? `${log.chamber_temp}°C` : '—'}`,
+        original: log
+      }]);
+    };
+
+    if (task?.log) {
+      openDailyLog(task.log);
+      return;
+    }
+
+    if (task?.reference_no) {
+      try {
+        const res = await fetchChamberLogs('', {
+          paginated: true,
+          search: task.reference_no,
+          page: 1,
+          limit: 10,
+          warehouse: op?.warehouse_name
+        });
+        const log =
+          (res.items || []).find((l) => l.reference_no === task.reference_no) ||
+          (res.items || [])[0];
+        if (log) {
+          openDailyLog(log);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to open task profile:', err);
+      }
+    }
+
+    alert('No submitted log found for this task yet.');
+  };
+
+  const closeOperatorProfile = () => {
+    setViewingOperator(null);
+    setOpMappings([]);
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setOpMasterActivities([]);
+    setOpMasterActivitiesError('');
+    setOpMasterActivityFilter('all');
+    setOpMasterActivityPage(1);
+    setOpMasterEditMode(false);
+    setOpMasterSessionChanges([]);
+    setOpMasterDonePopup(null);
+    setNewClientInputs({});
+    setNewChamberTypes({});
+    opMasterActivitiesEmailRef.current = '';
+    setOpTaskFromDate('');
+    setOpTaskToDate('');
+    setOpTaskAppliedFrom('');
+    setOpTaskAppliedTo('');
+    setOpTaskLogs([]);
+    setOpTaskLogsError('');
+    setOpTaskFilter('all');
   };
 
   const cancelEditOperator = () => {
@@ -2514,6 +3391,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       setSubAdminError('All fields (Full Name, Phone No., Email ID) are required.');
       return;
     }
+    const phoneLocal = toLocalTenDigitPhone(subAdminPhoneNo);
+    if (phoneLocal.length !== 10) {
+      setSubAdminError('Phone No. must be exactly 10 digits.');
+      return;
+    }
 
     if (!editingSubAdmin && !subAdminPassword) {
       setSubAdminError('Password is required for registration.');
@@ -2526,7 +3408,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         email: subAdminEmail,
         password: subAdminPassword,
         full_name: subAdminFullName,
-        phone_no: subAdminPhoneNo,
+        phone_no: toStoredIndiaPhone(phoneLocal),
         allowed_clients: subAdminSelectedClients.length > 0 ? subAdminSelectedClients : null,
         allowed_warehouses: subAdminSelectedWarehouses.length > 0 ? subAdminSelectedWarehouses : null
       };
@@ -2589,7 +3471,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setEditingSubAdmin(sa);
     setSubAdminEmail(sa.email);
     setSubAdminFullName(sa.full_name || '');
-    setSubAdminPhoneNo(sa.phone_no || '');
+    setSubAdminPhoneNo(toLocalTenDigitPhone(sa.phone_no));
     setSubAdminPassword('');
     setSubAdminSelectedClients(sa.allowed_clients ? sa.allowed_clients.split(',').map(c => c.trim()).filter(Boolean) : []);
     setSubAdminSelectedWarehouses(sa.allowed_warehouses ? sa.allowed_warehouses.split(',').map(w => w.trim()).filter(Boolean) : []);
@@ -2948,12 +3830,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     </div>
   );
 
-  const hasPendingRequests = permissionRequests.some(
-    (pr) =>
-      pr.status === 'Pending' &&
-      pr.record_type !== 'ClientMaster' &&
-      pr.record_type !== 'MasterSetup'
-  );
+  const hasPendingRequests = dashboardPendingRequests.length > 0;
 
   const clearSaEditLog = async () => {
     setSaEditLog(null);
@@ -3103,8 +3980,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               </div>
             </button>
             <button 
-              className={`clean-menu-item ${activeMenu === 'user_management' ? 'active' : ''}`}
-              onClick={() => setActiveMenu('user_management')}
+              className={`clean-menu-item ${activeMenu === 'data_operators' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('data_operators');
+                setViewingOperator(null);
+              }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -3113,8 +3993,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 padding: '10px 14px',
                 borderRadius: 'var(--radius-sm)',
                 border: 'none',
-                background: activeMenu === 'user_management' ? 'var(--primary-light)' : 'transparent',
-                color: activeMenu === 'user_management' ? 'var(--primary)' : 'var(--text-dark)',
+                background: activeMenu === 'data_operators' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'data_operators' ? 'var(--primary)' : 'var(--text-dark)',
                 fontWeight: '700',
                 fontSize: '0.82rem',
                 cursor: 'pointer',
@@ -3123,8 +4003,36 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Users size={18} />
-                <span>Customers & Operators</span>
+                <Thermometer size={18} />
+                <span>Data Operators</span>
+              </div>
+            </button>
+            <button 
+              className={`clean-menu-item ${activeMenu === 'customers' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('customers');
+                setViewingOperator(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'customers' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'customers' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ShieldCheck size={18} />
+                <span>Customers</span>
               </div>
             </button>
 
@@ -3402,15 +4310,30 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <ChevronRight size={16} className="item-arrow" />
             </button>
              <button 
-              className={`clean-menu-item ${activeMenu === 'user_management' ? 'active' : ''}`}
+              className={`clean-menu-item ${activeMenu === 'data_operators' ? 'active' : ''}`}
               onClick={() => {
-                setActiveMenu('user_management');
+                setActiveMenu('data_operators');
+                setViewingOperator(null);
                 setIsMobileMenuOpen(false);
               }}
             >
               <div className="item-left">
-                <Users size={18} className="item-icon" />
-                <span>Customers & Operators</span>
+                <Thermometer size={18} className="item-icon" />
+                <span>Data Operators</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+             <button 
+              className={`clean-menu-item ${activeMenu === 'customers' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('customers');
+                setViewingOperator(null);
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <ShieldCheck size={18} className="item-icon" />
+                <span>Customers</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -3942,218 +4865,270 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         )}
 
         {activeMenu === 'dashboard' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            
-            {/* Top Row: Welcome Banner */}
-            <div className="secure-welcome-dashboard-card" style={{ padding: '12px 18px' }}>
-              <div className="welcome-info-left" style={{ gap: '12px' }}>
-                <div style={{ backgroundColor: 'rgba(0,162,232,0.15)', padding: '8px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <ShieldCheck size={28} color="#00a2e8" />
-                </div>
-                <div>
-                  <h1 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, color: '#ffffff' }}>Control Center Dashboard</h1>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '0.78rem', color: '#94a3b8' }}>Super Admin overview of cold storage operations, operators activity logs and locations.</p>
-                </div>
-              </div>
-              <div style={{ backgroundColor: 'rgba(255,255,255,0.06)', padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', fontWeight: '700', flexShrink: 0 }}>
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block' }}></span>
-                System Monitoring Online
-              </div>
-            </div>
-
-            {/* Stats Cards Grid (3 columns) */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
-              {/* Card 1: Data Operators */}
-              <div className="diagnostic-card" style={{ padding: '12px 16px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operators</span>
-                  <div style={{ backgroundColor: 'var(--primary-light)', padding: '4px', borderRadius: 'var(--radius-sm)' }}>
-                    <User size={16} color="var(--primary)" />
+          <div className="sa-op-gmail sa-dash">
+            <section className="sa-op-card">
+              <div className="sa-op-dir-toolbar">
+                <div className="sa-dash-welcome">
+                  <span className="sa-op-avatar sa-dash-avatar">
+                    <ShieldCheck size={14} />
+                  </span>
+                  <div>
+                    <h2 className="sa-op-title">Control Center Dashboard</h2>
+                    <p className="sa-op-sub">
+                      Super Admin overview of operators, customers, warehouses and activity
+                    </p>
                   </div>
                 </div>
-                <div>
-                  <h3 style={{ fontSize: '1.4rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{operators.length}</h3>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Registered Data Operators</span>
+                <div className="sa-dash-online">
+                  <span className="sa-dash-online-dot" />
+                  System monitoring online
                 </div>
               </div>
 
-              {/* Card 2: Warehouses */}
-              <div className="diagnostic-card" style={{ padding: '12px 16px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Warehouses</span>
-                  <div style={{ backgroundColor: '#e0f2fe', padding: '4px', borderRadius: 'var(--radius-sm)' }}>
-                    <Database size={16} color="#0284c7" />
-                  </div>
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.4rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{warehousesList.length}</h3>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Locations Managed</span>
-                </div>
-              </div>
-
-              {/* Card 3: Customers */}
-              <div className="diagnostic-card" style={{ padding: '12px 16px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customers</span>
-                  <div style={{ backgroundColor: '#fee2e2', padding: '4px', borderRadius: 'var(--radius-sm)' }}>
-                    <ShieldCheck size={16} color="#dc2626" />
-                  </div>
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.4rem', fontWeight: 900, margin: 0, color: 'var(--text-dark)' }}>{subAdmins.length}</h3>
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Registered Customers</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Operational Shortcuts */}
-            <div className="diagnostic-card" style={{ padding: '16px 20px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>Operational Shortcuts</h3>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
-                <button 
-                  onClick={() => {
-                    setActiveMenu('user_management');
-                    setUserTab('operators');
-                  }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '10px',
-                    transition: 'all 0.2s ease',
-                    minWidth: 0,
-                    overflow: 'hidden'
-                  }}
-                  className="dashboard-shortcut-btn"
+              <div className="sa-dash-stats">
+                <button
+                  type="button"
+                  className="sa-dash-stat"
+                  onClick={() => setActiveMenu('data_operators')}
                 >
-                  <UserPlus size={16} color="var(--primary)" />
+                  <span className="sa-dash-stat-top">
+                    <em>Operators</em>
+                    <User size={14} />
+                  </span>
+                  <strong>{operators.length}</strong>
+                  <span>Registered Data Operators</span>
+                </button>
+                <div className="sa-dash-stat">
+                  <span className="sa-dash-stat-top">
+                    <em>Warehouses</em>
+                    <Database size={14} />
+                  </span>
+                  <strong>{warehousesList.length}</strong>
+                  <span>Locations Managed</span>
+                </div>
+                <button
+                  type="button"
+                  className="sa-dash-stat"
+                  onClick={() => setActiveMenu('customers')}
+                >
+                  <span className="sa-dash-stat-top">
+                    <em>Customers</em>
+                    <ShieldCheck size={14} />
+                  </span>
+                  <strong>{subAdmins.length}</strong>
+                  <span>Registered Customers</span>
+                </button>
+                {hasPendingRequests ? (
+                  <button
+                    type="button"
+                    className="sa-dash-stat alert"
+                    onClick={() => {
+                      setActiveMenu('activity_logs');
+                      setAuditSubTab('permission_log');
+                    }}
+                  >
+                    <span className="sa-dash-stat-top">
+                      <em>Permissions</em>
+                      <Lock size={14} />
+                    </span>
+                    <strong>{dashboardPendingRequests.length}</strong>
+                    <span>Pending Role Requests</span>
+                  </button>
+                ) : null}
+              </div>
+            </section>
+
+            {hasPendingRequests ? (
+            <section className="sa-op-card sa-dash-perm alert">
+              <div className="sa-op-dir-toolbar">
+                <div>
+                  <h2 className="sa-op-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Role &amp; Permission Requests
+                    <span className="pulsing-dot" style={{ position: 'relative', top: 'auto', right: 'auto' }} />
+                  </h2>
+                  <p className="sa-op-sub">
+                    {dashboardPendingRequests.length} pending — approve or deny directly from dashboard
+                  </p>
+                </div>
+                <div className="sa-op-dir-tools">
+                  <button
+                    type="button"
+                    className="sa-op-btn-text"
+                    onClick={() => loadPermissionRequests()}
+                    disabled={loadingPermRequests}
+                  >
+                    {loadingPermRequests ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                  <button
+                    type="button"
+                    className="sa-op-btn-text"
+                    onClick={() => {
+                      setActiveMenu('activity_logs');
+                      setAuditSubTab('permission_log');
+                    }}
+                  >
+                    Open full log
+                  </button>
+                </div>
+              </div>
+
+              {activeMenu === 'dashboard' && logsError ? (
+                <div className="sa-op-banner-wrap">
+                  <LoadErrorBanner
+                    message={logsError}
+                    onRetry={loadPermissionRequests}
+                    onDismiss={() => setLogsError('')}
+                  />
+                </div>
+              ) : null}
+
+              {activeMenu === 'dashboard' && opSuccess ? (
+                <div className="sa-op-banner success">{opSuccess}</div>
+              ) : null}
+
+              <div className="sa-dash-perm-list">
+                {dashboardPendingRequests.map((pr) => {
+                    if (!pr) return null;
+                    const parsed = parseRequestDescription(pr.description || pr.request_description, pr.record_type);
+                    const isMasterSetup = pr.record_type === 'MasterSetup';
+                    const isChamberMaster = pr.record_type === 'ChamberMaster';
+                    const isChamberType = pr.record_type === 'ChamberType' || parsed.refNo === 'TYPE';
+                    const isClientMaster = pr.record_type === 'ClientMaster';
+                    const isAllowStyle = isMasterSetup || isChamberMaster || isChamberType || isClientMaster;
+                    const warehouse = operatorWarehouseMap[pr.operator_email ? pr.operator_email.toLowerCase() : ''] || 'System / Admin';
+                    const requestType = isMasterSetup
+                      ? 'OPEN'
+                      : isChamberType
+                        ? 'TYPE'
+                        : isChamberMaster
+                          ? (parsed.refNo || 'ALLOW')
+                          : (pr.raw_action === 'REQUEST_DELETE' ? 'DELETE' : 'EDIT');
+                    return (
+                      <div key={pr.id} className="sa-dash-perm-row">
+                        <div className="sa-dash-perm-main">
+                          <span className="sa-op-avatar">{String(pr.operator_email || 'DO').slice(0, 2).toUpperCase()}</span>
+                          <div className="sa-dash-perm-copy">
+                            <strong>{renderOperatorEmail(pr.operator_email)}</strong>
+                            <em>
+                              {parsed.module}
+                              {' · '}
+                              {warehouse}
+                              {' · '}
+                              {requestType}
+                            </em>
+                            <span className="sa-dash-perm-desc">
+                              {parsed.client !== '-' ? `${parsed.client} · ` : ''}
+                              {(pr.description || '').split(' | ')[0] || 'Permission request'}
+                            </span>
+                            {(pr.remark || pr.request_remark) ? (
+                              <span className="sa-dash-perm-remark">
+                                <strong>Remark</strong>
+                                {String(pr.remark || pr.request_remark).trim()}
+                              </span>
+                            ) : null}
+                            {parsed.extra !== '-' ? (
+                              <span className="sa-dash-perm-extra">{parsed.extra}</span>
+                            ) : null}
+                          </div>
+                          {!isAllowStyle && parsed.refNo ? (
+                            <button
+                              type="button"
+                              className="sa-op-btn-text"
+                              onClick={() => showLogDetailsByRef(parsed.refNo, pr.record_id, parsed.module)}
+                            >
+                              View log
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="sa-dash-perm-actions">
+                          <button
+                            type="button"
+                            className="sa-op-btn-primary"
+                            onClick={() => handleApproveDenyPermission(pr.id, 'Approved')}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="sa-op-btn-text"
+                            onClick={() => handleApproveDenyPermission(pr.id, 'Denied')}
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </section>
+            ) : null}
+
+            <section className="sa-op-card">
+              <div className="sa-op-dir-toolbar">
+                <div>
+                  <h2 className="sa-op-title">Operational Shortcuts</h2>
+                  <p className="sa-op-sub">Jump to common Super Admin actions</p>
+                </div>
+              </div>
+              <div className="sa-dash-shortcuts">
+                <button
+                  type="button"
+                  className="sa-dash-shortcut"
+                  onClick={() => setActiveMenu('data_operators')}
+                >
+                  <UserPlus size={14} />
                   <span>Register Operator</span>
                 </button>
-
-                <button 
+                <button
+                  type="button"
+                  className={`sa-dash-shortcut${hasPendingRequests ? ' alert' : ''}`}
                   onClick={() => {
                     setActiveMenu('activity_logs');
                     setAuditSubTab('permission_log');
                   }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    border: hasPendingRequests ? '1px solid #ef4444' : '1px solid var(--border)',
-                    backgroundColor: hasPendingRequests ? '#fef2f2' : 'var(--bg-main)',
-                    color: hasPendingRequests ? '#ef4444' : 'var(--text-dark)',
-                    fontWeight: hasPendingRequests ? '800' : '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '10px',
-                    transition: 'all 0.2s ease',
-                    minWidth: 0,
-                    overflow: 'hidden'
-                  }}
-                  className="dashboard-shortcut-btn"
                 >
-                  <Lock size={16} color={hasPendingRequests ? '#ef4444' : 'var(--primary)'} />
+                  <Lock size={14} />
                   <span>Permission Requests</span>
-                  {hasPendingRequests && <span className="pulsing-dot" style={{ marginLeft: '4px' }} />}
+                  {hasPendingRequests ? <span className="pulsing-dot" style={{ position: 'relative', top: 'auto', right: 'auto' }} /> : null}
                 </button>
-
-                <button 
+                <button
+                  type="button"
+                  className={`sa-dash-shortcut${hasNewDOChanges ? ' alert' : ''}`}
                   onClick={() => {
                     setActiveMenu('activity_logs');
                     setAuditSubTab('do_changes');
                   }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    border: hasNewDOChanges ? '1px solid #ef4444' : '1px solid var(--border)',
-                    backgroundColor: hasNewDOChanges ? '#fef2f2' : 'var(--bg-main)',
-                    color: hasNewDOChanges ? '#ef4444' : 'var(--text-dark)',
-                    fontWeight: hasNewDOChanges ? '800' : '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '10px',
-                    transition: 'all 0.2s ease',
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    position: 'relative'
-                  }}
-                  className="dashboard-shortcut-btn"
                 >
-                  <Activity size={16} color={hasNewDOChanges ? '#ef4444' : 'var(--primary)'} />
+                  <Activity size={14} />
                   <span>DO Operations Log</span>
-                  {hasNewDOChanges && <span className="pulsing-dot" style={{ marginLeft: '4px', position: 'relative', top: 'auto', right: 'auto' }} />}
+                  {hasNewDOChanges ? <span className="pulsing-dot" style={{ position: 'relative', top: 'auto', right: 'auto' }} /> : null}
                 </button>
-
-                <button 
+                <button
+                  type="button"
+                  className="sa-dash-shortcut"
                   onClick={() => setActiveMenu('history_logs')}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '10px',
-                    transition: 'all 0.2s ease',
-                    minWidth: 0,
-                    overflow: 'hidden'
-                  }}
-                  className="dashboard-shortcut-btn"
                 >
-                  <History size={16} color="var(--primary)" />
+                  <History size={14} />
                   <span>System Logs</span>
                 </button>
-
-                <button 
+                <button
+                  type="button"
+                  className="sa-dash-shortcut"
                   onClick={() => setActiveMenu('profile_lookup')}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '10px',
-                    transition: 'all 0.2s ease',
-                    minWidth: 0,
-                    overflow: 'hidden'
-                  }}
-                  className="dashboard-shortcut-btn"
                 >
-                  <Search size={16} color="var(--primary)" />
-                  <span>Profile Lookup Portal</span>
+                  <Search size={14} />
+                  <span>Profile Lookup</span>
+                </button>
+                <button
+                  type="button"
+                  className="sa-dash-shortcut"
+                  onClick={() => setActiveMenu('customer_reports')}
+                >
+                  <MessageSquareWarning size={14} />
+                  <span>Customer Reports</span>
                 </button>
               </div>
-            </div>
+            </section>
           </div>
         )}
 
@@ -4888,7 +5863,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           };
 
           return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minHeight: '70vh' }}>
+            <div className="sa-op-gmail sa-box-tracker">
               {deltasViewClient ? (() => {
                 const row = deltasViewClient;
                 const latestQty = Math.max(0, Number(row.latest_count) || 0);
@@ -4952,110 +5927,74 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 };
 
                 return (
-                  <div className="diagnostics-card" style={{
-                    flex: 1,
-                    padding: 24,
-                    backgroundColor: 'var(--surface)',
-                    borderRadius: 'var(--radius-lg)',
-                    border: '1px solid var(--border)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 20
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottom: '1px solid var(--border)', paddingBottom: 14, flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <section className="sa-op-card">
+                    <div className="sa-op-dir-toolbar">
+                      <div className="sa-op-dir-tools">
                         <button
                           type="button"
+                          className="sa-box-back-btn"
                           onClick={() => {
                             setDeltasViewClient(null);
                             setDeltasViewHistoryPage(1);
-                          }}
-                          style={{
-                            border: '1px solid var(--border)',
-                            background: '#fff',
-                            borderRadius: 'var(--radius-sm)',
-                            padding: '8px 12px',
-                            cursor: 'pointer',
-                            fontWeight: 700,
-                            fontSize: '0.8rem',
-                            color: 'var(--text-dark)'
                           }}
                         >
                           ← Back
                         </button>
                         <div>
-                          <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-dark)' }}>
-                            {row.client_name}
-                          </h2>
-                          <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                          <h2 className="sa-op-title">{row.client_name}</h2>
+                          <p className="sa-op-sub">
                             {row.warehouse_name || '-'} · {row.chamber_name || '-'}
                           </p>
                         </div>
                       </div>
                       <button
                         type="button"
+                        className="sa-op-btn-export"
                         onClick={handleExportClientHistoryCSV}
                         disabled={history.length === 0}
-                        style={{
-                          padding: '8px 14px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          backgroundColor: history.length === 0 ? '#94a3b8' : '#22c55e',
-                          color: '#fff',
-                          fontWeight: 700,
-                          fontSize: '0.8rem',
-                          cursor: history.length === 0 ? 'not-allowed' : 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6
-                        }}
                       >
                         <Download size={14} />
                         Export
                       </button>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Previous Qty</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: 6 }}>
+                    <div className="sa-box-detail-body">
+                    <div className="sa-box-stat-grid">
+                      <div className="sa-box-stat-card">
+                        <div className="sa-box-stat-label">Previous Qty</div>
+                        <div className="sa-box-stat-value">
                           {row.prev_date ? prevQty.toLocaleString() : '—'}
                         </div>
-                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>{formatDate(row.prev_date)}</div>
+                        <div className="sa-box-stat-sub">{formatDate(row.prev_date)}</div>
                       </div>
-                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Latest Qty</div>
-                        <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: 6, color: 'var(--primary)' }}>
+                      <div className="sa-box-stat-card">
+                        <div className="sa-box-stat-label">Latest Qty</div>
+                        <div className="sa-box-stat-value primary">
                           {latestQty.toLocaleString()}
                         </div>
-                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>{formatDate(row.latest_date)}</div>
+                        <div className="sa-box-stat-sub">{formatDate(row.latest_date)}</div>
                       </div>
-                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Latest Slot</div>
+                      <div className="sa-box-stat-card">
+                        <div className="sa-box-stat-label">Latest Slot</div>
                         {(() => {
                           const slotLabel = resolveShiftLabel(row.latest_shift || row.latest_slot, null, null);
                           const isMorning = slotLabel === 'Morning';
                           return (
                             <>
-                              <div style={{
-                                fontSize: '1.2rem',
-                                fontWeight: 800,
-                                marginTop: 6,
-                                color: isMorning ? '#0369a1' : '#b45309'
-                              }}>
+                              <div className="sa-box-stat-value" style={{ color: isMorning ? '#1967d2' : '#b06000' }}>
                                 {slotLabel}
                               </div>
                               {row.prev_shift && (
-                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                                  Prev: {resolveShiftLabel(row.prev_shift || row.prev_slot, null, null)}
+                                <div className="sa-box-stat-sub">
+                                  Prev: {resolveShiftLabel(row.prev_shift, null, null)}
                                 </div>
                               )}
                             </>
                           );
                         })()}
                       </div>
-                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>Box Temp</div>
+                      <div className="sa-box-stat-card">
+                        <div className="sa-box-stat-label">Box Temp</div>
                         {(() => {
                           const latestTempRaw = row.latest_temp ?? row.box_temp ?? row.chamber_temp;
                           const latestTemp = latestTempRaw != null && latestTempRaw !== '' && Number.isFinite(Number(latestTempRaw))
@@ -5067,32 +6006,24 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             : null;
                           return (
                             <>
-                              <div style={{
-                                fontSize: '1.4rem',
-                                fontWeight: 800,
-                                marginTop: 6,
-                                color: latestTemp == null ? '#64748b' : latestTemp <= -18 ? '#15803d' : '#b91c1c'
+                              <div className="sa-box-stat-value" style={{
+                                color: latestTemp == null ? '#5f6368' : latestTemp <= -18 ? '#137333' : '#c5221f'
                               }}>
                                 {latestTemp == null ? '—' : `${latestTemp}°C`}
                               </div>
                               {prevTemp != null && (
-                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                                  Prev: {prevTemp}°C
-                                </div>
+                                <div className="sa-box-stat-sub">Prev: {prevTemp}°C</div>
                               )}
                             </>
                           );
                         })()}
                       </div>
-                      <div style={{ padding: 16, background: 'var(--bg-main)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                      <div className="sa-box-stat-card">
+                        <div className="sa-box-stat-label">
                           {inwardQty > 0 ? 'Plus (In)' : outwardQty > 0 ? 'Minus (Out)' : 'In / Out'}
                         </div>
-                        <div style={{
-                          fontSize: '1.4rem',
-                          fontWeight: 800,
-                          marginTop: 6,
-                          color: inwardQty > 0 ? '#16a34a' : outwardQty > 0 ? '#dc2626' : '#64748b'
+                        <div className="sa-box-stat-value" style={{
+                          color: inwardQty > 0 ? '#137333' : outwardQty > 0 ? '#c5221f' : '#5f6368'
                         }}>
                           {inwardQty > 0 ? `+${inwardQty}` : outwardQty > 0 ? `-${outwardQty}` : '0'}
                         </div>
@@ -5100,27 +6031,23 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </div>
 
                     <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-                        <h3 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-dark)' }}>
-                          Audit History
-                        </h3>
-                        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                          {history.length} records
-                        </span>
+                      <div className="sa-box-table-head" style={{ borderTop: '1px solid #e0e0e0' }}>
+                        <h3 className="sa-op-title">Audit History</h3>
+                        <span className="sa-box-chart-sub">{history.length} records</span>
                       </div>
                       {history.length === 0 ? (
-                        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>No history available.</div>
+                        <div className="sa-box-empty">No history available.</div>
                       ) : (
                         <>
-                          <div className="table-responsive">
-                            <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <div className="sa-box-table-wrap table-responsive">
+                            <table className="logs-table">
                               <thead>
-                                <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                  <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Date</th>
-                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Slot</th>
-                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Box Qty</th>
-                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>Box Temp</th>
-                                  <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>In / Out</th>
+                                <tr>
+                                  <th>Date</th>
+                                  <th className="sa-box-th-center">Slot</th>
+                                  <th className="sa-box-th-center">Box Qty</th>
+                                  <th className="sa-box-th-center">Box Temp</th>
+                                  <th className="sa-box-th-center">In / Out</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -5143,43 +6070,24 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     : null;
                                   const slotLabel = resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
                                   const isMorning = slotLabel === 'Morning';
-                                  const isLastRow = i === paginatedHistory.length - 1;
-                                  const cellBorder = isLastRow ? 'none' : undefined;
-                                  const dateVal = h.date || h.entry_date;
                                   return (
                                     <tr key={`${dateVal}-${slotLabel}-${h.id || globalIndex}`}>
-                                      <td style={{ padding: '10px 12px', fontWeight: 600, borderBottom: cellBorder }}>{formatDate(dateVal)}</td>
-                                      <td style={{ padding: '10px 12px', textAlign: 'center', borderBottom: cellBorder }}>
-                                        <span style={{
-                                          padding: '3px 8px',
-                                          borderRadius: 'var(--radius-sm)',
-                                          backgroundColor: isMorning ? '#e0f2fe' : '#fef3c7',
-                                          color: isMorning ? '#0369a1' : '#b45309',
-                                          fontWeight: 800,
-                                          fontSize: '0.7rem'
-                                        }}>
+                                      <td>{formatDate(dateVal)}</td>
+                                      <td className="sa-box-td-center">
+                                        <span className={`sa-box-slot ${isMorning ? 'morning' : 'evening'}`}>
                                           {slotLabel}
                                         </span>
                                       </td>
-                                      <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 800, borderBottom: cellBorder }}>
+                                      <td className="sa-box-td-center sa-box-qty-latest">
                                         {count === null ? '—' : count.toLocaleString()}
                                       </td>
-                                      <td style={{
-                                        padding: '10px 12px',
-                                        textAlign: 'center',
-                                        fontWeight: 800,
-                                        borderBottom: cellBorder,
-                                        color: tempVal == null ? '#64748b' : tempVal <= -18 ? '#15803d' : '#b91c1c'
+                                      <td className="sa-box-td-center" style={{
+                                        fontWeight: 500,
+                                        color: tempVal == null ? '#5f6368' : tempVal <= -18 ? '#137333' : '#c5221f'
                                       }}>
                                         {tempVal == null ? '—' : `${tempVal}°C`}
                                       </td>
-                                      <td style={{
-                                        padding: '10px 12px',
-                                        textAlign: 'center',
-                                        fontWeight: 700,
-                                        borderBottom: cellBorder,
-                                        color: step == null ? '#64748b' : step > 0 ? '#16a34a' : step < 0 ? '#dc2626' : '#64748b'
-                                      }}>
+                                      <td className={`sa-box-td-center sa-box-flow ${step == null ? 'neutral' : step > 0 ? 'up' : step < 0 ? 'down' : 'neutral'}`}>
                                         {step == null
                                           ? '—'
                                           : step > 0
@@ -5204,43 +6112,29 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </>
                       )}
                     </div>
-                  </div>
+                    </div>
+                  </section>
                 );
               })() : (
               <>
-              <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+              <section className="sa-op-card">
+                <div className="sa-op-dir-toolbar">
                   <div>
-                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
-                      Daily Box Inventory Tracker
-                    </h2>
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      Select a warehouse to view its box inventory below.
-                    </p>
+                    <h2 className="sa-op-title">Daily Box Inventory Tracker</h2>
+                    <p className="sa-op-sub">Select a warehouse to view its box inventory below.</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => loadDailyBoxTrackerData()}
-                    disabled={loadingDeltas}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      backgroundColor: 'var(--bg-main)',
-                      color: 'var(--text-dark)',
-                      fontWeight: 700,
-                      fontSize: '0.8rem',
-                      cursor: loadingDeltas ? 'wait' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6
-                    }}
-                  >
-                    {loadingDeltas ? <Loader2 size={14} className="spinner-icon" /> : <Activity size={14} />}
-                    Refresh Live Data
-                  </button>
+                  <div className="sa-op-dir-tools">
+                    <button
+                      type="button"
+                      className="sa-op-btn-primary"
+                      onClick={() => loadDailyBoxTrackerData()}
+                      disabled={loadingDeltas}
+                    >
+                      {loadingDeltas ? <Loader2 size={14} className="spinner-icon" /> : <Activity size={14} />}
+                      Refresh Live Data
+                    </button>
+                  </div>
                 </div>
-
                 {deltasError && (
                   <LoadErrorBanner
                     message={deltasError}
@@ -5248,194 +6142,102 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     onDismiss={() => setDeltasError('')}
                   />
                 )}
-              </div>
+              </section>
 
-              {/* Filters — separate outer div */}
-              <div className="diagnostics-card" style={{
-                padding: 16,
-                backgroundColor: 'var(--surface)',
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                gap: 12,
-                flexWrap: 'wrap',
-                alignItems: 'flex-end'
-              }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Warehouse (Live DB)
+              <section className="sa-op-card">
+                <div className="sa-box-filters-body">
+                  <label className="sa-op-field" style={{ minWidth: 220 }}>
+                    <span>Warehouse (Live DB)</span>
+                    <select
+                      className={`sa-op-filter${deltasWarehouseFilter !== 'All' ? ' sa-op-filter-active' : ''}`}
+                      value={deltasWarehouseFilter}
+                      onChange={(e) => {
+                        const wh = e.target.value;
+                        setDeltasWarehouseFilter(wh);
+                        setDeltasClientFilter('All');
+                        setDeltasCurrentPage(1);
+                        setDeltasViewClient(null);
+                        loadDailyBoxTrackerData(wh);
+                      }}
+                    >
+                      <option value="All">
+                        All Warehouses ({inventoryFilterOptions.total_warehouses})
+                      </option>
+                      {liveWarehouses.map((w) => (
+                        <option key={w.name} value={w.name}>
+                          {w.name} ({w.client_count} clients)
+                        </option>
+                      ))}
+                    </select>
                   </label>
-                  <select
-                    value={deltasWarehouseFilter}
-                    onChange={(e) => {
-                      const wh = e.target.value;
-                      setDeltasWarehouseFilter(wh);
+
+                  <label className="sa-op-field" style={{ minWidth: 220 }}>
+                    <span>Client (by Warehouse)</span>
+                    <select
+                      className={`sa-op-filter${deltasClientFilter !== 'All' ? ' sa-op-filter-active' : ''}`}
+                      value={deltasClientFilter}
+                      onChange={(e) => {
+                        setDeltasClientFilter(e.target.value);
+                        setDeltasCurrentPage(1);
+                      }}
+                    >
+                      <option value="All">
+                        All Clients ({clientsForWarehouse.length})
+                      </option>
+                      {clientsForWarehouse.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <button
+                    type="button"
+                    className="sa-op-btn-text"
+                    onClick={() => {
+                      setDeltasWarehouseFilter('All');
                       setDeltasClientFilter('All');
                       setDeltasCurrentPage(1);
-                      setDeltasViewClient(null);
-                      loadDailyBoxTrackerData(wh);
-                    }}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.8rem',
-                      fontWeight: 700,
-                      backgroundColor: deltasWarehouseFilter !== 'All' ? '#e0f2fe' : '#fff',
-                      color: 'var(--text-dark)',
-                      outline: 'none',
-                      cursor: 'pointer',
-                      height: 37
+                      loadDailyBoxTrackerData('All');
                     }}
                   >
-                    <option value="All">
-                      All Warehouses ({inventoryFilterOptions.total_warehouses})
-                    </option>
-                    {liveWarehouses.map((w) => (
-                      <option key={w.name} value={w.name}>
-                        {w.name} ({w.client_count} clients)
-                      </option>
-                    ))}
-                  </select>
+                    Clear Filters
+                  </button>
+
+                  <div className={`sa-box-live-badge${loadingDeltas ? ' loading' : ''}`}>
+                    <span className="sa-box-live-dot" />
+                    {loadingDeltas ? 'Loading live DB…' : clientCountLabel}
+                  </div>
                 </div>
+              </section>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
-                  <label style={{ fontSize: '0.68rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Client (by Warehouse)
-                  </label>
-                  <select
-                    value={deltasClientFilter}
-                    onChange={(e) => {
-                      setDeltasClientFilter(e.target.value);
-                      setDeltasCurrentPage(1);
-                    }}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.8rem',
-                      fontWeight: 700,
-                      backgroundColor: deltasClientFilter !== 'All' ? '#e0f2fe' : '#fff',
-                      color: 'var(--text-dark)',
-                      outline: 'none',
-                      cursor: 'pointer',
-                      height: 37
-                    }}
-                  >
-                    <option value="All">
-                      All Clients ({clientsForWarehouse.length})
-                    </option>
-                    {clientsForWarehouse.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeltasWarehouseFilter('All');
-                    setDeltasClientFilter('All');
-                    setDeltasCurrentPage(1);
-                    loadDailyBoxTrackerData('All');
-                  }}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid #cbd5e1',
-                    backgroundColor: '#f1f5f9',
-                    color: '#475569',
-                    fontWeight: 700,
-                    fontSize: '0.78rem',
-                    cursor: 'pointer',
-                    height: 37
-                  }}
-                >
-                  Clear Filters
-                </button>
-
-                <div style={{
-                  marginLeft: 'auto',
-                  padding: '8px 14px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: '#f0f9ff',
-                  border: '1px solid #bae6fd',
-                  color: '#0369a1',
-                  fontWeight: 800,
-                  fontSize: '0.8rem',
-                  height: 37,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8
-                }}>
-                  <span style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: loadingDeltas ? '#94a3b8' : '#22c55e',
-                    boxShadow: loadingDeltas ? 'none' : '0 0 0 3px rgba(34,197,94,0.25)',
-                    display: 'inline-block'
-                  }} />
-                  {loadingDeltas ? 'Loading live DB…' : clientCountLabel}
-                </div>
-              </div>
-
-              {/* Single SVG — client-wise boxes (follows warehouse/client filters) */}
-              <div className="diagnostics-card" style={{
-                padding: '18px 20px',
-                backgroundColor: 'var(--surface)',
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 12
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      backgroundColor: loadingDeltas ? '#94a3b8' : '#22c55e',
-                      boxShadow: loadingDeltas ? 'none' : '0 0 0 3px rgba(34,197,94,0.2)'
-                    }} />
-                    <h3 style={{ margin: 0, fontSize: '0.82rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+              <section className="sa-op-card">
+                <div className="sa-box-chart-body">
+                  <div className="sa-box-chart-head">
+                    <h3 className="sa-box-chart-title">
+                      <span className={`sa-box-live-dot${loadingDeltas ? '' : ''}`} style={loadingDeltas ? { background: '#9aa0a6', boxShadow: 'none' } : undefined} />
                       Clients × Boxes
                     </h3>
+                    <span className="sa-box-chart-sub">
+                      {deltasWarehouseFilter === 'All' ? 'All Warehouses' : deltasWarehouseFilter}
+                      {deltasClientFilter !== 'All' ? ` · ${deltasClientFilter}` : ''}
+                      {' · '}
+                      {loadingDeltas ? 'syncing…' : 'live DB'}
+                    </span>
                   </div>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)' }}>
-                    {deltasWarehouseFilter === 'All' ? 'All Warehouses' : deltasWarehouseFilter}
-                    {deltasClientFilter !== 'All' ? ` · ${deltasClientFilter}` : ''}
-                    {' · '}
-                    {loadingDeltas ? 'syncing…' : 'live DB'}
-                  </span>
+                  {renderClientBoxesPieSvg()}
                 </div>
-                {renderClientBoxesPieSvg()}
-              </div>
+              </section>
 
-              {/* Warehouse-wise data table */}
-              <div className="diagnostics-card" style={{
-                padding: 20,
-                backgroundColor: 'var(--surface)',
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 14
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                  <h3 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+              <section className="sa-op-card">
+                <div className="sa-box-table-head">
+                  <h3 className="sa-op-title">
                     {deltasWarehouseFilter === 'All' ? 'All Warehouses — Box Inventory' : `${deltasWarehouseFilter} — Box Inventory`}
                   </h3>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)' }}>
-                      Total boxes: <strong style={{ color: 'var(--text-dark)' }}>{totalBoxes.toLocaleString()}</strong>
+                  <div className="sa-box-table-meta">
+                    <span>
+                      Total boxes: <strong>{totalBoxes.toLocaleString()}</strong>
                     </span>
-                    <span style={{
-                      fontSize: '0.76rem',
-                      fontWeight: 800,
-                      color: netDelta > 0 ? '#16a34a' : netDelta < 0 ? '#dc2626' : '#64748b'
-                    }}>
+                    <span className={netDelta > 0 ? 'net-up' : netDelta < 0 ? 'net-down' : ''}>
                       {netDelta > 0
                         ? `Net inward: +${netDelta}`
                         : netDelta < 0
@@ -5444,21 +6246,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </span>
                     <button
                       type="button"
+                      className="sa-op-btn-export"
                       onClick={handleExportBoxInventoryCSV}
                       disabled={filteredRows.length === 0}
-                      style={{
-                        padding: '7px 12px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: 'none',
-                        backgroundColor: filteredRows.length === 0 ? '#94a3b8' : '#22c55e',
-                        color: '#fff',
-                        fontWeight: 700,
-                        fontSize: '0.78rem',
-                        cursor: filteredRows.length === 0 ? 'not-allowed' : 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5
-                      }}
                     >
                       <Download size={14} />
                       Export
@@ -5467,30 +6257,26 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </div>
 
                 {loadingDeltas ? (
-                  <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-                    Loading warehouse inventory…
-                  </div>
+                  <div className="sa-box-empty">Loading warehouse inventory…</div>
                 ) : filteredRows.length === 0 ? (
-                  <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-                    No box inventory data matches this filter.
-                  </div>
+                  <div className="sa-box-empty">No box inventory data matches this filter.</div>
                 ) : (
                   <>
-                    <div className="table-responsive" style={{ maxHeight: 520, overflowY: 'auto' }}>
-                      <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <div className="sa-box-table-wrap table-responsive">
+                      <table className="logs-table">
                         <thead>
-                          <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Client</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Warehouse</th>
-                            <th style={{ textAlign: 'left', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Chamber</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Prev Qty</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Qty</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Box Temp</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Slot</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>In / Out</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Latest Date</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Status</th>
-                            <th style={{ textAlign: 'center', padding: '10px 12px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Action</th>
+                          <tr>
+                            <th>Client</th>
+                            <th>Warehouse</th>
+                            <th>Chamber</th>
+                            <th className="sa-box-th-center">Prev Qty</th>
+                            <th className="sa-box-th-center">Latest Qty</th>
+                            <th className="sa-box-th-center">Box Temp</th>
+                            <th className="sa-box-th-center">Slot</th>
+                            <th className="sa-box-th-center">In / Out</th>
+                            <th className="sa-box-th-center">Latest Date</th>
+                            <th className="sa-box-th-center">Status</th>
+                            <th className="sa-box-th-center">Action</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -5519,83 +6305,50 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             const isMorningSlot = slotLabel === 'Morning';
 
                             return (
-                              <tr key={`${row.client_name}-${row.chamber_name}-${idx}`} style={{ borderBottom: '1px solid var(--border)' }}>
-                                <td style={{ padding: '10px 12px', fontWeight: 800, fontSize: '0.8rem', color: 'var(--text-dark)' }}>{row.client_name}</td>
-                                <td style={{ padding: '10px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{row.warehouse_name || '-'}</td>
-                                <td style={{ padding: '10px 12px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>{row.chamber_name || '-'}</td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.8rem' }}>
+                              <tr key={`${row.client_name}-${row.chamber_name}-${idx}`}>
+                                <td className="sa-box-client-name">{row.client_name}</td>
+                                <td className="sa-box-muted">{row.warehouse_name || '-'}</td>
+                                <td className="sa-box-muted">{row.chamber_name || '-'}</td>
+                                <td className="sa-box-td-center sa-box-muted">
                                   {row.prev_date ? prevQty.toLocaleString() : '-'}
                                 </td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.88rem', fontWeight: 900, color: 'var(--primary)' }}>
+                                <td className="sa-box-td-center sa-box-qty-latest">
                                   {latestQty.toLocaleString()}
                                 </td>
-                                <td style={{
-                                  padding: '10px 12px',
-                                  textAlign: 'center',
-                                  fontWeight: 800,
-                                  fontSize: '0.8rem',
-                                  color: latestTemp == null ? '#64748b' : latestTemp <= -18 ? '#15803d' : '#b91c1c'
+                                <td className="sa-box-td-center" style={{
+                                  fontWeight: 500,
+                                  color: latestTemp == null ? '#5f6368' : latestTemp <= -18 ? '#137333' : '#c5221f'
                                 }}>
                                   {latestTemp == null ? '—' : `${latestTemp}°C`}
                                 </td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                                  <span style={{
-                                    padding: '3px 8px',
-                                    borderRadius: 'var(--radius-sm)',
-                                    backgroundColor: isMorningSlot ? '#e0f2fe' : '#fef3c7',
-                                    color: isMorningSlot ? '#0369a1' : '#b45309',
-                                    fontWeight: 800,
-                                    fontSize: '0.7rem'
-                                  }}>
+                                <td className="sa-box-td-center">
+                                  <span className={`sa-box-slot ${isMorningSlot ? 'morning' : 'evening'}`}>
                                     {slotLabel}
                                   </span>
                                 </td>
-                                <td style={{
-                                  padding: '10px 12px',
-                                  textAlign: 'center',
-                                  fontWeight: 800,
-                                  fontSize: '0.8rem',
-                                  color: isUp ? '#16a34a' : isDown ? '#dc2626' : '#64748b'
-                                }}>
+                                <td className={`sa-box-td-center sa-box-flow ${isUp ? 'up' : isDown ? 'down' : 'neutral'}`}>
                                   {flowLabel}
                                 </td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                <td className="sa-box-td-center sa-box-muted">
                                   {formatDate(row.latest_date)}
                                 </td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                                  <span style={{
-                                    padding: '3px 8px',
-                                    borderRadius: 'var(--radius-sm)',
-                                    backgroundColor: isUp ? '#dcfce7' : isDown ? '#fee2e2' : '#f1f5f9',
-                                    color: isUp ? '#15803d' : isDown ? '#b91c1c' : '#475569',
-                                    fontWeight: 800,
-                                    fontSize: '0.7rem'
-                                  }}>
+                                <td className="sa-box-td-center">
+                                  <span className={`sa-box-status ${isUp ? 'inward' : isDown ? 'outward' : 'neutral'}`}>
                                     {isUp ? 'Inward' : isDown ? 'Outward' : 'No Change'}
                                   </span>
                                 </td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                <td className="sa-box-td-center">
                                   <button
                                     type="button"
+                                    className="sa-box-view-link"
                                     onClick={() => {
                                       setDeltasViewHistoryPage(1);
-                                      // Always open from latest loaded row so temp/qty are fresh
                                       const fresh = (dailyDeltas || []).find((r) =>
                                         r.client_name === row.client_name &&
                                         String(r.chamber_name || '') === String(row.chamber_name || '') &&
                                         String(r.warehouse_name || '') === String(row.warehouse_name || '')
                                       );
                                       setDeltasViewClient(fresh || row);
-                                    }}
-                                    style={{
-                                      border: 'none',
-                                      background: 'transparent',
-                                      color: 'var(--primary)',
-                                      fontWeight: 600,
-                                      fontSize: '0.78rem',
-                                      cursor: 'pointer',
-                                      textDecoration: 'underline',
-                                      padding: 0
                                     }}
                                   >
                                     View
@@ -5619,7 +6372,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     )}
                   </>
                 )}
-              </div>
+              </section>
               </>
               )}
             </div>
@@ -5628,363 +6381,266 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
 
         {activeMenu === 'history_logs' && (
-          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            
-            {/* Tab Header & Control Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
-                  System History Database Logs
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                  Select log category and filter by warehouse, search query or date range.
-                </p>
-              </div>
-
-              {/* Tabs Switcher */}
-              <div style={{ display: 'flex', gap: '8px', backgroundColor: 'var(--bg-main)', padding: '4px', borderRadius: 'var(--radius-sm)' }}>
-                <button
-                  onClick={() => setHistoryTab('daily')}
-                  style={{
-                    padding: '6px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: historyTab === 'daily' ? 'var(--surface)' : 'transparent',
-                    color: historyTab === 'daily' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    boxShadow: historyTab === 'daily' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-                  }}
-                >
-                  Chamber Logs
-                </button>
-                <button
-                  onClick={() => setHistoryTab('inward')}
-                  style={{
-                    padding: '6px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: historyTab === 'inward' ? 'var(--surface)' : 'transparent',
-                    color: historyTab === 'inward' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    boxShadow: historyTab === 'inward' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-                  }}
-                >
-                  Inward Logs
-                </button>
-                <button
-                  onClick={() => setHistoryTab('outward')}
-                  style={{
-                    padding: '6px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: historyTab === 'outward' ? 'var(--surface)' : 'transparent',
-                    color: historyTab === 'outward' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    boxShadow: historyTab === 'outward' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-                  }}
-                >
-                  Outward Logs
-                </button>
-              </div>
+          <div className="sa-um sa-history">
+            <div className="sa-gmail-tabs sa-gmail-tabs-wrap">
+              <button
+                type="button"
+                className={`sa-gmail-tab${historyTab === 'daily' ? ' active' : ''}`}
+                onClick={() => {
+                  setHistoryTab('daily');
+                  setHistoryPage(1);
+                }}
+              >
+                <Thermometer size={14} />
+                Chamber Logs
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${historyTab === 'inward' ? ' active' : ''}`}
+                onClick={() => {
+                  setHistoryTab('inward');
+                  setHistoryPage(1);
+                }}
+              >
+                <Package size={14} />
+                Inward Logs
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${historyTab === 'outward' ? ' active' : ''}`}
+                onClick={() => {
+                  setHistoryTab('outward');
+                  setHistoryPage(1);
+                }}
+              >
+                <History size={14} />
+                Outward Logs
+              </button>
             </div>
 
-            {/* Filters Bar */}
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-              
-              {/* Warehouse filter dropdown */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '160px' }}>
-                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Warehouse Name</label>
-                <select
-                  value={selectedWarehouse}
-                  onChange={(e) => {
-                    setSelectedWarehouse(e.target.value);
-                    setHistoryPage(1);
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    fontSize: '0.8rem',
-                    outline: 'none',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)',
-                    fontWeight: '600'
-                  }}
-                >
-                  <option value="All">All Warehouses</option>
-                  {warehousesList.map(w => (
-                    <option key={w} value={w}>{w}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="sa-op-gmail">
+              <section className="sa-op-card sa-op-directory">
+                <div className="sa-op-dir-toolbar">
+                  <div>
+                    <h2 className="sa-op-title">System History Database Logs</h2>
+                    <p className="sa-op-sub">
+                      {historyTab === 'daily'
+                        ? 'Chamber temperature inspection history'
+                        : historyTab === 'inward'
+                          ? 'Inward receiving & unloading history'
+                          : 'Outward loading & dispatch history'}
+                      {' · '}
+                      Filter by warehouse, search, or date range
+                    </p>
+                  </div>
+                  <div className="sa-op-dir-tools">
+                    <select
+                      className="sa-op-filter"
+                      value={selectedWarehouse}
+                      onChange={(e) => {
+                        setSelectedWarehouse(e.target.value);
+                        setHistoryPage(1);
+                      }}
+                      title="Warehouse filter"
+                    >
+                      <option value="All">All Warehouses</option>
+                      {warehousesList.map((w) => (
+                        <option key={w} value={w}>{w}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-              {/* Search text box */}
-              <div 
-                style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '200px' }}
-                title={
-                  historyTab === 'daily'
-                    ? "Search matches: Date, Ref No, Chamber, Client Name, or Supervisor"
-                    : "Search matches: Date, Ref No, Vehicle Number, Client Name, Supervisor, Transporter, or Driver"
-                }
-              >
-                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search Query</label>
-                <input
-                  type="text"
-                  placeholder={
-                    historyTab === 'daily' 
-                      ? "Search by Ref No, Client, Chamber, Supervisor, Date..." 
-                      : "Search by Ref No, Vehicle No, Client, Supervisor, Date..."
-                  }
-                  title={
-                    historyTab === 'daily'
-                      ? "Search matches: Date, Ref No, Chamber, Client Name, or Supervisor"
-                      : "Search matches: Date, Ref No, Vehicle Number, Client Name, Supervisor, Transporter, or Driver"
-                  }
-                  value={logsSearch}
-                  onChange={(e) => setLogsSearch(e.target.value)}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    fontSize: '0.8rem',
-                    outline: 'none',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)'
-                  }}
-                />
-              </div>
-
-              {/* From Date filter */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '130px' }}>
-                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>From Date</label>
-                <input
-                  type="date"
-                  value={fromDate}
-                  max={toDate || undefined}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setFromDate(val);
-                    if (val && toDate && val > toDate) {
-                      setToDate(val);
+                <div className="sa-op-dir-tools sa-activity-filters">
+                  <label
+                    className="sa-op-search"
+                    title={
+                      historyTab === 'daily'
+                        ? 'Search matches: Date, Ref No, Chamber, Client Name, or Supervisor'
+                        : 'Search matches: Date, Ref No, Vehicle Number, Client Name, Supervisor, Transporter, or Driver'
                     }
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    fontSize: '0.8rem',
-                    outline: 'none',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)'
-                  }}
-                />
-              </div>
-
-              {/* To Date filter */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '130px' }}>
-                <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>To Date</label>
-                <input
-                  type="date"
-                  value={toDate}
-                  min={fromDate || undefined}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setToDate(val);
-                    if (val && fromDate && val < fromDate) {
+                  >
+                    <Search size={14} />
+                    <input
+                      type="search"
+                      placeholder={
+                        historyTab === 'daily'
+                          ? 'Ref No, client, chamber, supervisor…'
+                          : 'Ref No, vehicle, client, supervisor…'
+                      }
+                      value={logsSearch}
+                      onChange={(e) => setLogsSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (fromDate && toDate && fromDate > toDate) {
+                            alert("⚠️ Date Range Error:\n'From Date' must be less than or equal to 'To Date'.");
+                            return;
+                          }
+                          setAppliedFromDate(fromDate);
+                          setAppliedToDate(toDate);
+                          setAppliedLogsSearch(logsSearch);
+                          setHistoryPage(1);
+                        }
+                      }}
+                    />
+                  </label>
+                  <input
+                    className="sa-op-filter"
+                    type="date"
+                    value={fromDate}
+                    max={toDate || undefined}
+                    onChange={(e) => {
+                      const val = e.target.value;
                       setFromDate(val);
-                    }
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    fontSize: '0.8rem',
-                    outline: 'none',
-                    backgroundColor: 'var(--bg-main)',
-                    color: 'var(--text-dark)'
-                  }}
-                />
-              </div>
-
-              {/* Filter Buttons */}
-              <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end' }}>
-                <button
-                  onClick={() => {
-                    if (fromDate && toDate && fromDate > toDate) {
-                      alert("⚠️ Date Range Error:\n'From Date' must be less than or equal to 'To Date'.");
-                      return;
-                    }
-                    setAppliedFromDate(fromDate);
-                    setAppliedToDate(toDate);
-                    setAppliedLogsSearch(logsSearch);
-                    setHistoryPage(1);
-                  }}
-                  style={{
-                    padding: '9px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: 'var(--primary)',
-                    color: '#ffffff',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <Search size={14} />
-                  Find
-                </button>
-
-                <button
-                  onClick={() => {
-                    setFromDate('');
-                    setToDate('');
-                    setAppliedFromDate('');
-                    setAppliedToDate('');
-                    setAppliedLogsSearch('');
-                    setLogsSearch('');
-                    setHistoryPage(1);
-                  }}
-                  style={{
-                    padding: '9px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: '#ffffff',
-                    color: 'var(--text-dark)',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Reset
-                </button>
-
-                <button
-                  onClick={handleExportLogsExcel}
-                  disabled={logsExportLoading || loadingLogs}
-                  style={{
-                    padding: '9px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: logsExportLoading ? '#94a3b8' : '#22c55e',
-                    color: '#ffffff',
-                    fontWeight: '700',
-                    fontSize: '0.8rem',
-                    cursor: logsExportLoading ? 'wait' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <Download size={14} />
-                  {logsExportLoading ? logsExportProgressLabel : 'Export'}
-                </button>
-                {logsExportLoading && (
+                      if (val && toDate && val > toDate) {
+                        setToDate(val);
+                      }
+                    }}
+                    title="From date"
+                  />
+                  <input
+                    className="sa-op-filter"
+                    type="date"
+                    value={toDate}
+                    min={fromDate || undefined}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setToDate(val);
+                      if (val && fromDate && val < fromDate) {
+                        setFromDate(val);
+                      }
+                    }}
+                    title="To date"
+                  />
                   <button
                     type="button"
+                    className="sa-op-btn-primary"
                     onClick={() => {
-                      exportAbortRef.current?.abort();
-                      setLogsExportLoading(false);
-                      setLogsExportProgressLabel('Exporting…');
-                    }}
-                    style={{
-                      padding: '9px 14px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid #fecaca',
-                      backgroundColor: '#fef2f2',
-                      color: '#dc2626',
-                      fontWeight: '700',
-                      fontSize: '0.8rem',
-                      cursor: 'pointer'
+                      if (fromDate && toDate && fromDate > toDate) {
+                        alert("⚠️ Date Range Error:\n'From Date' must be less than or equal to 'To Date'.");
+                        return;
+                      }
+                      setAppliedFromDate(fromDate);
+                      setAppliedToDate(toDate);
+                      setAppliedLogsSearch(logsSearch);
+                      setHistoryPage(1);
                     }}
                   >
-                    Cancel
+                    <Search size={14} />
+                    Find
                   </button>
+                  <button
+                    type="button"
+                    className="sa-op-btn-text"
+                    onClick={() => {
+                      setFromDate('');
+                      setToDate('');
+                      setAppliedFromDate('');
+                      setAppliedToDate('');
+                      setAppliedLogsSearch('');
+                      setLogsSearch('');
+                      setHistoryPage(1);
+                    }}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    className="sa-op-btn-export"
+                    onClick={handleExportLogsExcel}
+                    disabled={logsExportLoading || loadingLogs}
+                  >
+                    <Download size={14} />
+                    <span>{logsExportLoading ? logsExportProgressLabel : 'Export'}</span>
+                  </button>
+                  {logsExportLoading && (
+                    <button
+                      type="button"
+                      className="sa-op-btn-text"
+                      onClick={() => {
+                        exportAbortRef.current?.abort();
+                        setLogsExportLoading(false);
+                        setLogsExportProgressLabel('Exporting…');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+
+                {exportError?.retryKey === 'history' && (
+                  <div className="sa-op-banner-wrap">
+                    <ExportErrorBanner
+                      message={exportError.message}
+                      retryable={exportError.retryable}
+                      onRetry={retryFailedExport}
+                      onDismiss={() => setExportError(null)}
+                    />
+                  </div>
                 )}
-              </div>
-            </div>
 
-            {exportError?.retryKey === 'history' && (
-              <ExportErrorBanner
-                message={exportError.message}
-                retryable={exportError.retryable}
-                onRetry={retryFailedExport}
-                onDismiss={() => setExportError(null)}
-              />
-            )}
-
-            {/* Logs Table */}
-            {loadingLogs ? (
-              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <span>Loading system database logs...</span>
-              </div>
-            ) : getFilteredHistoryLogs().length === 0 ? (
-              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                <span>No logs found matching your filters.</span>
-              </div>
-            ) : (
-              <>
-              <div className="table-responsive" style={{ maxHeight: '500px', overflowY: 'auto' }}>
-                <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    {historyTab === 'daily' && (
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Ref No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator Email</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Chamber</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client Name</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Inspection Time</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Temp (°C)</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Supervisor</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                      </tr>
-                    )}
-                    {historyTab === 'inward' && (
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Ref No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator Email</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Dock No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle Temp</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Material Temp</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Pallets</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Unloading Duration</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Supervisor</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                      </tr>
-                    )}
-                    {historyTab === 'outward' && (
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Ref No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator Email</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Client</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Dock No</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Vehicle Temp</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Material Temp</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Pallets</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Loading Duration</th>
-                        <th style={{ textAlign: 'left', padding: '12px 16px' }}>Supervisor</th>
-                        <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                      </tr>
-                    )}
-                  </thead>
-                  <tbody>
+                {loadingLogs ? (
+                  <div className="sa-op-empty">Loading system database logs…</div>
+                ) : getFilteredHistoryLogs().length === 0 ? (
+                  <div className="sa-op-empty">
+                    <Database size={28} />
+                    <p>No logs found matching your filters.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="sa-history-table-wrap">
+                      <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          {historyTab === 'daily' && (
+                            <tr>
+                              <th>Date</th>
+                              <th>Ref No</th>
+                              <th>Warehouse</th>
+                              <th>Operator Email</th>
+                              <th>Chamber</th>
+                              <th>Client Name</th>
+                              <th>Inspection Time</th>
+                              <th>Temp (°C)</th>
+                              <th>Supervisor</th>
+                              <th style={{ textAlign: 'center' }}>Actions</th>
+                            </tr>
+                          )}
+                          {historyTab === 'inward' && (
+                            <tr>
+                              <th>Date</th>
+                              <th>Ref No</th>
+                              <th>Warehouse</th>
+                              <th>Operator Email</th>
+                              <th>Vehicle No</th>
+                              <th>Client</th>
+                              <th>Dock No</th>
+                              <th>Vehicle Temp</th>
+                              <th>Material Temp</th>
+                              <th>Pallets</th>
+                              <th>Unloading Duration</th>
+                              <th>Supervisor</th>
+                              <th style={{ textAlign: 'center' }}>Actions</th>
+                            </tr>
+                          )}
+                          {historyTab === 'outward' && (
+                            <tr>
+                              <th>Date</th>
+                              <th>Ref No</th>
+                              <th>Warehouse</th>
+                              <th>Operator Email</th>
+                              <th>Vehicle No</th>
+                              <th>Client</th>
+                              <th>Dock No</th>
+                              <th>Vehicle Temp</th>
+                              <th>Material Temp</th>
+                              <th>Pallets</th>
+                              <th>Loading Duration</th>
+                              <th>Supervisor</th>
+                              <th style={{ textAlign: 'center' }}>Actions</th>
+                            </tr>
+                          )}
+                        </thead>
+                        <tbody>
                     {historyTab === 'daily' && getFilteredHistoryLogs().map((log) => {
                        if (!log) return null;
                        return (
@@ -6195,81 +6851,95 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </tr>
                        )
                     })}
-                  </tbody>
-                </table>
-              </div>
-              <PaginationBar
-                page={historyPage}
-                totalItems={historyTotal}
-                pageSize={historyPerPage}
-                onPageChange={setHistoryPage}
-                itemLabel="entries"
-              />
-              </>
-            )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <PaginationBar
+                      page={historyPage}
+                      totalItems={historyTotal}
+                      pageSize={historyPerPage}
+                      onPageChange={setHistoryPage}
+                      itemLabel="entries"
+                    />
+                  </>
+                )}
+              </section>
+            </div>
           </div>
         )}
 
         {activeMenu === 'profile_lookup' && (
-          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px', animation: 'slideUp 0.25s ease' }}>
-            
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
-                  Log Profile Lookup Portal
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                  Locate and view full database profiles and uploaded images for Daily Chamber Logs, Inwards, and Outwards.
-                </p>
-              </div>
-            </div>
-
+          <div className="sa-op-gmail sa-lookup">
             {searchedRecord ? (
-              // FULL SCREEN PROFILE VIEW
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <button 
-                    onClick={() => {
-                      setSearchedRecord(null);
-                      setRecordAllowHistory([]);
-                    }}
-                    style={{
-                      padding: '8px 16px',
-                      backgroundColor: '#f1f5f9',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: 'var(--radius-sm)',
-                      fontWeight: '700',
-                      fontSize: '0.8rem',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      color: 'var(--text-dark)'
-                    }}
-                  >
-                    ← Back to Search Results
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => startSaEditLog(searchedRecordType || 'daily', searchedRecord)}
-                    style={{ padding: '8px 12px', backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#0369a1' }}
-                  >
-                    <Edit size={14} /> Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await handleSaDeleteLog(searchedRecordType || 'daily', searchedRecord);
-                      setSearchedRecord(null);
-                    }}
-                    style={{ padding: '8px 12px', backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.8rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#b91c1c' }}
-                  >
-                    <Trash2 size={14} /> Delete
-                  </button>
-                </div>
+              <div className="do-gmail-view sa-lookup-detail">
+                <section className="do-gmail-panel">
+                  <div className="do-gmail-toolbar">
+                    <div className="do-gmail-toolbar-left">
+                      <button
+                        type="button"
+                        className="do-gmail-icon-btn"
+                        title="Back"
+                        onClick={() => {
+                          setSearchedRecord(null);
+                          setRecordAllowHistory([]);
+                        }}
+                      >
+                        <ArrowLeft size={14} />
+                      </button>
+                      <span className="do-gmail-avatar">
+                        {String(
+                          searchedRecord.client_name ||
+                          searchedRecord.inward_client_name ||
+                          searchedRecord.outward_client_name ||
+                          searchedRecordType ||
+                          'LG'
+                        )
+                          .split(/\s+/)
+                          .filter(Boolean)
+                          .slice(0, 2)
+                          .map((p) => p[0]?.toUpperCase())
+                          .join('') || 'LG'}
+                      </span>
+                      <div>
+                        <h2 className="do-gmail-title">
+                          {searchedRecord.reference_no || 'Log Profile'}
+                        </h2>
+                        <p className="do-gmail-sub">
+                          {(searchedRecordType === 'daily' && 'Chamber Temp') ||
+                            (searchedRecordType === 'inward' && 'Inward') ||
+                            (searchedRecordType === 'outward' && 'Outward') ||
+                            'Log'}
+                          {' · '}
+                          {searchedRecord.warehouse_name ||
+                            searchedRecord.chamber_name ||
+                            searchedRecord.inward_client_name ||
+                            searchedRecord.outward_client_name ||
+                            'Detail view'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="do-gmail-toolbar-left">
+                      <button
+                        type="button"
+                        className="do-gmail-text-btn"
+                        onClick={() => startSaEditLog(searchedRecordType || 'daily', searchedRecord)}
+                      >
+                        <Edit size={14} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="do-gmail-text-btn danger"
+                        onClick={async () => {
+                          await handleSaDeleteLog(searchedRecordType || 'daily', searchedRecord);
+                          setSearchedRecord(null);
+                        }}
+                      >
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    </div>
+                  </div>
 
-                <div className="profile-modal-body" style={{ padding: '0', animation: 'fadeIn 0.2s' }}>
+                <div className="profile-modal-body sa-lookup-body">
                   {/* Left Column: Data Fields */}
                   <div className="profile-details-section">
                     {searchedRecordType !== 'daily' && (
@@ -6567,11 +7237,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </div>
                       </>
                     )}
+
+                    {(searchedRecordType === 'inward' || searchedRecordType === 'outward') &&
+                      renderPhotoCaptureMetadataPanel(searchedRecord.photo_capture_metadata)}
                   </div>
 
                   {/* Right Column: Photos Gallery */}
-                  <div className="profile-photos-section">
-                    <h4>Uploaded Audit Attachment Photos</h4>
+                  <div className="profile-photos-section do-gmail-panel sa-lookup-photos">
+                    <div className="do-gmail-section-label">Uploaded attachments</div>
 
                     {((searchedRecordType === 'daily' && searchedRecord.temp_sensor_image) ||
                       (searchedRecordType === 'inward' && (
@@ -6770,174 +7443,203 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         )}
                       </div>
                     ) : (
-                      <div style={{ padding: '40px 20px', textAlign: 'center', backgroundColor: 'var(--bg-main)', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)', color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
+                      <div className="sa-op-empty">
                         No audit attachment photos uploaded for this record.
                       </div>
                     )}
                   </div>
                 </div>
+                </section>
               </div>
             ) : (
-              // SEARCH DIRECT INPUT AND RESULTS LIST VIEW
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'flex', gap: '10px', width: '100%', maxWidth: '600px' }}>
-                  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', flex: 1, backgroundColor: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-                    <Search size={16} style={{ position: 'absolute', left: '12px', color: 'var(--text-muted)' }} />
-                    <input 
-                      type="text" 
-                      placeholder="Enter Ref No, vehicle, client name, supervisor..."
-                      value={lookupQuery}
-                      onChange={(e) => setLookupQuery(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleLookupSearch();
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px 10px 36px',
-                        border: 'none',
-                        background: 'transparent',
-                        fontSize: '0.86rem',
-                        outline: 'none',
-                        color: 'var(--text-dark)'
-                      }}
-                    />
+              <section className="sa-op-card sa-op-directory">
+                <div className="sa-op-dir-toolbar">
+                  <div>
+                    <h2 className="sa-op-title">Log Profile Lookup</h2>
+                    <p className="sa-op-sub">
+                      Search Daily Chamber, Inward, and Outward profiles by Ref No, vehicle, client, or supervisor
+                    </p>
                   </div>
-                  <button 
-                    onClick={handleLookupSearch}
-                    style={{
-                      padding: '10px 24px',
-                      backgroundColor: 'var(--primary)',
-                      border: 'none',
-                      borderRadius: 'var(--radius-sm)',
-                      color: '#ffffff',
-                      fontWeight: 700,
-                      fontSize: '0.84rem',
-                      cursor: 'pointer',
-                      boxShadow: '0 4px 12px rgba(0, 162, 232, 0.2)'
-                    }}
-                  >
-                    Search Profile
-                  </button>
+                  <div className="sa-op-dir-tools">
+                    <label className="sa-op-search" style={{ width: 'min(52vw, 360px)', minWidth: 'min(100%, 220px)' }}>
+                      <Search size={14} />
+                      <input
+                        type="search"
+                        placeholder="Ref No, vehicle, client, supervisor…"
+                        value={lookupQuery}
+                        onChange={(e) => setLookupQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleLookupSearch();
+                        }}
+                      />
+                    </label>
+                    <button type="button" className="sa-op-btn-primary" onClick={handleLookupSearch}>
+                      Search
+                    </button>
+                  </div>
                 </div>
 
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
-                  {searchResults.length === 0 ? (
-                    <div style={{ padding: '80px 20px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', color: 'var(--text-muted)' }}>
-                      <Search size={36} color="var(--border)" />
-                      <div>
-                        <h4 style={{ margin: '0 0 4px 0', color: 'var(--text-dark)', fontWeight: 800 }}>Search Database Profiles</h4>
-                        <p style={{ margin: 0, fontSize: '0.78rem' }}>Enter reference numbers, vehicle license plates, or client names above to view full profiles.</p>
-                      </div>
+                {searchResults.length === 0 ? (
+                  <div className="sa-op-empty">
+                    <Search size={28} />
+                    <p>Enter a Ref No, vehicle plate, or client name to find profiles.</p>
+                  </div>
+                ) : (
+                  <div className="sa-op-inbox">
+                    <div className="sa-op-dir-toolbar" style={{ borderBottom: '1px solid #e0e0e0', minHeight: 36 }}>
+                      <p className="sa-op-sub" style={{ margin: 0 }}>
+                        {searchResults.length} match{searchResults.length === 1 ? '' : 'es'}
+                      </p>
                     </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <h4 style={{ margin: '0 0 4px 0', color: 'var(--text-muted)', fontSize: '0.74rem', fontWeight: 800, textTransform: 'uppercase' }}>
-                        Search Results ({searchResults.length} Match{searchResults.length > 1 ? 'es' : ''})
-                      </h4>
-                      {searchResults.map((res, index) => (
-                        <div 
-                          key={index}
-                          onClick={() => {
-                            setSearchedRecord(res.original);
-                            setSearchedRecordType(res.type);
-                            loadRecordAllowHistory(res.type, res.original);
-                          }}
-                          style={{
-                            padding: '16px 20px',
-                            backgroundColor: 'var(--surface)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 'var(--radius-md)',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s ease',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            boxShadow: 'var(--shadow-sm)'
-                          }}
-                          className="lookup-result-card"
-                        >
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{
-                                fontSize: '0.65rem',
-                                fontWeight: 800,
-                                padding: '2px 8px',
-                                borderRadius: '100px',
-                                backgroundColor: res.type === 'daily' ? '#eff6ff' : (res.type === 'inward' ? '#ecfdf5' : '#fff7ed'),
-                                color: res.type === 'daily' ? '#2563eb' : (res.type === 'inward' ? '#059669' : '#d97706'),
-                                textTransform: 'uppercase'
-                              }}>
-                                {res.label}
-                              </span>
-                              <span style={{ fontSize: '0.84rem', fontWeight: 800, color: 'var(--text-dark)' }}>
-                                {res.reference_no || `No Ref No (Date: ${res.date})`}
-                              </span>
-                            </div>
-                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                              <strong>Client:</strong> {res.client || '-'} | <strong>Warehouse:</strong> {res.facility}
-                            </div>
-                            <div style={{ fontSize: '0.78rem', color: '#475569', fontStyle: 'italic' }}>
-                              {res.details}
-                            </div>
+                    {searchResults.map((res, index) => {
+                      const initials = String(res.client || res.label || 'LG')
+                        .split(/\s+/)
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .map((p) => p[0]?.toUpperCase())
+                        .join('') || 'LG';
+                      return (
+                        <div key={index} className="sa-op-inbox-row">
+                          <button
+                            type="button"
+                            className="sa-op-inbox-main"
+                            onClick={() => {
+                              setSearchedRecord(res.original);
+                              setSearchedRecordType(res.type);
+                              loadRecordAllowHistory(res.type, res.original);
+                            }}
+                            title="Open profile"
+                          >
+                            <span className="sa-op-avatar">{initials}</span>
+                            <span className="sa-op-sender">
+                              <strong>{res.reference_no || `No Ref · ${res.date || '—'}`}</strong>
+                              <em>{res.label}</em>
+                            </span>
+                            <span className="sa-op-snippet">
+                              {res.client || '—'}
+                              {' · '}
+                              {res.facility || '—'}
+                              {res.details ? ` · ${res.details}` : ''}
+                            </span>
+                            <span className="sa-op-date">{res.date || '—'}</span>
+                          </button>
+                          <div className="sa-op-row-actions">
+                            <button
+                              type="button"
+                              className="sa-op-icon-btn"
+                              title="Open"
+                              onClick={() => {
+                                setSearchedRecord(res.original);
+                                setSearchedRecordType(res.type);
+                                loadRecordAllowHistory(res.type, res.original);
+                              }}
+                            >
+                              <ChevronRight size={14} />
+                            </button>
                           </div>
-                          <ChevronRight size={18} color="var(--text-muted)" />
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
             )}
           </div>
         )}
 
         {activeMenu === 'activity_logs' && (
-          <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            
-            {/* Tab Header & Control Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>
-                  {auditSubTab === 'activity_log' ? 'Operator Activity Audit Logs' : 
-                   auditSubTab === 'security_log' ? 'System Security & Access Logs' :
-                   auditSubTab === 'system_errors' ? 'System Process & Error Logs' :
-                   auditSubTab === 'do_changes' ? 'DO Client & Chamber Actions Log' :
-                   'Role & Permission Requests'}
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                  {auditSubTab === 'activity_log' ? 'Real-time database operations audit trail' : 
-                   auditSubTab === 'security_log' ? 'Authentication events & security access logs' :
-                   auditSubTab === 'system_errors' ? 'All application system processes and runtime exception logs' :
-                   auditSubTab === 'do_changes' ? 'DO operator custom client additions, soft-deletions and updates' :
-                   'Role authorizations, edit/delete permission settings & approvals'}
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <button 
-                  onClick={loadActivities} 
-                  disabled={loadingActivities}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    backgroundColor: '#ffffff',
-                    color: 'var(--text-dark)',
-                    fontSize: '0.8rem',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  Refresh Logs
-                </button>
-              </div>
+          <div className="sa-um sa-activity">
+            <div className="sa-gmail-tabs sa-gmail-tabs-wrap">
+              <button
+                type="button"
+                className={`sa-gmail-tab${auditSubTab === 'activity_log' ? ' active' : ''}`}
+                onClick={() => setAuditSubTab('activity_log')}
+              >
+                <Activity size={14} />
+                Activity Audit
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${auditSubTab === 'do_changes' ? ' active' : ''}`}
+                onClick={() => setAuditSubTab('do_changes')}
+              >
+                DO Operations
+                {hasNewDOChanges ? <span className="pulsing-dot" style={{ position: 'relative', top: 'auto', right: 'auto' }} /> : null}
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${auditSubTab === 'security_log' ? ' active' : ''}`}
+                onClick={() => setAuditSubTab('security_log')}
+              >
+                <ShieldCheck size={14} />
+                Security
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${auditSubTab === 'system_errors' ? ' active' : ''}`}
+                onClick={() => setAuditSubTab('system_errors')}
+              >
+                System & Errors
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${auditSubTab === 'permission_log' ? ' active' : ''}`}
+                onClick={() => setAuditSubTab('permission_log')}
+              >
+                <Lock size={14} />
+                Permissions
+                {hasPendingRequests ? <span className="pulsing-dot" style={{ position: 'relative', top: 'auto', right: 'auto' }} /> : null}
+              </button>
             </div>
 
-            {/* Error Banner */}
+            <div className="sa-op-gmail">
+              <section className="sa-op-card sa-op-directory">
+                <div className="sa-op-dir-toolbar">
+                  <div>
+                    <h2 className="sa-op-title">
+                      {auditSubTab === 'activity_log' ? 'Operator Activity Audit Logs' :
+                       auditSubTab === 'security_log' ? 'System Security & Access Logs' :
+                       auditSubTab === 'system_errors' ? 'System Process & Error Logs' :
+                       auditSubTab === 'do_changes' ? 'DO Client & Chamber Actions Log' :
+                       'Role & Permission Requests'}
+                    </h2>
+                    <p className="sa-op-sub">
+                      {auditSubTab === 'activity_log' ? 'Real-time database operations audit trail' :
+                       auditSubTab === 'security_log' ? 'Authentication events & security access logs' :
+                       auditSubTab === 'system_errors' ? 'Application processes and runtime exception logs' :
+                       auditSubTab === 'do_changes' ? 'Master Setup, client/chamber changes and Super Admin allow decisions' :
+                       'Role authorizations, edit/delete permission settings & approvals'}
+                    </p>
+                  </div>
+                  <div className="sa-op-dir-tools">
+                    <select
+                      className="sa-op-filter"
+                      value={selectedWarehouseFilter}
+                      onChange={(e) => {
+                        setSelectedWarehouseFilter(e.target.value);
+                        setActivitiesCurrentPage(1);
+                      }}
+                      title="Warehouse filter"
+                    >
+                      <option value="All">All Warehouses</option>
+                      {warehousesList.map((w) => (
+                        <option key={w} value={w}>{w}</option>
+                      ))}
+                      <option value="System/Admin">System / Admin Logs</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="sa-op-btn-text"
+                      onClick={loadActivities}
+                      disabled={loadingActivities}
+                    >
+                      {loadingActivities ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+
             {logsError && (
+              <div className="sa-op-banner-wrap">
               <LoadErrorBanner
                 message={logsError}
                 onRetry={() => {
@@ -6947,130 +7649,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 }}
                 onDismiss={() => setLogsError('')}
               />
+              </div>
             )}
-
-            {/* Sub-tab Selection & Warehouse Filter Buttons */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', paddingBottom: '4px' }}>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button 
-                  onClick={() => setAuditSubTab('activity_log')}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid ' + (auditSubTab === 'activity_log' ? 'var(--primary)' : 'var(--border)'),
-                    backgroundColor: auditSubTab === 'activity_log' ? 'var(--primary-light)' : '#ffffff',
-                    color: auditSubTab === 'activity_log' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontSize: '0.82rem',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  Activity Audit Trail
-                </button>
-                <button 
-                  onClick={() => setAuditSubTab('do_changes')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid ' + (auditSubTab === 'do_changes' ? 'var(--primary)' : (hasNewDOChanges ? '#ef4444' : 'var(--border)')),
-                    backgroundColor: auditSubTab === 'do_changes' ? 'var(--primary-light)' : (hasNewDOChanges ? '#fef2f2' : '#ffffff'),
-                    color: auditSubTab === 'do_changes' ? 'var(--primary)' : (hasNewDOChanges ? '#ef4444' : 'var(--text-dark)'),
-                    fontSize: '0.82rem',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    position: 'relative'
-                  }}
-                >
-                  <span>DO Operations Log</span>
-                  {hasNewDOChanges && <span className="pulsing-dot" style={{ display: 'inline-block', position: 'relative', top: 'auto', right: 'auto', marginLeft: '2px' }} />}
-                </button>
-                <button 
-                  onClick={() => setAuditSubTab('security_log')}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid ' + (auditSubTab === 'security_log' ? 'var(--primary)' : 'var(--border)'),
-                    backgroundColor: auditSubTab === 'security_log' ? 'var(--primary-light)' : '#ffffff',
-                    color: auditSubTab === 'security_log' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontSize: '0.82rem',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  Security & Access Logs
-                </button>
-                <button 
-                  onClick={() => setAuditSubTab('system_errors')}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid ' + (auditSubTab === 'system_errors' ? 'var(--primary)' : 'var(--border)'),
-                    backgroundColor: auditSubTab === 'system_errors' ? 'var(--primary-light)' : '#ffffff',
-                    color: auditSubTab === 'system_errors' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontSize: '0.82rem',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  System & Error Logs
-                </button>
-                <button 
-                  onClick={() => setAuditSubTab('permission_log')}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid ' + (auditSubTab === 'permission_log' ? 'var(--primary)' : 'var(--border)'),
-                    backgroundColor: auditSubTab === 'permission_log' ? 'var(--primary-light)' : '#ffffff',
-                    color: auditSubTab === 'permission_log' ? 'var(--primary)' : 'var(--text-dark)',
-                    fontSize: '0.82rem',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  <span>Role & Permission Requests</span>
-                  {hasPendingRequests && <span className="pulsing-dot" />}
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse:</span>
-                <select
-                  value={selectedWarehouseFilter}
-                  onChange={(e) => {
-                    setSelectedWarehouseFilter(e.target.value);
-                    setActivitiesCurrentPage(1);
-                  }}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    fontSize: '0.78rem',
-                    fontWeight: '700',
-                    color: 'var(--text-dark)',
-                    backgroundColor: '#ffffff',
-                    outline: 'none',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <option value="All">All Warehouses</option>
-                  {warehousesList.map(w => (
-                    <option key={w} value={w}>{w}</option>
-                  ))}
-                  <option value="System/Admin">System / Admin Logs</option>
-                </select>
-              </div>
-            </div>
 
             { (auditSubTab === 'activity_log' || auditSubTab === 'do_changes') ? (
               // Tab 1: Operator Activity History Audit Logs & DO Operations Log
@@ -7080,80 +7660,38 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 const currentPage = activitiesCurrentPage;
 
                 return (
-                  <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                    <h3 style={{ fontSize: '0.9rem', fontWeight: 800, margin: '0 0 12px 0', color: 'var(--text-dark)' }}>
-                      {auditSubTab === 'do_changes' ? 'DO Client & Chamber Actions Log' : 'Operator Activity History Audit Logs'}
-                    </h3>
-                    
-                    {/* Search & Filter Controls */}
-                    <div style={{
-                      display: 'flex',
-                      gap: '12px',
-                      flexWrap: 'wrap',
-                      alignItems: 'flex-end',
-                      padding: '16px',
-                      backgroundColor: 'var(--bg-main)',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border)',
-                      marginBottom: '16px'
-                    }}>
-                      {/* 1. Search Query */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '2 1 200px', minWidth: '200px' }}>
-                        <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search Query</label>
-                        <div style={{ position: 'relative' }}>
-                          <input
-                            type="text"
-                            placeholder="Search email, action, desc..."
-                            value={activitiesSearch}
-                            onChange={(e) => {
-                              setActivitiesSearch(e.target.value);
-                              setActivitiesCurrentPage(1);
-                            }}
-                            style={{
-                              width: '100%',
-                              padding: '8px 12px 8px 32px',
-                              borderRadius: 'var(--radius-sm)',
-                              border: '1px solid var(--border)',
-                              fontSize: '0.8rem',
-                              color: 'var(--text-dark)',
-                              backgroundColor: '#ffffff',
-                              outline: 'none'
-                            }}
-                          />
-                          <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                        </div>
-                      </div>
-
-                      {/* 2. Action Filter */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 160px', minWidth: '160px' }}>
-                        <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Action Type</label>
-                        <select
-                          value={activitiesActionFilter}
+                  <div className="sa-activity-panel">
+                    <div className="sa-op-dir-tools sa-activity-filters">
+                      <label className="sa-op-search">
+                        <Search size={14} />
+                        <input
+                          type="search"
+                          placeholder="Search email, action, description…"
+                          value={activitiesSearch}
                           onChange={(e) => {
-                            setActivitiesActionFilter(e.target.value);
+                            setActivitiesSearch(e.target.value);
                             setActivitiesCurrentPage(1);
                           }}
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.8rem',
-                            fontWeight: '600',
-                            color: 'var(--text-dark)',
-                            backgroundColor: '#ffffff',
-                            outline: 'none',
-                            cursor: 'pointer',
-                            height: '37px'
-                          }}
-                        >
+                        />
+                      </label>
+                      <select
+                        className="sa-op-filter"
+                        value={activitiesActionFilter}
+                        onChange={(e) => {
+                          setActivitiesActionFilter(e.target.value);
+                          setActivitiesCurrentPage(1);
+                        }}
+                      >
                           <option value="All">All Actions</option>
                           {auditSubTab === 'do_changes' ? (
                             <>
+                              <option value="MASTER_SETUP">MASTER_SETUP</option>
                               <option value="ADD_CLIENT">ADD_CLIENT</option>
                               <option value="DELETE_CLIENT">DELETE_CLIENT</option>
                               <option value="UPDATE_CLIENT">UPDATE_CLIENT</option>
                               <option value="ADD_CHAMBER">ADD_CHAMBER</option>
                               <option value="DELETE_CHAMBER">DELETE_CHAMBER</option>
+                              <option value="UPDATE_CHAMBER_ZONE">UPDATE_CHAMBER_ZONE</option>
                               <option value="REQUEST_EDIT">REQUEST_EDIT</option>
                               <option value="REQUEST_DELETE">REQUEST_DELETE</option>
                               <option value="GRANT_PERMISSION">GRANT (Allow Edit)</option>
@@ -7174,132 +7712,73 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               <option value="DENY_PERMISSION">DENY_PERMISSION</option>
                             </>
                           )}
-                        </select>
-                      </div>
-
-                      {/* 3. From Date */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 140px', minWidth: '140px' }}>
-                        <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>From Date</label>
-                        <input
-                          type="date"
-                          value={activitiesFromDate}
-                          max={activitiesToDate || undefined}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setActivitiesFromDate(val);
-                            if (val && activitiesToDate && val > activitiesToDate) {
-                              setActivitiesToDate(val);
-                            }
-                            setActivitiesCurrentPage(1);
-                          }}
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.8rem',
-                            color: 'var(--text-dark)',
-                            backgroundColor: '#ffffff',
-                            outline: 'none',
-                            height: '37px'
-                          }}
-                        />
-                      </div>
-
-                      {/* 4. To Date */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 140px', minWidth: '140px' }}>
-                        <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>To Date</label>
-                        <input
-                          type="date"
-                          value={activitiesToDate}
-                          min={activitiesFromDate || undefined}
-                          onChange={(e) => {
-                            const val = e.target.value;
+                      </select>
+                      <input
+                        className="sa-op-filter"
+                        type="date"
+                        value={activitiesFromDate}
+                        max={activitiesToDate || undefined}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setActivitiesFromDate(val);
+                          if (val && activitiesToDate && val > activitiesToDate) {
                             setActivitiesToDate(val);
-                            if (val && activitiesFromDate && val < activitiesFromDate) {
-                              setActivitiesFromDate(val);
-                            }
-                            setActivitiesCurrentPage(1);
-                          }}
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.8rem',
-                            color: 'var(--text-dark)',
-                            backgroundColor: '#ffffff',
-                            outline: 'none',
-                            height: '37px'
-                          }}
-                        />
-                      </div>
-
-                      {/* 5. Actions (Export & Reset) */}
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', height: '37px' }}>
+                          }
+                          setActivitiesCurrentPage(1);
+                        }}
+                        title="From date"
+                      />
+                      <input
+                        className="sa-op-filter"
+                        type="date"
+                        value={activitiesToDate}
+                        min={activitiesFromDate || undefined}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setActivitiesToDate(val);
+                          if (val && activitiesFromDate && val < activitiesFromDate) {
+                            setActivitiesFromDate(val);
+                          }
+                          setActivitiesCurrentPage(1);
+                        }}
+                        title="To date"
+                      />
+                      <button type="button" className="sa-op-btn-export" onClick={handleExportActivitiesExcel}>
+                        <Download size={14} />
+                        <span>Export</span>
+                      </button>
+                      {(activitiesSearch || activitiesFromDate || activitiesToDate || activitiesActionFilter !== 'All') && (
                         <button
-                          onClick={handleExportActivitiesExcel}
-                          style={{
-                            padding: '8px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: 'none',
-                            backgroundColor: '#22c55e',
-                            color: '#ffffff',
-                            fontSize: '0.8rem',
-                            fontWeight: '700',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            height: '100%'
+                          type="button"
+                          className="sa-op-btn-text"
+                          onClick={() => {
+                            setActivitiesSearch('');
+                            setActivitiesFromDate('');
+                            setActivitiesToDate('');
+                            setActivitiesActionFilter('All');
+                            setActivitiesCurrentPage(1);
                           }}
                         >
-                          <Download size={14} />
-                          <span>Export</span>
+                          Reset
                         </button>
-
-                        {(activitiesSearch || activitiesFromDate || activitiesToDate || activitiesActionFilter !== 'All') && (
-                          <button
-                            onClick={() => {
-                              setActivitiesSearch('');
-                              setActivitiesFromDate('');
-                              setActivitiesToDate('');
-                              setActivitiesActionFilter('All');
-                              setActivitiesCurrentPage(1);
-                            }}
-                            style={{
-                              padding: '8px 14px',
-                              borderRadius: 'var(--radius-sm)',
-                              border: '1px solid var(--border)',
-                              backgroundColor: '#ffffff',
-                              color: 'var(--text-muted)',
-                              fontSize: '0.8rem',
-                              fontWeight: '600',
-                              cursor: 'pointer',
-                              height: '100%'
-                            }}
-                          >
-                            Reset
-                          </button>
-                        )}
-                      </div>
+                      )}
                     </div>
 
                     {exportError?.retryKey === 'activities' && (
+                      <div className="sa-op-banner-wrap">
                       <ExportErrorBanner
                         message={exportError.message}
                         retryable={exportError.retryable}
                         onRetry={retryFailedExport}
                         onDismiss={() => setExportError(null)}
                       />
+                      </div>
                     )}
 
                     {loadingActivities ? (
-                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                        <span>Loading activity history logs...</span>
-                      </div>
+                      <div className="sa-op-empty">Loading activity history logs…</div>
                     ) : paginatedActivities.length === 0 ? (
-                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                        <span>No operator activities found matching the filters.</span>
-                      </div>
+                      <div className="sa-op-empty">No operator activities found matching the filters.</div>
                     ) : (
                       <>
                         <div style={{ maxHeight: '420px', overflowY: 'auto', overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
@@ -7319,17 +7798,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               {paginatedActivities.map((act) => {
                                 if (!act) return null;
                                 let actionColor = '#3b82f6';
-                                let actionBg = '#dbeafe';
-                                if (act.action === 'CREATE' || act.action === 'ADD_CLIENT' || act.action === 'ADD_CHAMBER' || act.action === 'GRANT_PERMISSION' || act.action === 'GRANT_DELETE') {
+                                if (act.action === 'CREATE' || act.action === 'ADD_CLIENT' || act.action === 'ADD_CHAMBER' || act.action === 'GRANT_PERMISSION' || act.action === 'GRANT_DELETE' || act.action === 'MASTER_SETUP') {
                                   actionColor = '#10b981';
-                                  actionBg = '#d1fae5';
                                 } else if (act.action === 'DELETE' || act.action === 'DELETE_CLIENT' || act.action === 'DELETE_CHAMBER' || act.action === 'DENY_PERMISSION' || act.action === 'DENY_DELETE') {
                                   actionColor = '#ef4444';
-                                  actionBg = '#fee2e2';
-                                } else if (act.action === 'REQUEST_EDIT' || act.action === 'REQUEST_DELETE') {
+                                } else if (act.action === 'REQUEST_EDIT' || act.action === 'REQUEST_DELETE' || act.action === 'UPDATE_CLIENT' || act.action === 'UPDATE_CHAMBER_ZONE') {
                                   actionColor = '#a16207';
-                                  actionBg = '#fef9c3';
                                 }
+
+                                const isMasterRow = MASTER_SETUP_ACTIONS.has(String(act.action || '').toUpperCase());
 
                                 return (
                                   <tr key={act.id} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -7339,21 +7816,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     </td>
                                     <td style={{ padding: '6px 8px' }}>
                                       <span style={{
-                                        display: 'inline-block',
-                                        padding: '1px 6px',
-                                        borderRadius: '100px',
                                         fontSize: '0.64rem',
                                         fontWeight: '800',
                                         color: actionColor,
-                                        backgroundColor: actionBg,
                                         textTransform: 'uppercase'
                                       }}>
                                         {act.action}
                                       </span>
                                     </td>
-                                    <td style={{ padding: '6px 8px', fontWeight: '700', color: '#475569' }}>{act.log_type}</td>
+                                    <td style={{ padding: '6px 8px', fontWeight: '700', color: '#475569' }}>{isMasterRow ? 'Master Setup' : act.log_type}</td>
                                     <td style={{ padding: '6px 8px', color: '#334155' }}>
-                                      {(() => {
+                                      {isMasterRow ? renderMasterActivityStructured(act, { compact: true }) : (() => {
                                         const refRegex = /\(Ref:\s*(RF-[A-Z]+-\d+-\d+)\)/i;
                                         const descStr = String(act.description || '');
                                         const match = descStr.match(refRegex);
@@ -7995,24 +8468,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                     {/* DO Edit & Delete Permission Requests Section */}
                     {(() => {
-                      const pendingRequests = permissionRequests.filter(pr => pr.status === 'Pending');
-                      const filteredPendingRequests = pendingRequests.filter(pr => {
-                        // Client master = notify only; Master Setup = no allow gate
-                        if (pr.record_type === 'ClientMaster' || pr.record_type === 'MasterSetup') {
-                          return false;
-                        }
-                        // Ignore duplicate notify rows (DO_CHANGE) — real requests use Chamber / ChamberMaster / etc.
-                        if (pr.record_type === 'DO_CHANGE' || pr.record_type === 'activity') {
-                          return false;
-                        }
-                        if (selectedWarehouseFilter === 'All') return true;
-                        const operatorEmail = pr.operator_email ? pr.operator_email.toLowerCase() : '';
-                        const wh = operatorWarehouseMap[operatorEmail];
-                        if (selectedWarehouseFilter === 'System/Admin') {
-                          return !wh || operatorEmail === 'system';
-                        }
-                        return wh === selectedWarehouseFilter;
-                      });
+                      const filteredPendingRequests = filterActionablePendingPermissionRequests(
+                        permissionRequests,
+                        operatorWarehouseMap,
+                        selectedWarehouseFilter
+                      );
 
                       return (
                         <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
@@ -8046,15 +8506,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     const parsed = parseRequestDescription(pr.description || pr.request_description, pr.record_type);
                                     const isMasterSetup = pr.record_type === 'MasterSetup';
                                     const isChamberMaster = pr.record_type === 'ChamberMaster';
+                                    const isChamberType = pr.record_type === 'ChamberType' || parsed.refNo === 'TYPE';
                                     const isClientMaster = pr.record_type === 'ClientMaster';
-                                    const isAllowStyle = isMasterSetup || isChamberMaster || isClientMaster;
+                                    const isAllowStyle = isMasterSetup || isChamberMaster || isChamberType || isClientMaster;
                                     const badgeBg = isClientMaster
                                       ? (pr.raw_action === 'REQUEST_DELETE' ? '#fef2f2' : '#eff6ff')
+                                      : isChamberType
+                                        ? '#fff7ed'
                                       : isChamberMaster
                                         ? (parsed.refNo === 'ADD' ? '#eff6ff' : '#fef2f2')
                                         : (isMasterSetup ? '#f0fdf4' : '#f1f5f9');
                                     const badgeFg = isClientMaster
                                       ? (pr.raw_action === 'REQUEST_DELETE' ? '#b91c1c' : '#1d4ed8')
+                                      : isChamberType
+                                        ? '#c2410c'
                                       : isChamberMaster
                                         ? (parsed.refNo === 'ADD' ? '#1d4ed8' : '#b91c1c')
                                         : (isMasterSetup ? '#15803d' : '#475569');
@@ -8076,9 +8541,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                             if (isAllowStyle) return;
                                             showLogDetailsByRef(parsed.refNo, pr.record_id, parsed.module);
                                           }}
-                                          title={isClientMaster ? 'Client master notify only' : (isChamberMaster ? (parsed.refNo === 'ADD' ? 'Chamber add allow request' : 'Chamber delete allow request') : (isMasterSetup ? 'Master Setup opens without allow' : 'Click to view data profile'))}
+                                          title={isClientMaster ? 'Client master notify only' : (isChamberType ? 'Chamber type allow request' : (isChamberMaster ? (parsed.refNo === 'ADD' ? 'Chamber add allow request' : 'Chamber delete allow request') : (isMasterSetup ? 'Master Setup opens without allow' : 'Click to view data profile')))}
                                         >
-                                          {isMasterSetup ? 'OPEN' : (isChamberMaster || isClientMaster ? (parsed.client || parsed.refNo) : (parsed.refNo || `#${pr.record_id}`))}
+                                          {isMasterSetup ? 'OPEN' : (isChamberMaster || isChamberType || isClientMaster ? (parsed.client || parsed.refNo) : (parsed.refNo || `#${pr.record_id}`))}
                                         </td>
                                         <td style={{ padding: '6px 8px', fontWeight: '700', color: '#0f172a' }}>{parsed.client}</td>
                                         <td style={{ padding: '6px 8px' }}>
@@ -8087,6 +8552,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                               ? '#e0f2fe'
                                               : isClientMaster
                                                 ? '#eff6ff'
+                                              : isChamberType
+                                                ? '#ffedd5'
                                               : (parsed.refNo === 'ADD'
                                                 ? '#dbeafe'
                                                 : (pr.raw_action === 'REQUEST_DELETE' || parsed.refNo === 'DELETE'
@@ -8096,6 +8563,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                               ? '#0369a1'
                                               : isClientMaster
                                                 ? '#1d4ed8'
+                                              : isChamberType
+                                                ? '#c2410c'
                                               : (parsed.refNo === 'ADD'
                                                 ? '#1d4ed8'
                                                 : (pr.raw_action === 'REQUEST_DELETE' || parsed.refNo === 'DELETE'
@@ -8103,7 +8572,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                                   : '#0369a1')),
                                             fontWeight: 800 
                                           }}>
-                                            {isMasterSetup ? 'OPEN' : (isChamberMaster ? (parsed.refNo || 'ALLOW') : (isClientMaster ? (parsed.refNo || 'NOTIFY') : (pr.raw_action === 'REQUEST_DELETE' ? 'DELETE' : 'EDIT')))}
+                                            {isMasterSetup ? 'OPEN' : (isChamberType ? 'TYPE' : (isChamberMaster ? (parsed.refNo || 'ALLOW') : (isClientMaster ? (parsed.refNo || 'NOTIFY') : (pr.raw_action === 'REQUEST_DELETE' ? 'DELETE' : 'EDIT'))))}
                                           </span>
                                         </td>
                                         <td style={{ padding: '6px 8px', color: '#334155' }}>
@@ -8185,87 +8654,32 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 );
               })()
             )}
+              </section>
+            </div>
           </div>
         )}
 
-        {activeMenu === 'user_management' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Top Toggle Buttons: Customers and Data Operators */}
-            <div style={{
-              display: 'flex',
-              gap: '12px',
-              backgroundColor: 'var(--surface)',
-              padding: '6px 10px',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--border)',
-              alignSelf: 'flex-start',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
-            }}>
-              <button
-                type="button"
-                onClick={() => setUserTab('customers')}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  backgroundColor: userTab === 'customers' ? 'var(--primary)' : 'transparent',
-                  color: userTab === 'customers' ? '#fff' : 'var(--text-dark)',
-                  fontWeight: '700',
-                  fontSize: '0.82rem',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <ShieldCheck size={16} />
-                Customers
-              </button>
-              <button
-                type="button"
-                onClick={() => setUserTab('operators')}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  backgroundColor: userTab === 'operators' ? 'var(--primary)' : 'transparent',
-                  color: userTab === 'operators' ? '#fff' : 'var(--text-dark)',
-                  fontWeight: '700',
-                  fontSize: '0.82rem',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <Thermometer size={16} />
-                Data Operators
-              </button>
-            </div>
-
-            {/* Render the appropriate view based on userTab */}
-            {userTab === 'customers' ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                {/* Top: Register New Customer Horizontal Form */}
-                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <div>
-                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {editingSubAdmin ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
-                      <span>{editingSubAdmin ? `Modify Customer Profile: ${editingSubAdmin.email}` : 'Register New Customer'}</span>
-                    </h2>
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      All fields are mandatory. Registered credentials grant dashboard and inquiry management access to Customers.
-                    </p>
+        {activeMenu === 'customers' && (
+          <div className="sa-um">
+              <div className="sa-op-gmail">
+                <section className="sa-op-card">
+                  <div className="sa-op-card-head">
+                    <div className="sa-op-card-icon">{editingSubAdmin ? <Edit size={14} /> : <UserPlus size={14} />}</div>
+                    <div>
+                      <h2 className="sa-op-title">{editingSubAdmin ? 'Modify Customer Profile' : 'Register New Customer'}</h2>
+                      <p className="sa-op-sub">
+                        {editingSubAdmin
+                          ? editingSubAdmin.email
+                          : 'All fields are required. Registered credentials grant dashboard and inquiry access.'}
+                      </p>
+                    </div>
                   </div>
 
-                  <form onSubmit={handleSaveSubAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-                      {/* Full Name */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
-                        <input 
+                  <form onSubmit={handleSaveSubAdmin} className="sa-op-form">
+                    <div className="sa-op-form-grid">
+                      <label className="sa-op-field">
+                        <span>Full Name</span>
+                        <input
                           type="text"
                           name="subadmin-full-name"
                           inputMode="text"
@@ -8274,48 +8688,32 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           value={subAdminFullName}
                           onChange={(e) => setSubAdminFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
                           required
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
-                          }}
                         />
-                      </div>
+                      </label>
 
-                      {/* Phone No. */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
-                        <input 
-                          type="tel"
-                          name="subadmin-phone"
-                          inputMode="numeric"
-                          autoComplete="tel"
-                          placeholder="e.g. 9876543210"
-                          value={subAdminPhoneNo}
-                          onChange={(e) => setSubAdminPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
-                          pattern="[0-9+]{7,15}"
-                          title="Enter a valid phone number (digits only)"
-                          required
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
-                          }}
-                        />
-                      </div>
+                      <label className="sa-op-field">
+                        <span>Phone No.</span>
+                        <div className="sa-op-phone">
+                          <span className="sa-op-phone-code">+91</span>
+                          <input
+                            type="tel"
+                            name="subadmin-phone"
+                            inputMode="numeric"
+                            autoComplete="tel"
+                            placeholder="9876543210"
+                            maxLength={10}
+                            value={subAdminPhoneNo}
+                            onChange={(e) => setSubAdminPhoneNo(toLocalTenDigitPhone(e.target.value))}
+                            pattern="[0-9]{10}"
+                            title="Enter a 10-digit mobile number"
+                            required
+                          />
+                        </div>
+                      </label>
 
-                      {/* Email ID */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '280px', gridColumn: 'span 2' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
-                        <input 
+                      <label className="sa-op-field sa-op-field-wide">
+                        <span>Email ID</span>
+                        <input
                           type="email"
                           name="subadmin-email"
                           inputMode="email"
@@ -8324,27 +8722,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           value={subAdminEmail}
                           onChange={(e) => setSubAdminEmail(e.target.value)}
                           required
-                          style={{
-                            width: '100%',
-                            minWidth: '280px',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)',
-                            boxSizing: 'border-box'
-                          }}
                         />
-                      </div>
+                      </label>
 
-                      {/* Password */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
-                          {editingSubAdmin ? 'Password (leave blank to keep)' : 'Password *'}
-                        </label>
-                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                          <input 
+                      <label className="sa-op-field">
+                        <span>{editingSubAdmin ? 'Password (leave blank to keep)' : 'Password'}</span>
+                        <div className="sa-op-password">
+                          <input
                             type={showPassword ? 'text' : 'password'}
                             name="subadmin-password"
                             autoComplete="new-password"
@@ -8352,42 +8736,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             value={subAdminPassword}
                             onChange={(e) => setSubAdminPassword(e.target.value)}
                             required={!editingSubAdmin}
-                            style={{
-                              width: '100%',
-                              padding: '10px 40px 10px 14px',
-                              borderRadius: 'var(--radius-sm)',
-                              border: '1px solid var(--border)',
-                              fontSize: '0.85rem',
-                              outline: 'none',
-                              backgroundColor: 'var(--bg-main)',
-                              boxSizing: 'border-box'
-                            }}
                           />
                           <button
                             type="button"
-                            onClick={() => setShowPassword(prev => !prev)}
-                            style={{
-                              position: 'absolute',
-                              right: '12px',
-                              background: 'none',
-                              border: 'none',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: '0',
-                              color: 'var(--text-muted)'
-                            }}
+                            className="sa-op-password-toggle"
+                            onClick={() => setShowPassword((prev) => !prev)}
                             title={showPassword ? 'Hide Password' : 'Show Password'}
                           >
-                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                           </button>
                         </div>
-                      </div>
+                      </label>
 
-                      {/* Warehouse Filter Access — select first; clients cascade from these */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Warehouses</label>
+                      <label className="sa-op-field">
+                        <span>Allowed Warehouses</span>
                         <select
                           value=""
                           onChange={(e) => {
@@ -8395,19 +8757,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             if (val && !subAdminSelectedWarehouses.includes(val)) {
                               setSubAdminSelectedWarehouses((prev) => [...prev, val]);
                             }
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            backgroundColor: 'var(--bg-main)',
-                            fontSize: '0.85rem',
-                            color: 'var(--text-dark)',
-                            outline: 'none',
-                            minWidth: 0,
-                            cursor: 'pointer',
-                            appearance: 'auto'
                           }}
                         >
                           <option value="">
@@ -8423,25 +8772,24 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               </option>
                             ))}
                         </select>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                        <div className="sa-op-chips">
                           {subAdminSelectedWarehouses.length === 0 ? (
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No warehouses selected — full warehouse access</span>
+                            <em>No warehouses selected — full warehouse access</em>
                           ) : (
                             subAdminSelectedWarehouses.map((wh, idx) => (
-                              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                              <span key={idx} className="sa-op-chip">
                                 {wh}
-                                <button type="button" onClick={() => setSubAdminSelectedWarehouses(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                <button type="button" onClick={() => setSubAdminSelectedWarehouses((prev) => prev.filter((_, i) => i !== idx))} title="Remove">
                                   <X size={12} />
                                 </button>
                               </span>
                             ))
                           )}
                         </div>
-                      </div>
+                      </label>
 
-                      {/* Client Filter Access — options depend on selected warehouses */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Allowed Clients</label>
+                      <label className="sa-op-field">
+                        <span>Allowed Clients</span>
                         <select
                           value=""
                           disabled={subAdminSelectedWarehouses.length === 0}
@@ -8450,19 +8798,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             if (val && !subAdminSelectedClients.includes(val)) {
                               setSubAdminSelectedClients((prev) => [...prev, val]);
                             }
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            backgroundColor: subAdminSelectedWarehouses.length === 0 ? '#f1f5f9' : 'var(--bg-main)',
-                            fontSize: '0.85rem',
-                            color: 'var(--text-dark)',
-                            outline: 'none',
-                            minWidth: 0,
-                            cursor: subAdminSelectedWarehouses.length === 0 ? 'not-allowed' : 'pointer',
-                            appearance: 'auto'
                           }}
                         >
                           <option value="">
@@ -8480,235 +8815,763 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               </option>
                             ))}
                         </select>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', backgroundColor: 'var(--bg-main)', minHeight: '40px', alignItems: 'center' }}>
+                        <div className="sa-op-chips">
                           {subAdminSelectedWarehouses.length === 0 ? (
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pick warehouses above — clients will list for those warehouses only</span>
+                            <em>Pick warehouses above — clients will list for those warehouses only</em>
                           ) : subAdminSelectedClients.length === 0 ? (
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No clients selected — all clients in selected warehouse(s)</span>
+                            <em>No clients selected — all clients in selected warehouse(s)</em>
                           ) : (
                             subAdminSelectedClients.map((client, idx) => (
-                              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>
+                              <span key={idx} className="sa-op-chip">
                                 {client}
-                                <button type="button" onClick={() => setSubAdminSelectedClients(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}>
+                                <button type="button" onClick={() => setSubAdminSelectedClients((prev) => prev.filter((_, i) => i !== idx))} title="Remove">
                                   <X size={12} />
                                 </button>
                               </span>
                             ))
                           )}
                         </div>
-                      </div>
+                      </label>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <div className="sa-op-form-actions">
                       {editingSubAdmin && (
-                        <button 
-                          type="button" 
-                          onClick={cancelEditSubAdmin}
-                          style={{
-                            padding: '10px 20px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            backgroundColor: '#ffffff',
-                            fontSize: '0.85rem',
-                            fontWeight: '700',
-                            cursor: 'pointer',
-                            color: 'var(--text-dark)'
-                          }}
-                        >
-                          Cancel Edit
+                        <button type="button" className="sa-op-btn-text" onClick={cancelEditSubAdmin}>
+                          Cancel
                         </button>
                       )}
-                      <button 
+                      <button
                         type="submit"
+                        className={`sa-op-btn-primary${editingSubAdmin ? ' update' : ''}`}
                         disabled={savingSubAdmin || loadingSubAdmins}
-                        style={{
-                          padding: '10px 24px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          background: editingSubAdmin ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
-                          color: '#ffffff',
-                          fontSize: '0.85rem',
-                          fontWeight: '800',
-                          cursor: (savingSubAdmin || loadingSubAdmins) ? 'wait' : 'pointer',
-                          opacity: (savingSubAdmin || loadingSubAdmins) ? 0.85 : 1,
-                          boxShadow: editingSubAdmin ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
-                          transition: 'all 0.2s ease',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '8px'
-                        }}
                       >
                         {savingSubAdmin ? (
                           <>
-                            <Loader2 size={16} className="spinner-icon" />
+                            <Loader2 size={14} className="spinner-icon" />
                             {subAdminProcessStatus || 'Processing…'}
                           </>
                         ) : (editingSubAdmin ? 'Update Customer' : 'Register Customer')}
                       </button>
                     </div>
                   </form>
-                </div>
+                </section>
 
-                {/* Bottom: Customers Directory List */}
-                {(() => {
-                  const filteredSubAdminsList = subAdmins.filter(sa => {
-                    const term = subAdminSearch.toLowerCase();
+                <section className="sa-op-card sa-op-directory">
+                  {(() => {
+                    const filteredSubAdminsList = subAdmins.filter((sa) => {
+                      const term = subAdminSearch.toLowerCase();
+                      return (
+                        (sa.full_name && sa.full_name.toLowerCase().includes(term)) ||
+                        (sa.email && sa.email.toLowerCase().includes(term)) ||
+                        (sa.phone_no && sa.phone_no.toLowerCase().includes(term))
+                      );
+                    });
                     return (
-                      (sa.full_name && sa.full_name.toLowerCase().includes(term)) ||
-                      (sa.email && sa.email.toLowerCase().includes(term)) ||
-                      (sa.phone_no && sa.phone_no.toLowerCase().includes(term))
-                    );
-                  });
-
-                  return (
-                    <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                        <div>
-                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Customers Directory</h2>
-                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage customer account credentials and system access permissions.</p>
+                      <>
+                        <div className="sa-op-dir-toolbar">
+                          <div>
+                            <h2 className="sa-op-title">Customers Directory</h2>
+                            <p className="sa-op-sub">
+                              {filteredSubAdminsList.length} customer{filteredSubAdminsList.length === 1 ? '' : 's'} · search, edit or revoke access
+                            </p>
+                          </div>
+                          <div className="sa-op-dir-tools">
+                            <label className="sa-op-search">
+                              <Search size={14} />
+                              <input
+                                type="search"
+                                placeholder="Search mail-style: name, email, phone"
+                                value={subAdminSearch}
+                                onChange={(e) => setSubAdminSearch(e.target.value)}
+                              />
+                            </label>
+                          </div>
                         </div>
 
-                        <div style={{ minWidth: '240px' }}>
-                          <input 
-                            type="text" 
-                            placeholder="Search by name, email..."
-                            value={subAdminSearch}
-                            onChange={(e) => setSubAdminSearch(e.target.value)}
-                            style={{
-                              width: '100%',
-                              padding: '8px 12px',
-                              borderRadius: 'var(--radius-sm)',
-                              border: '1px solid var(--border)',
-                              fontSize: '0.8rem',
-                              outline: 'none',
-                              backgroundColor: 'var(--bg-main)'
-                            }}
-                          />
+                        {subAdminSuccess && <div className="sa-op-banner success">{subAdminSuccess}</div>}
+                        {subAdminError && <div className="sa-op-banner error">{subAdminError}</div>}
+
+                        {loadingSubAdmins ? (
+                          <div className="sa-op-empty">Loading customers…</div>
+                        ) : filteredSubAdminsList.length === 0 ? (
+                          <div className="sa-op-empty">
+                            <ShieldAlert size={28} />
+                            <p>No matching customers found.</p>
+                          </div>
+                        ) : (
+                          <div className="sa-op-inbox">
+                            {filteredSubAdminsList.map((sa) => {
+                              const initials = String(sa.full_name || sa.email || 'CU')
+                                .split(/\s+/)
+                                .filter(Boolean)
+                                .slice(0, 2)
+                                .map((p) => p[0]?.toUpperCase())
+                                .join('') || 'CU';
+                              const warehouses = sa.allowed_warehouses
+                                ? sa.allowed_warehouses.split(',').map((w) => w.trim()).filter(Boolean).join(', ')
+                                : 'All warehouses';
+                              const clients = sa.allowed_clients
+                                ? sa.allowed_clients.split(',').map((c) => c.trim()).filter(Boolean).join(', ')
+                                : 'All clients';
+                              return (
+                                <div key={sa.id} className="sa-op-inbox-row">
+                                  <button
+                                    type="button"
+                                    className="sa-op-inbox-main"
+                                    onClick={() => startEditSubAdmin(sa)}
+                                    title="Edit Customer Profile"
+                                  >
+                                    <span className="sa-op-avatar">{initials}</span>
+                                    <span className="sa-op-sender">
+                                      <strong>{sa.full_name || 'Unnamed customer'}</strong>
+                                      <em>Customer</em>
+                                    </span>
+                                    <span className="sa-op-snippet">
+                                      {sa.email}
+                                      {sa.phone_no ? ` · ${formatIndiaPhoneDisplay(sa.phone_no)}` : ''}
+                                      {' · '}
+                                      {warehouses}
+                                      {' · '}
+                                      {clients}
+                                    </span>
+                                    <span className="sa-op-date">
+                                      {sa.created_at ? new Date(sa.created_at).toLocaleDateString('en-GB') : '—'}
+                                    </span>
+                                  </button>
+                                  <div className="sa-op-row-actions">
+                                    <button type="button" className="sa-op-icon-btn" onClick={() => startEditSubAdmin(sa)} title="Edit">
+                                      <Edit size={14} />
+                                    </button>
+                                    <button type="button" className="sa-op-icon-btn danger" onClick={() => handleDeleteSubAdmin(sa.id)} title="Revoke">
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </section>
+              </div>
+          </div>
+        )}
+
+        {activeMenu === 'data_operators' && (
+          <div className="sa-um">
+            {viewingOperator ? (
+              (() => {
+                const op = viewingOperator;
+                const profileMasterActivities = activitiesForOperatorEmail(opMasterActivities, op.email);
+                const initials = String(op.full_name || op.email || 'DO')
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((p) => p[0]?.toUpperCase())
+                  .join('') || 'DO';
+                const profileFields = [
+                  { label: 'Operator ID', value: `#${op.id}` },
+                  { label: 'Full Name', value: op.full_name || '—' },
+                  { label: 'Phone No.', value: formatIndiaPhoneDisplay(op.phone_no) },
+                  { label: 'Email Address', value: op.email || '—' },
+                  { label: 'Warehouse / Data Access', value: op.warehouse_name || 'Not Configured' },
+                  { label: 'Chamber Limit', value: `Chambers 1 to ${op.chamber_limit || 4}` },
+                  { label: 'Registration Date', value: op.created_at ? new Date(op.created_at).toLocaleDateString('en-GB') : '—' }
+                ];
+                const opActiveAssignments = getActiveOperatorAssignments(opMappings, op.chamber_limit || 4);
+                const opTaskStatus = computeDoTaskStatus({
+                  assignments: opActiveAssignments,
+                  logs: opTaskLogs,
+                  fromDate: opTaskAppliedFrom,
+                  toDate: opTaskAppliedTo,
+                  today: localDateStr()
+                });
+                const filteredOpTasks = opTaskStatus.items.filter((item) => {
+                  if (opTaskFilter === 'all') return true;
+                  return item.status === opTaskFilter;
+                });
+                return (
+                  <div className="do-gmail-view">
+                    <div className="do-gmail-panel">
+                      <div className="do-gmail-toolbar">
+                        <div className="do-gmail-toolbar-left">
+                          <button type="button" className="do-gmail-icon-btn" onClick={closeOperatorProfile} title="Back">
+                            <ArrowLeft size={14} />
+                          </button>
+                          <div className="do-gmail-avatar">{initials}</div>
+                          <div>
+                            <h2 className="do-gmail-title">{op.full_name || 'Data Operator'}</h2>
+                            <p className="do-gmail-sub">{op.email}</p>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <button type="button" className="do-gmail-text-btn" onClick={() => startEditOperator(op)}>
+                            <Edit size={12} />
+                            Edit
+                          </button>
+                          <button type="button" className="do-gmail-text-btn danger" onClick={() => handleDeleteOperator(op.id)}>
+                            <Trash2 size={12} />
+                            Revoke
+                          </button>
+                        </div>
+                      </div>
+                      <div className="do-gmail-section-label">Account</div>
+                      {profileFields.map((field) => (
+                        <div key={field.label} className="do-gmail-row">
+                          <div className="do-gmail-row-label">{field.label}</div>
+                          <div className="do-gmail-row-value">{field.value}</div>
+                        </div>
+                      ))}
+                      <div className="do-gmail-row">
+                        <div className="do-gmail-row-label">Access</div>
+                        <div className="do-gmail-row-value">
+                          {op.warehouse_name
+                            ? op.warehouse_name
+                            : 'Not configured — edit profile'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="do-gmail-panel do-gmail-task-panel">
+                      <div className="do-gmail-toolbar">
+                        <div>
+                          <h3 className="do-gmail-title">Chamber Task Status</h3>
+                          <p className="do-gmail-sub">
+                            Morning &amp; Evening inspections · {opTaskAppliedFrom || '—'} to {opTaskAppliedTo || '—'}
+                            {' · '}
+                            {opTaskStatus.assignmentCount} active client{opTaskStatus.assignmentCount === 1 ? '' : 's'}
+                            {!opTaskLogsLoading && opActiveAssignments.length > 0
+                              ? ` · ${opTaskLogs.length} log${opTaskLogs.length === 1 ? '' : 's'} loaded`
+                              : ''}
+                          </p>
+                        </div>
+                        <span className={`do-gmail-status-pill ${opTaskStatus.statusTone}`}>
+                          {opTaskStatus.statusLabel}
+                        </span>
+                      </div>
+
+                      <div className="do-gmail-task-stats">
+                        <div className="do-gmail-task-stat completed">
+                          <strong>{opTaskStatus.completed}</strong>
+                          <span>Completed</span>
+                        </div>
+                        <div className="do-gmail-task-stat pending">
+                          <strong>{opTaskStatus.pending}</strong>
+                          <span>Pending</span>
+                        </div>
+                        <div className="do-gmail-task-stat overdue">
+                          <strong>{opTaskStatus.overdue}</strong>
+                          <span>Overdue</span>
                         </div>
                       </div>
 
-                      {subAdminSuccess && (
-                        <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                          {subAdminSuccess}
-                        </div>
-                      )}
-                      {subAdminError && (
-                        <div style={{ padding: '10px 14px', backgroundColor: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                          {subAdminError}
-                        </div>
+                      <div className="do-gmail-filters do-gmail-task-filters">
+                        <input
+                          className="sa-op-filter"
+                          type="date"
+                          value={opTaskFromDate}
+                          max={opTaskToDate || undefined}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setOpTaskFromDate(val);
+                            if (val && opTaskToDate && val > opTaskToDate) setOpTaskToDate(val);
+                          }}
+                          title="From date"
+                        />
+                        <input
+                          className="sa-op-filter"
+                          type="date"
+                          value={opTaskToDate}
+                          min={opTaskFromDate || undefined}
+                          max={localDateStr()}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setOpTaskToDate(val);
+                            if (val && opTaskFromDate && val < opTaskFromDate) setOpTaskFromDate(val);
+                          }}
+                          title="To date"
+                        />
+                        <button
+                          type="button"
+                          className="do-gmail-text-btn"
+                          onClick={() => {
+                            setOpTaskAppliedFrom(opTaskFromDate);
+                            setOpTaskAppliedTo(opTaskToDate);
+                            setOpTaskFilter('all');
+                            loadOpTaskStatus(op, opTaskFromDate, opTaskToDate);
+                          }}
+                          disabled={opTaskLogsLoading}
+                        >
+                          {opTaskLogsLoading ? 'Loading…' : 'Apply'}
+                        </button>
+                        <button
+                          type="button"
+                          className="do-gmail-text-btn"
+                          onClick={() => loadOpTaskStatus(op, opTaskAppliedFrom, opTaskAppliedTo)}
+                          disabled={opTaskLogsLoading}
+                        >
+                          Refresh
+                        </button>
+                      </div>
+
+                      {opTaskLogsError && (
+                        <div className="do-gmail-empty" style={{ color: '#c5221f' }}>{opTaskLogsError}</div>
                       )}
 
-                      {loadingSubAdmins ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                          <span>Loading customers directory...</span>
+                      {!op.warehouse_name ? (
+                        <div className="do-gmail-empty">Configure warehouse access to track chamber tasks.</div>
+                      ) : opMappingsLoading && opActiveAssignments.length === 0 ? (
+                        <div className="do-gmail-empty" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Loader2 size={14} className="spinner-icon" />
+                          Loading assignments…
                         </div>
-                      ) : filteredSubAdminsList.length === 0 ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
-                          <ShieldAlert size={32} color="#94a3b8" />
-                          <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching customers found.</p>
+                      ) : opActiveAssignments.length === 0 ? (
+                        <div className="do-gmail-empty">No active chamber clients assigned for this operator.</div>
+                      ) : opTaskLogsLoading && opTaskStatus.total === 0 ? (
+                        <div className="do-gmail-empty" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Loader2 size={14} className="spinner-icon" />
+                          Loading task status…
                         </div>
                       ) : (
-                        <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
-                          <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                              <tr>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Role Level</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Data Access Scope</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
-                                <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filteredSubAdminsList.map((sa) => (
-                                <tr key={sa.id}>
-                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.full_name || '-'}</td>
-                                  <td style={{ padding: '12px 16px', fontWeight: '500' }}>{sa.phone_no || '-'}</td>
-                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{sa.email}</td>
-                                  <td style={{ padding: '12px 16px' }}>
-                                    <span className="status-badge" style={{ backgroundColor: '#fee2e2', color: '#dc2626', fontWeight: 800 }}>
-                                      Customer
+                        <>
+                          <div className="do-gmail-filters">
+                            {[
+                              { id: 'all', label: 'All', count: opTaskStatus.total },
+                              { id: 'completed', label: 'Completed', count: opTaskStatus.completed },
+                              { id: 'pending', label: 'Pending', count: opTaskStatus.pending },
+                              { id: 'overdue', label: 'Overdue', count: opTaskStatus.overdue }
+                            ].map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className={`do-gmail-chip${opTaskFilter === item.id ? ' active' : ''}`}
+                                onClick={() => setOpTaskFilter(item.id)}
+                              >
+                                {item.label} ({item.count})
+                              </button>
+                            ))}
+                          </div>
+
+                          {filteredOpTasks.length === 0 ? (
+                            <div className="do-gmail-empty">No tasks in this filter for the selected dates.</div>
+                          ) : (
+                            <>
+                              <div className="do-gmail-inbox-head do-gmail-task-head">
+                                <span>Date</span>
+                                <span>Shift</span>
+                                <span>Chamber / Client</span>
+                                <span style={{ textAlign: 'right' }}>Status</span>
+                                <span style={{ textAlign: 'right' }}>View</span>
+                              </div>
+                              <div className="do-gmail-task-list">
+                                {filteredOpTasks.slice(0, 120).map((task) => (
+                                  <div key={`${task.date}-${task.shift}-${task.chamber_name}-${task.client_name}`} className="do-gmail-inbox-row do-gmail-task-row">
+                                    <span className="do-gmail-date">{task.date}</span>
+                                    <span className="do-gmail-snippet">{task.shift}</span>
+                                    <span className="do-gmail-snippet">
+                                      {task.chamber_name}
+                                      {' · '}
+                                      {task.client_name}
+                                      {task.reference_no ? ` · ${task.reference_no}` : ''}
                                     </span>
-                                  </td>
-                                  <td style={{ padding: '12px 16px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                      {sa.allowed_clients ? (
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
-                                          {sa.allowed_clients.split(',').map((c, i) => (
-                                            <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{c.trim()}</span>
-                                          ))}
-                                        </div>
+                                    <span className={`do-gmail-status ${task.status}`}>
+                                      {task.status === 'completed' ? 'Completed' : task.status === 'pending' ? 'Pending' : 'Overdue'}
+                                    </span>
+                                    <span className="do-gmail-task-view">
+                                      {task.status === 'completed' && (task.log || task.reference_no) ? (
+                                        <button
+                                          type="button"
+                                          className="do-gmail-text-btn"
+                                          onClick={() => openChamberTaskProfile(task, op)}
+                                          title="Open log profile"
+                                        >
+                                          <Eye size={12} />
+                                          View
+                                        </button>
                                       ) : (
-                                        <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Clients</span>
+                                        <span className="do-gmail-task-view-muted">—</span>
                                       )}
-                                      {sa.allowed_warehouses ? (
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
-                                          {sa.allowed_warehouses.split(',').map((w, i) => (
-                                            <span key={i} style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '1px 6px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '700', border: '1px solid rgba(0, 162, 232, 0.25)' }}>{w.trim()}</span>
-                                          ))}
-                                        </div>
-                                      ) : (
-                                        <span style={{ fontSize: '0.72rem', color: '#22c55e', fontWeight: '700' }}>All Warehouses</span>
-                                      )}
-                                    </div>
-                                  </td>
-                                  <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                                    {new Date(sa.created_at).toLocaleDateString('en-GB')}
-                                  </td>
-                                  <td style={{ padding: '12px 16px' }}>
-                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                      <button 
-                                        className="btn-edit-log"
-                                        type="button"
-                                        onClick={() => startEditSubAdmin(sa)}
-                                        title="Edit Customer Profile"
-                                        style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                      >
-                                        <Edit size={14} />
-                                      </button>
-                                      <button 
-                                        className="btn-delete-log"
-                                        type="button"
-                                        onClick={() => handleDeleteSubAdmin(sa.id)}
-                                        title="Revoke Access (Delete)"
-                                        style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                      >
-                                        <Trash2 size={14} />
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              {filteredOpTasks.length > 120 && (
+                                <div className="do-gmail-empty">
+                                  Showing first 120 of {filteredOpTasks.length} tasks — narrow the date range to see more.
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </>
                       )}
                     </div>
-                  );
-                })()}
-              </div>
+
+                    <div className="do-gmail-panel">
+                      <div className="do-gmail-toolbar">
+                        <div>
+                          <h3 className="do-gmail-title">Chamber & Client Mappings</h3>
+                          <p className="do-gmail-sub">
+                            {op.warehouse_name
+                              ? `${op.warehouse_name} · Chambers 1 to ${op.chamber_limit || 4}${opMasterEditMode ? ' · editing this operator master' : ''}`
+                              : 'Configure warehouse access to see chamber mappings.'}
+                          </p>
+                        </div>
+                        {op.warehouse_name ? (
+                          <button
+                            type="button"
+                            className={`do-gmail-text-btn${opMasterEditMode ? ' active' : ''}`}
+                            onClick={() => {
+                              setOpMappingsError('');
+                              setOpMappingsSuccess('');
+                              if (opMasterEditMode) {
+                                finishOpMasterEdit(op);
+                                return;
+                              }
+                              setOpMasterSessionChanges([]);
+                              setOpMasterEditMode(true);
+                            }}
+                          >
+                            <Edit size={12} />
+                            {opMasterEditMode ? 'Done' : 'Edit Master'}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {opMappingsError && (
+                        <div className="do-gmail-empty" style={{ color: '#c5221f' }}>{opMappingsError}</div>
+                      )}
+                      {opMappingsSuccess && opMasterEditMode && (
+                        <div className="do-gmail-empty" style={{ color: '#188038' }}>{opMappingsSuccess}</div>
+                      )}
+
+                      {!op.warehouse_name ? (
+                        <div className="do-gmail-empty">Warehouse is not configured for this operator.</div>
+                      ) : opMappingsLoading ? (
+                        <div className="do-gmail-empty" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Loader2 size={14} className="spinner-icon" />
+                          Loading mappings for {op.warehouse_name}...
+                        </div>
+                      ) : (
+                        <>
+                          <div className={`do-gmail-inbox-head${opMasterEditMode ? ' editing' : ''}`}>
+                            <span>Client</span>
+                            <span>Chamber</span>
+                            <span>Type</span>
+                            <span style={{ textAlign: 'right' }}>Status</span>
+                            {opMasterEditMode ? <span /> : null}
+                          </div>
+                          {Array.from({ length: op.chamber_limit || 4 }, (_, idx) => {
+                            const chamberNum = idx + 1;
+                            const chamberName = `Chamber ${chamberNum}`;
+                            const chamberAssignments = opMappings.filter((m) => chamberNumberFromName(m.chamber_name || '') === chamberNum);
+                            const activeClients = uniqueClientsByName(chamberAssignments.filter((m) => !isDeactiveAssignment(m)));
+                            const activeNames = new Set(activeClients.map((m) => String(m.client_name || '').trim().toLowerCase()));
+                            const deactiveClients = uniqueClientsByName(
+                              chamberAssignments.filter((m) => isDeactiveAssignment(m) && !activeNames.has(String(m.client_name || '').trim().toLowerCase()))
+                            );
+                            const chamberType = activeClients[0]?.chamber_type || deactiveClients[0]?.chamber_type || opChamberTypeByNum[chamberNum] || newChamberTypes[chamberNum] || 'Frozen';
+                            const resolvedChamberId = chamberAssignments.find((row) => row?.chamber_id)?.chamber_id || chamberNum;
+                            const rows = [
+                              ...activeClients.map((assign) => ({ ...assign, _status: 'Active' })),
+                              ...deactiveClients.map((assign) => ({ ...assign, _status: 'Deactive' }))
+                            ];
+                            return (
+                              <div key={chamberNum}>
+                                <div className="do-gmail-section-label do-gmail-chamber-label">
+                                  {chamberName} · Type: {chamberType} · {activeClients.length} active, {deactiveClients.length} deactive
+                                </div>
+                                {opMasterEditMode ? (
+                                  <div className="do-gmail-type-row">
+                                    <span>Update type</span>
+                                    <select
+                                      value={newChamberTypes[chamberNum] || chamberType || 'Frozen'}
+                                      onChange={(e) => setNewChamberTypes((prev) => ({ ...prev, [chamberNum]: e.target.value }))}
+                                    >
+                                      <option value="Frozen">Frozen</option>
+                                      <option value="Chilled">Chilled</option>
+                                      <option value="Dry">Dry</option>
+                                      <option value="Other">Other</option>
+                                    </select>
+                                    <button
+                                      type="button"
+                                      className="do-gmail-type-btn"
+                                      disabled={
+                                        updatingChamberTypeKey === chamberNum ||
+                                        String(newChamberTypes[chamberNum] || chamberType) === String(chamberType)
+                                      }
+                                      onClick={() => handleUpdateOpChamberType(op, resolvedChamberId, chamberName, chamberType, chamberNum)}
+                                    >
+                                      {updatingChamberTypeKey === chamberNum ? 'Saving...' : 'Update type'}
+                                    </button>
+                                  </div>
+                                ) : null}
+                                {rows.length === 0 && !opMasterEditMode ? (
+                                  <div className="do-gmail-empty">No clients in this chamber.</div>
+                                ) : rows.map((assign, aIdx) => (
+                                  <div
+                                    key={`${assign._status}-${assign.client_name}-${aIdx}`}
+                                    className={`do-gmail-inbox-row${assign._status === 'Deactive' ? ' deactive' : ''}${opMasterEditMode ? ' editing' : ''}`}
+                                  >
+                                    <span className="do-gmail-sender">{assign.client_name}</span>
+                                    <span className="do-gmail-snippet">{chamberName}</span>
+                                    <span className="do-gmail-snippet">{assign.chamber_type || chamberType}</span>
+                                    <span className={`do-gmail-status ${assign._status === 'Deactive' ? 'deactive' : 'active'}`}>
+                                      {assign._status}
+                                    </span>
+                                    {opMasterEditMode ? (
+                                      assign._status === 'Active' ? (
+                                        <button
+                                          type="button"
+                                          className="do-gmail-row-action"
+                                          title={`Remove ${assign.client_name}`}
+                                          onClick={() => handleDeleteOpMapping(op, assign.chamber_id || resolvedChamberId, assign.client_name, chamberName)}
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      ) : <span />
+                                    ) : null}
+                                  </div>
+                                ))}
+                                {opMasterEditMode ? (
+                                  <div className="do-gmail-add-row">
+                                    <input
+                                      type="text"
+                                      placeholder={`Add client to ${chamberName}`}
+                                      value={newClientInputs[chamberNum] || ''}
+                                      onChange={(e) => setNewClientInputs((prev) => ({ ...prev, [chamberNum]: e.target.value }))}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.preventDefault();
+                                          handleAddOpMapping(op, resolvedChamberId, chamberName, chamberNum);
+                                        }
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="do-gmail-add-btn"
+                                      disabled={addingMappingChamberId === resolvedChamberId || addingMappingChamberId === chamberNum}
+                                      onClick={() => handleAddOpMapping(op, resolvedChamberId, chamberName, chamberNum)}
+                                    >
+                                      {addingMappingChamberId === resolvedChamberId || addingMappingChamberId === chamberNum ? 'Adding...' : 'Add client'}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
+
+                    <div className="do-gmail-panel">
+                      <div className="do-gmail-toolbar">
+                        <div>
+                          <h3 className="do-gmail-title">Master Setup Activity</h3>
+                          <p className="do-gmail-sub">Chamber, client and type changes from Master Setup</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="do-gmail-text-btn"
+                          onClick={() => loadOpMasterActivities(op.email)}
+                          disabled={opMasterActivitiesLoading}
+                        >
+                          {opMasterActivitiesLoading ? 'Refreshing...' : 'Refresh'}
+                        </button>
+                      </div>
+
+                      {opMasterActivitiesError && (
+                        <div className="do-gmail-empty" style={{ color: '#c5221f' }}>{opMasterActivitiesError}</div>
+                      )}
+
+                      {profileMasterActivities.length > 0 && (
+                        <div className="do-gmail-filters">
+                          {MASTER_ACTIVITY_FILTERS.map((item) => {
+                            const count = item.id === 'all'
+                              ? profileMasterActivities.length
+                              : profileMasterActivities.filter((act) => masterActivityMatchesFilter(act, item.id)).length;
+                            const active = opMasterActivityFilter === item.id;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className={`do-gmail-chip${active ? ' active' : ''}`}
+                                onClick={() => {
+                                  setOpMasterActivityFilter(item.id);
+                                  setOpMasterActivityPage(1);
+                                }}
+                              >
+                                {item.label} {count}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {opMasterActivitiesLoading && profileMasterActivities.length === 0 ? (
+                        <div className="do-gmail-empty">Loading Master Setup activity...</div>
+                      ) : profileMasterActivities.length === 0 ? (
+                        <div className="do-gmail-empty">No Master Setup changes yet for this operator.</div>
+                      ) : (
+                        (() => {
+                          const filteredActs = profileMasterActivities.filter((act) =>
+                            masterActivityMatchesFilter(act, opMasterActivityFilter)
+                          );
+                          if (filteredActs.length === 0) {
+                            return (
+                              <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+                                <span>
+                                  No {MASTER_ACTIVITY_FILTERS.find((item) => item.id === opMasterActivityFilter)?.label?.toLowerCase() || 'matching'} activity.
+                                </span>
+                              </div>
+                            );
+                          }
+                          const totalPages = Math.max(1, Math.ceil(filteredActs.length / OP_MASTER_ACTIVITY_PAGE_SIZE));
+                          const safePage = Math.min(Math.max(opMasterActivityPage, 1), totalPages);
+                          const pagedActs = filteredActs.slice(
+                            (safePage - 1) * OP_MASTER_ACTIVITY_PAGE_SIZE,
+                            safePage * OP_MASTER_ACTIVITY_PAGE_SIZE
+                          );
+                          const latestId = filteredActs[0]?.id;
+                          return (
+                            <>
+                            <div style={{ maxHeight: 'min(72vh, 760px)', overflowY: 'auto', overflowX: 'auto' }}>
+                              <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.7rem' }}>
+                                <thead>
+                                  <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
+                                    <th style={{ padding: '6px 8px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Action</th>
+                                    <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Chamber</th>
+                                    <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Activity Description</th>
+                                    <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Remark</th>
+                                    <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Timestamp</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {pagedActs.map((act) => {
+                                    const parsed = parseMasterActivity(act);
+                                    const tone = masterActivityTone(parsed.action);
+                                    const isLatest = act.id === latestId;
+                                    const changeLines = [];
+                                    if (parsed.added.length) changeLines.push({ label: 'Added', value: parsed.added.join(', '), color: '#047857' });
+                                    if (parsed.deleted.length) changeLines.push({ label: 'Removed', value: parsed.deleted.join(', '), color: '#b91c1c' });
+                                    if (parsed.renamed.length) {
+                                      changeLines.push({
+                                        label: 'Renamed',
+                                        value: parsed.renamed.map((item) => `${item.from} → ${item.to}`).join(', '),
+                                        color: '#a16207'
+                                      });
+                                    }
+                                    if (parsed.typeFrom || parsed.typeTo) {
+                                      changeLines.push({
+                                        label: 'Type',
+                                        value: parsed.typeFrom && parsed.typeTo ? `${parsed.typeFrom} → ${parsed.typeTo}` : (parsed.typeTo || parsed.typeFrom),
+                                        color: '#1d4ed8'
+                                      });
+                                    }
+                                    return (
+                                      <tr key={act.id} style={{ borderBottom: '1px solid var(--border)', backgroundColor: isLatest ? '#f8fbff' : 'transparent' }}>
+                                        <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                            <span style={{
+                                              display: 'inline-block',
+                                              padding: '1px 6px',
+                                              borderRadius: '100px',
+                                              fontSize: '0.64rem',
+                                              fontWeight: '800',
+                                              color: tone.color,
+                                              backgroundColor: tone.bg,
+                                              textTransform: 'uppercase'
+                                            }}>
+                                              {parsed.title}
+                                            </span>
+                                            {isLatest ? (
+                                              <span style={{
+                                                fontSize: '0.58rem',
+                                                fontWeight: 800,
+                                                color: '#0369a1',
+                                                background: '#e0f2fe',
+                                                padding: '1px 6px',
+                                                borderRadius: 999,
+                                                textTransform: 'uppercase'
+                                              }}>
+                                                Latest
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        </td>
+                                        <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f172a' }}>
+                                          {parsed.chamber || '—'}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', color: '#334155' }}>
+                                          {changeLines.length > 0 ? (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                              {changeLines.map((line) => (
+                                                <div key={line.label}>
+                                                  <span style={{ fontWeight: 800, color: line.color }}>{line.label}: </span>
+                                                  <span style={{ fontWeight: 600 }}>{line.value}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          ) : highlightAddedDeletedWords(parsed.summary)}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', color: '#0f766e', fontWeight: 600, fontSize: '0.72rem', maxWidth: 180 }}>
+                                          {parsed.remark || '—'}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', color: '#64748b', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                                          {parsed.when
+                                            ? new Date(parsed.when).toLocaleString('en-GB', {
+                                                day: '2-digit',
+                                                month: 'short',
+                                                year: 'numeric',
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                                second: '2-digit',
+                                                hour12: true
+                                              })
+                                            : '—'}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                            <PaginationBar
+                              page={safePage}
+                              totalItems={filteredActs.length}
+                              pageSize={OP_MASTER_ACTIVITY_PAGE_SIZE}
+                              onPageChange={setOpMasterActivityPage}
+                              itemLabel="activities"
+                            />
+                            </>
+                          );
+                        })()
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                {/* Top: Register New Operator Horizontal Form */}
-                <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <div>
-                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {editingOp ? <Edit size={18} color="#00a2e8" /> : <UserPlus size={18} color="#00a2e8" />}
-                      <span>{editingOp ? `Modify Operator Profile: ${editingOp.email}` : 'Register New Data Operator'}</span>
-                    </h2>
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      {editingOp ? 'Update account details, phone, Warehouse / Data Access, chambers, or password.' : 'All horizontal fields are mandatory. Warehouse / Data Access scopes this operator to one warehouse.'}
-                    </p>
+              <div className="sa-op-gmail">
+                <section className="sa-op-card">
+                  <div className="sa-op-card-head">
+                    <div className="sa-op-card-icon">{editingOp ? <Edit size={14} /> : <UserPlus size={14} />}</div>
+                    <div>
+                      <h2 className="sa-op-title">{editingOp ? 'Modify Operator Profile' : 'Register New Data Operator'}</h2>
+                      <p className="sa-op-sub">
+                        {editingOp
+                          ? editingOp.email
+                          : 'All fields are required. Warehouse / Data Access scopes this operator to one warehouse.'}
+                      </p>
+                    </div>
                   </div>
 
-                  <form onSubmit={handleSaveOperator} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div className="horizontal-form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
-                      {/* Full Name */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Full Name *</label>
-                        <input 
+                  <form onSubmit={handleSaveOperator} className="sa-op-form">
+                    <div className="sa-op-form-grid">
+                      <label className="sa-op-field">
+                        <span>Full Name</span>
+                        <input
                           type="text"
                           name="op-full-name"
                           inputMode="text"
@@ -8717,48 +9580,32 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           value={opFullName}
                           onChange={(e) => setOpFullName(e.target.value.replace(/[^a-zA-Z\s.'-]/g, ''))}
                           required
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
-                          }}
                         />
-                      </div>
+                      </label>
 
-                      {/* Phone No. */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Phone No. *</label>
-                        <input 
-                          type="tel"
-                          name="op-phone"
-                          inputMode="numeric"
-                          autoComplete="tel"
-                          placeholder="e.g. 9876543210"
-                          value={opPhoneNo}
-                          onChange={(e) => setOpPhoneNo(e.target.value.replace(/[^\d+]/g, ''))}
-                          pattern="[0-9+]{7,15}"
-                          title="Enter a valid phone number (digits only)"
-                          required
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
-                          }}
-                        />
-                      </div>
+                      <label className="sa-op-field">
+                        <span>Phone No.</span>
+                        <div className="sa-op-phone">
+                          <span className="sa-op-phone-code">+91</span>
+                          <input
+                            type="tel"
+                            name="op-phone"
+                            inputMode="numeric"
+                            autoComplete="tel"
+                            placeholder="9876543210"
+                            maxLength={10}
+                            value={opPhoneNo}
+                            onChange={(e) => setOpPhoneNo(toLocalTenDigitPhone(e.target.value))}
+                            pattern="[0-9]{10}"
+                            title="Enter a 10-digit mobile number"
+                            required
+                          />
+                        </div>
+                      </label>
 
-                      {/* Email ID */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '280px', gridColumn: 'span 2' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Email ID *</label>
-                        <input 
+                      <label className="sa-op-field sa-op-field-wide">
+                        <span>Email ID</span>
+                        <input
                           type="email"
                           name="op-email"
                           inputMode="email"
@@ -8767,27 +9614,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           value={opEmail}
                           onChange={(e) => setOpEmail(e.target.value)}
                           required
-                          style={{
-                            width: '100%',
-                            minWidth: '280px',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)',
-                            boxSizing: 'border-box'
-                          }}
                         />
-                      </div>
+                      </label>
 
-                      {/* Password */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>
-                          {editingOp ? 'Password (leave blank to keep)' : 'Password *'}
-                        </label>
-                        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                          <input 
+                      <label className="sa-op-field">
+                        <span>{editingOp ? 'Password (leave blank to keep)' : 'Password'}</span>
+                        <div className="sa-op-password">
+                          <input
                             type={showPassword ? 'text' : 'password'}
                             name="op-password"
                             autoComplete="new-password"
@@ -8795,43 +9628,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             value={opPassword}
                             onChange={(e) => setOpPassword(e.target.value)}
                             required={!editingOp}
-                            style={{
-                              width: '100%',
-                              padding: '10px 40px 10px 14px',
-                              borderRadius: 'var(--radius-sm)',
-                              border: '1px solid var(--border)',
-                              fontSize: '0.85rem',
-                              outline: 'none',
-                              backgroundColor: 'var(--bg-main)',
-                              boxSizing: 'border-box'
-                            }}
                           />
                           <button
                             type="button"
-                            onClick={() => setShowPassword(prev => !prev)}
-                            style={{
-                              position: 'absolute',
-                              right: '12px',
-                              background: 'none',
-                              border: 'none',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: '0',
-                              color: 'var(--text-muted)'
-                            }}
+                            className="sa-op-password-toggle"
+                            onClick={() => setShowPassword((prev) => !prev)}
                             title={showPassword ? 'Hide Password' : 'Show Password'}
                           >
-                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                           </button>
                         </div>
-                      </div>
+                      </label>
 
-                      {/* Warehouse / Data Access */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Warehouse / Data Access *</label>
-                        <input 
+                      <label className="sa-op-field">
+                        <span>Warehouse / Data Access</span>
+                        <input
                           type="text"
                           name="op-warehouse"
                           list="op-warehouse-suggestions"
@@ -8841,15 +9652,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           value={opWarehouseName}
                           onChange={(e) => setOpWarehouseName(e.target.value)}
                           required
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
-                          }}
                         />
                         <datalist id="op-warehouse-suggestions">
                           {Array.from(new Set([
@@ -8861,17 +9663,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               <option key={wh} value={wh} />
                             ))}
                         </datalist>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
+                        <em>
                           {editingOp
                             ? 'Updates profile + past logs for this operator. New tasks also use this warehouse.'
                             : 'New operator can only access logs for this warehouse.'}
-                        </span>
-                      </div>
+                        </em>
+                      </label>
 
-                      {/* Assigned Chambers Limit */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-dark)' }}>Total Chambers Assigned *</label>
-                        <input 
+                      <label className="sa-op-field">
+                        <span>Total Chambers Assigned</span>
+                        <input
                           type="number"
                           min="1"
                           max="100"
@@ -8879,757 +9680,458 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           value={opChamberLimit}
                           onChange={(e) => setOpChamberLimit(e.target.value)}
                           required
-                          style={{
-                            width: '100%',
-                            padding: '10px 14px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            fontSize: '0.85rem',
-                            outline: 'none',
-                            backgroundColor: 'var(--bg-main)'
-                          }}
                         />
-                      </div>
+                      </label>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <div className="sa-op-form-actions">
                       {editingOp && (
-                        <button 
-                          type="button" 
-                          onClick={cancelEditOperator}
-                          style={{
-                            padding: '10px 20px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border)',
-                            backgroundColor: '#ffffff',
-                            fontSize: '0.85rem',
-                            fontWeight: '700',
-                            cursor: 'pointer',
-                            color: 'var(--text-dark)'
-                          }}
-                        >
-                          Cancel Edit
+                        <button type="button" className="sa-op-btn-text" onClick={cancelEditOperator}>
+                          Cancel
                         </button>
                       )}
-                      <button 
+                      <button
                         type="submit"
+                        className={`sa-op-btn-primary${editingOp ? ' update' : ''}`}
                         disabled={savingOp || loadingOps}
-                        style={{
-                          padding: '10px 24px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          background: editingOp ? 'linear-gradient(135deg, #f97316, #ea580c)' : '#00a2e8',
-                          color: '#ffffff',
-                          fontSize: '0.85rem',
-                          fontWeight: '800',
-                          cursor: savingOp ? 'wait' : 'pointer',
-                          opacity: savingOp ? 0.85 : 1,
-                          boxShadow: editingOp ? '0 4px 12px rgba(249, 115, 22, 0.35)' : '0 4px 12px rgba(0, 162, 232, 0.25)',
-                          transition: 'all 0.2s ease',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '8px'
-                        }}
                       >
                         {savingOp ? (
                           <>
-                            <Loader2 size={16} className="spinner-icon" />
+                            <Loader2 size={14} className="spinner-icon" />
                             {opProcessStatus || 'Processing…'}
                           </>
-                        ) : (editingOp ? 'Update Operator Profile' : 'Register Operator Profile')}
+                        ) : (editingOp ? 'Update Operator' : 'Register Operator')}
                       </button>
                     </div>
                   </form>
-                </div>
+                </section>
 
-                {/* Bottom: Operators Directory List */}
-                {(() => {
-                  const filteredOperators = operators.filter(op => {
-                    const term = operatorSearch.toLowerCase();
+                <section className="sa-op-card sa-op-directory">
+                  {(() => {
+                    const filteredOperators = operators.filter((op) => {
+                      const term = operatorSearch.toLowerCase();
+                      return (
+                        (op.full_name && op.full_name.toLowerCase().includes(term)) ||
+                        (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
+                        (op.email && op.email.toLowerCase().includes(term))
+                      );
+                    });
                     return (
-                      (op.full_name && op.full_name.toLowerCase().includes(term)) ||
-                      (op.warehouse_name && op.warehouse_name.toLowerCase().includes(term)) ||
-                      (op.email && op.email.toLowerCase().includes(term))
-                    );
-                  });
-
-                  return (
-                    <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                        <div>
-                          <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)' }}>Registered Operators Directory</h2>
-                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Manage profile credentials and warehouse configurations.</p>
+                      <>
+                        <div className="sa-op-dir-toolbar">
+                          <div>
+                            <h2 className="sa-op-title">Registered Operators Directory</h2>
+                            <p className="sa-op-sub">
+                              {filteredOperators.length} operator{filteredOperators.length === 1 ? '' : 's'} · search, view or edit profiles
+                            </p>
+                          </div>
+                          <div className="sa-op-dir-tools">
+                            <label className="sa-op-search">
+                              <Search size={14} />
+                              <input
+                                type="search"
+                                placeholder="Search mail-style: name, email, warehouse"
+                                value={operatorSearch}
+                                onChange={(e) => setOperatorSearch(e.target.value)}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="sa-op-btn-export"
+                              onClick={handleExportOperatorsDirectory}
+                              disabled={!operators || operators.length === 0}
+                              title="Export operators directory to CSV"
+                            >
+                              <Download size={14} />
+                              <span>Export</span>
+                            </button>
+                          </div>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                          <div style={{ minWidth: '240px' }}>
-                            <input 
-                              type="text" 
-                              placeholder="Search by name, warehouse..."
-                              value={operatorSearch}
-                              onChange={(e) => setOperatorSearch(e.target.value)}
-                              style={{
-                                width: '100%',
-                                padding: '8px 12px',
-                                borderRadius: 'var(--radius-sm)',
-                                border: '1px solid var(--border)',
-                                fontSize: '0.8rem',
-                                outline: 'none',
-                                backgroundColor: 'var(--bg-main)',
-                                height: '37px',
-                                boxSizing: 'border-box'
-                              }}
+                        {exportError?.retryKey === 'operators' && (
+                          <div className="sa-op-banner-wrap">
+                            <ExportErrorBanner
+                              message={exportError.message}
+                              retryable={exportError.retryable}
+                              onRetry={retryFailedExport}
+                              onDismiss={() => setExportError(null)}
                             />
                           </div>
-                          <button
-                            type="button"
-                            onClick={handleExportOperatorsDirectory}
-                            disabled={!operators || operators.length === 0}
-                            title="Export operators directory to CSV"
-                            style={{
-                              padding: '8px 14px',
-                              borderRadius: 'var(--radius-sm)',
-                              border: 'none',
-                              backgroundColor: !operators || operators.length === 0 ? '#94a3b8' : '#22c55e',
-                              color: '#ffffff',
-                              fontSize: '0.8rem',
-                              fontWeight: '700',
-                              cursor: !operators || operators.length === 0 ? 'not-allowed' : 'pointer',
-                              opacity: !operators || operators.length === 0 ? 0.7 : 1,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              height: '37px',
-                              whiteSpace: 'nowrap'
-                            }}
-                          >
-                            <Download size={14} />
-                            <span>Export</span>
-                          </button>
-                        </div>
-                      </div>
+                        )}
+                        {opSuccess && <div className="sa-op-banner success">{opSuccess}</div>}
+                        {opError && (
+                          <div className="sa-op-banner-wrap">
+                            <LoadErrorBanner
+                              message={opError}
+                              onRetry={loadOperatorsData}
+                              onDismiss={() => setOpError('')}
+                            />
+                          </div>
+                        )}
 
-                      {exportError?.retryKey === 'operators' && (
-                        <ExportErrorBanner
-                          message={exportError.message}
-                          retryable={exportError.retryable}
-                          onRetry={retryFailedExport}
-                          onDismiss={() => setExportError(null)}
-                        />
-                      )}
-
-                      {opSuccess && (
-                        <div style={{ padding: '10px 14px', backgroundColor: '#d1fae5', color: '#065f46', border: '1px solid #a7f3d0', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', fontWeight: '700' }}>
-                          {opSuccess}
-                        </div>
-                      )}
-                      {opError && (
-                        <LoadErrorBanner
-                          message={opError}
-                          onRetry={loadOperatorsData}
-                          onDismiss={() => setOpError('')}
-                        />
-                      )}
-
-                      {loadingOps ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                          <span>Loading operators profiles directory...</span>
-                        </div>
-                      ) : filteredOperators.length === 0 ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', color: 'var(--text-muted)', gap: '10px' }}>
-                          <ShieldAlert size={32} color="#94a3b8" />
-                          <p style={{ margin: 0, fontSize: '0.85rem' }}>No matching operators found.</p>
-                        </div>
-                      ) : (
-                        <div className="table-responsive" style={{ flex: 1, overflowY: 'auto' }}>
-                          <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                              <tr>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Operator ID</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Full Name</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Phone No.</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Email Address</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Warehouse / Data Access</th>
-                                <th style={{ textAlign: 'left', padding: '12px 16px' }}>Registration Date</th>
-                                <th style={{ textAlign: 'center', padding: '12px 16px' }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {filteredOperators.map((op) => {
-                                 if (!op) return null;
-                                 return (
-                                   <tr key={op.id}>
-                                  <td style={{ padding: '12px 16px' }}>
-                                    <span className="status-badge" style={{ backgroundColor: '#f1f5f9', color: '#475569', fontWeight: 800 }}>
-                                      #{op.id}
+                        {loadingOps ? (
+                          <div className="sa-op-empty">Loading operators…</div>
+                        ) : filteredOperators.length === 0 ? (
+                          <div className="sa-op-empty">
+                            <ShieldAlert size={28} />
+                            <p>No matching operators found.</p>
+                          </div>
+                        ) : (
+                          <div className="sa-op-inbox">
+                            <div className="sa-op-inbox-head">
+                              <span>Operator</span>
+                              <span>Details</span>
+                              <span>Registered</span>
+                              <span>Actions</span>
+                            </div>
+                            {filteredOperators.map((op) => {
+                              if (!op) return null;
+                              const initials = String(op.full_name || op.email || 'DO')
+                                .split(/\s+/)
+                                .filter(Boolean)
+                                .slice(0, 2)
+                                .map((p) => p[0]?.toUpperCase())
+                                .join('') || 'DO';
+                              return (
+                                <div key={op.id} className="sa-op-inbox-row">
+                                  <button
+                                    type="button"
+                                    className="sa-op-inbox-main"
+                                    onClick={() => openOperatorProfile(op)}
+                                    title="View DO Profile"
+                                  >
+                                    <span className="sa-op-avatar">{initials}</span>
+                                    <span className="sa-op-sender">
+                                      <strong>{op.full_name || 'Unnamed operator'}</strong>
+                                      <em>#{op.id}</em>
                                     </span>
-                                  </td>
-                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.full_name || '-'}</td>
-                                  <td style={{ padding: '12px 16px', fontWeight: '500' }}>{op.phone_no || '-'}</td>
-                                  <td style={{ padding: '12px 16px', fontWeight: '600' }}>{op.email}</td>
-                                  <td style={{ padding: '12px 16px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                      <strong style={{ fontWeight: '700', color: op.warehouse_name ? 'var(--text-dark)' : '#ea580c' }}>
-                                        {op.warehouse_name || 'Not Configured'}
-                                      </strong>
-                                      <span className="status-badge" style={{ 
-                                        backgroundColor: op.warehouse_name ? 'var(--primary-light)' : '#ffedd5', 
-                                        color: op.warehouse_name ? 'var(--primary)' : '#ea580c', 
-                                        fontWeight: 800,
-                                        fontSize: '0.64rem',
-                                        display: 'inline-block',
-                                        width: 'max-content',
-                                        padding: '2px 8px',
-                                        borderRadius: '100px'
-                                      }}>
-                                        {op.warehouse_name
-                                          ? `Access: ${op.warehouse_name} Logs Only`
-                                          : 'Access: Not Configured — edit profile'}
-                                      </span>
-                                      <span className="status-badge" style={{ 
-                                        backgroundColor: '#f1f5f9', 
-                                        color: '#475569', 
-                                        fontWeight: 800,
-                                        fontSize: '0.64rem',
-                                        display: 'inline-block',
-                                        width: 'max-content',
-                                        padding: '2px 8px',
-                                        borderRadius: '100px',
-                                        marginTop: '2px'
-                                      }}>
-                                        Chambers: 1 to {op.chamber_limit || 4}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                                    {new Date(op.created_at).toLocaleDateString('en-GB')}
-                                  </td>
-                                  <td style={{ padding: '12px 16px' }}>
-                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                      <button 
-                                        className="btn-edit-log"
-                                        type="button"
-                                        onClick={() => startEditOperator(op)}
-                                        title="Edit Operator Profile"
-                                        style={{ backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                      >
-                                        <Edit size={14} />
-                                      </button>
-                                      <button 
-                                        className="btn-delete-log"
-                                        type="button"
-                                        onClick={() => handleDeleteOperator(op.id)}
-                                        title="Revoke Access (Delete)"
-                                        style={{ backgroundColor: '#fee2e2', border: '1px solid #fecaca', color: '#b91c1c', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                                      >
-                                        <Trash2 size={14} />
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              )})}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
+                                    <span className="sa-op-snippet">
+                                      {op.email}
+                                      {' · '}
+                                      {op.warehouse_name || 'Warehouse not configured'}
+                                      {' · '}
+                                      Chambers 1–{op.chamber_limit || 4}
+                                      {op.phone_no ? ` · ${formatIndiaPhoneDisplay(op.phone_no)}` : ''}
+                                    </span>
+                                    <span className="sa-op-date">
+                                      {op.created_at ? new Date(op.created_at).toLocaleDateString('en-GB') : '—'}
+                                    </span>
+                                  </button>
+                                  <div className="sa-op-row-actions">
+                                    <button type="button" className="sa-op-icon-btn" onClick={() => openOperatorProfile(op)} title="View">
+                                      <Eye size={14} />
+                                    </button>
+                                    <button type="button" className="sa-op-icon-btn" onClick={() => startEditOperator(op)} title="Edit">
+                                      <Edit size={14} />
+                                    </button>
+                                    <button type="button" className="sa-op-icon-btn danger" onClick={() => handleDeleteOperator(op.id)} title="Revoke">
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </section>
               </div>
             )}
           </div>
         )}
 
         {activeMenu === 'customer_reports' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {[
-                { id: 'issues', label: 'Issue reports', icon: MessageSquareWarning },
-                { id: 'notes', label: 'Notes & updates', icon: MessageSquare }
-              ].map((tab) => {
-                const Icon = tab.icon;
-                const active = customerReportsTab === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => {
-                      setCustomerReportsTab(tab.id);
-                      if (tab.id === 'notes') {
-                        loadSubAdminsData();
-                        loadNoteThreads();
-                        loadNoteMessages(selectedNoteCustomer || 'All');
-                      } else {
-                        loadCustomerReportsData();
-                      }
-                    }}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: 999,
-                      border: active ? '1px solid var(--primary)' : '1px solid var(--border)',
-                      background: active ? 'var(--primary-light)' : '#fff',
-                      color: active ? 'var(--primary)' : 'var(--text-dark)',
-                      fontWeight: 800,
-                      fontSize: '0.8rem',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6
-                    }}
-                  >
-                    <Icon size={14} />
-                    {tab.label}
-                  </button>
-                );
-              })}
+          <div className="sa-um">
+            <div className="sa-gmail-tabs">
+              <button
+                type="button"
+                className={`sa-gmail-tab${customerReportsTab === 'issues' ? ' active' : ''}`}
+                onClick={() => {
+                  setCustomerReportsTab('issues');
+                  loadCustomerReportsData();
+                }}
+              >
+                <MessageSquareWarning size={14} />
+                Issue reports
+              </button>
+              <button
+                type="button"
+                className={`sa-gmail-tab${customerReportsTab === 'notes' ? ' active' : ''}`}
+                onClick={() => {
+                  setCustomerReportsTab('notes');
+                  loadSubAdminsData();
+                  loadNoteThreads();
+                  loadNoteMessages(selectedNoteCustomer || 'All');
+                }}
+              >
+                <MessageSquare size={14} />
+                Notes & updates
+              </button>
             </div>
 
             {customerReportsTab === 'notes' ? (
-              <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '16px' }}>
-                  <div>
-                    <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <MessageSquare size={18} color="#00a2e8" />
-                      <span>Customer Notes & Updates</span>
-                    </h2>
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                      Chat-style notes from Super Admin to customers. Customers see these on mobile Dashboard → Updates (read only).
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      loadNoteThreads();
-                      loadNoteMessages(selectedNoteCustomer || 'All');
-                    }}
-                    disabled={loadingNotes}
-                    style={{
-                      padding: '8px 14px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      background: '#fff',
-                      fontWeight: 700,
-                      fontSize: '0.8rem',
-                      cursor: loadingNotes ? 'wait' : 'pointer'
-                    }}
-                  >
-                    Refresh
-                  </button>
-                </div>
-                {notesError && (
-                  <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', fontWeight: 600 }}>
-                    {notesError}
-                  </div>
-                )}
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 16, minHeight: 420 }}>
-                  <div style={{ border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', background: 'var(--bg-main)', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', fontWeight: 800, fontSize: '0.75rem', color: '#64748b' }}>
-                      CUSTOMERS
+              <div className="sa-op-gmail">
+                <section className="sa-op-card">
+                  <div className="sa-op-dir-toolbar">
+                    <div>
+                      <h2 className="sa-op-title">Customer Notes & Updates</h2>
+                      <p className="sa-op-sub">
+                        Chat-style notes to customers. They see these on mobile Dashboard → Updates.
+                      </p>
                     </div>
-                    <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
-                      <select
-                        value={selectedNoteCustomer || 'All'}
-                        onChange={(e) => handleSelectNoteCustomer(e.target.value)}
-                        style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: '0.8rem', fontWeight: 600 }}
-                      >
-                        <option value="All">All</option>
-                        {(subAdmins || []).map((c) => (
-                          <option key={c.id || c.email} value={String(c.email || '').toLowerCase()}>
-                            {c.full_name || c.email} ({c.email})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div style={{ flex: 1, overflowY: 'auto' }}>
-                      {noteThreads.length === 0 ? (
-                        <div style={{ padding: 16, fontSize: '0.78rem', color: '#94a3b8' }}>No note threads yet.</div>
-                      ) : (
-                        noteThreads.map((t) => {
-                          const email = String(t.customer_email || '').toLowerCase();
-                          const active =
-                            selectedNoteCustomer !== 'All' && email === selectedNoteCustomer;
-                          return (
-                            <button
-                              key={email}
-                              type="button"
-                              onClick={() => handleSelectNoteCustomer(email)}
-                              style={{
-                                width: '100%',
-                                textAlign: 'left',
-                                padding: '12px',
-                                border: 'none',
-                                borderBottom: '1px solid var(--border)',
-                                background: active ? '#e0f2fe' : 'transparent',
-                                cursor: 'pointer'
-                              }}
-                            >
-                              <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#0f172a' }}>
-                                {t.customer_name || email}
-                              </div>
-                              <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>{email}</div>
-                              <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {t.last_message || '—'}
-                              </div>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ border: '1px solid var(--border)', borderRadius: 12, display: 'flex', flexDirection: 'column', minHeight: 420, background: '#fff' }}>
-                    <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 800, fontSize: '0.85rem', color: '#0f172a' }}>
-                      {selectedNoteCustomer && selectedNoteCustomer !== 'All'
-                        ? `Chat · ${selectedNoteCustomer}`
-                        : `All customers selected · send goes to everyone (${(subAdmins || []).length || 0})`}
-                    </div>
-                    <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 10, background: '#f8fafc' }}>
-                      {noteMessages.length === 0 ? (
-                        <div style={{ margin: 'auto', color: '#94a3b8', fontSize: '0.85rem' }}>
-                          {selectedNoteCustomer && selectedNoteCustomer !== 'All'
-                            ? 'No notes yet. Send the first update.'
-                            : 'No notes yet.'}
-                        </div>
-                      ) : (
-                        noteMessages.map((m) => {
-                          const fromAdmin = m.author_role === 'super_admin';
-                          const showCustomer =
-                            selectedNoteCustomer === 'All' || !selectedNoteCustomer;
-                          return (
-                            <div
-                              key={m.id}
-                              style={{
-                                alignSelf: fromAdmin ? 'flex-end' : 'flex-start',
-                                maxWidth: '78%',
-                                background: fromAdmin ? '#003580' : '#fff',
-                                color: fromAdmin ? '#fff' : '#0f172a',
-                                border: fromAdmin ? 'none' : '1px solid #e2e8f0',
-                                borderRadius: 12,
-                                padding: '10px 12px'
-                              }}
-                            >
-                              <div style={{ fontSize: '0.68rem', opacity: 0.85, fontWeight: 700, marginBottom: 4 }}>
-                                {showCustomer
-                                  ? `${m.customer_name || m.customer_email || 'Customer'} · `
-                                  : ''}
-                                {fromAdmin ? 'Super Admin' : (m.author_name || 'Customer')}
-                                {' · '}
-                                {m.created_at ? new Date(m.created_at).toLocaleString() : ''}
-                              </div>
-                              <div style={{ fontSize: '0.84rem', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                {m.message}
-                              </div>
-                              {fromAdmin ? (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteCustomerNote(m.id)}
-                                  style={{ marginTop: 6, border: 'none', background: 'transparent', color: '#fecaca', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
-                                >
-                                  Delete
-                                </button>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                      )}
-                      <div ref={notesChatEndRef} />
-                    </div>
-                    <div style={{ padding: 12, borderTop: '1px solid var(--border)', display: 'flex', gap: 8 }}>
-                      <textarea
-                        value={noteDraft}
-                        onChange={(e) => setNoteDraft(e.target.value)}
-                        placeholder={
-                          selectedNoteCustomer && selectedNoteCustomer !== 'All'
-                            ? 'Write an update / note for this customer…'
-                            : 'Write a note — will send to ALL customers…'
-                        }
-                        disabled={sendingNote}
-                        rows={2}
-                        style={{ flex: 1, resize: 'vertical', minHeight: 44, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border)', fontSize: '0.84rem', fontFamily: 'inherit' }}
-                      />
+                    <div className="sa-op-dir-tools">
                       <button
                         type="button"
-                        onClick={handleSendCustomerNote}
-                        disabled={sendingNote || !String(noteDraft || '').trim()}
-                        style={{
-                          padding: '0 18px',
-                          borderRadius: 10,
-                          border: 'none',
-                          background: 'var(--primary)',
-                          color: '#fff',
-                          fontWeight: 800,
-                          fontSize: '0.84rem',
-                          cursor: sendingNote ? 'not-allowed' : 'pointer',
-                          opacity: sendingNote ? 0.6 : 1
+                        className="sa-op-btn-text"
+                        onClick={() => {
+                          loadNoteThreads();
+                          loadNoteMessages(selectedNoteCustomer || 'All');
                         }}
+                        disabled={loadingNotes}
                       >
-                        {sendingNote
-                          ? 'Sending…'
-                          : selectedNoteCustomer && selectedNoteCustomer !== 'All'
-                            ? 'Send'
-                            : 'Send to all'}
+                        {loadingNotes ? 'Refreshing…' : 'Refresh'}
                       </button>
                     </div>
                   </div>
-                </div>
+                  {notesError && <div className="sa-op-banner error">{notesError}</div>}
+                  <div className="sa-cr-split">
+                    <div className="sa-cr-list">
+                      <div className="sa-cr-list-head">
+                        Customers
+                        <select
+                          value={selectedNoteCustomer || 'All'}
+                          onChange={(e) => handleSelectNoteCustomer(e.target.value)}
+                        >
+                          <option value="All">All</option>
+                          {(subAdmins || []).map((c) => (
+                            <option key={c.id || c.email} value={String(c.email || '').toLowerCase()}>
+                              {c.full_name || c.email} ({c.email})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div style={{ flex: 1, overflowY: 'auto' }}>
+                        {noteThreads.length === 0 ? (
+                          <div className="sa-op-empty">No note threads yet.</div>
+                        ) : (
+                          noteThreads.map((t) => {
+                            const email = String(t.customer_email || '').toLowerCase();
+                            const active =
+                              selectedNoteCustomer !== 'All' && email === selectedNoteCustomer;
+                            return (
+                              <button
+                                key={email}
+                                type="button"
+                                className={`sa-cr-thread${active ? ' active' : ''}`}
+                                onClick={() => handleSelectNoteCustomer(email)}
+                              >
+                                <strong>{t.customer_name || email}</strong>
+                                <em>{email}</em>
+                                <span>{t.last_message || '—'}</span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                    <div className="sa-cr-pane">
+                      <div className="sa-cr-pane-head">
+                        {selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                          ? selectedNoteCustomer
+                          : `All customers · send goes to everyone (${(subAdmins || []).length || 0})`}
+                      </div>
+                      <div className="sa-cr-messages">
+                        {noteMessages.length === 0 ? (
+                          <div className="sa-op-empty" style={{ margin: 'auto' }}>
+                            {selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                              ? 'No notes yet. Send the first update.'
+                              : 'No notes yet.'}
+                          </div>
+                        ) : (
+                          noteMessages.map((m) => {
+                            const fromAdmin = m.author_role === 'super_admin';
+                            const showCustomer =
+                              selectedNoteCustomer === 'All' || !selectedNoteCustomer;
+                            return (
+                              <div key={m.id} className={`sa-cr-bubble${fromAdmin ? ' out' : ''}`}>
+                                <small>
+                                  {showCustomer
+                                    ? `${m.customer_name || m.customer_email || 'Customer'} · `
+                                    : ''}
+                                  {fromAdmin ? 'Super Admin' : (m.author_name || 'Customer')}
+                                  {' · '}
+                                  {m.created_at ? new Date(m.created_at).toLocaleString() : ''}
+                                </small>
+                                <p>{m.message}</p>
+                                {fromAdmin ? (
+                                  <button type="button" onClick={() => handleDeleteCustomerNote(m.id)}>
+                                    Delete
+                                  </button>
+                                ) : null}
+                              </div>
+                            );
+                          })
+                        )}
+                        <div ref={notesChatEndRef} />
+                      </div>
+                      <div className="sa-cr-compose">
+                        <textarea
+                          value={noteDraft}
+                          onChange={(e) => setNoteDraft(e.target.value)}
+                          placeholder={
+                            selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                              ? 'Write an update / note for this customer…'
+                              : 'Write a note — will send to ALL customers…'
+                          }
+                          disabled={sendingNote}
+                          rows={2}
+                        />
+                        <button
+                          type="button"
+                          className="sa-op-btn-primary"
+                          onClick={handleSendCustomerNote}
+                          disabled={sendingNote || !String(noteDraft || '').trim()}
+                        >
+                          {sendingNote
+                            ? 'Sending…'
+                            : selectedNoteCustomer && selectedNoteCustomer !== 'All'
+                              ? 'Send'
+                              : 'Send to all'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </div>
             ) : (
-            <div className="diagnostics-card" style={{ padding: '24px', backgroundColor: 'var(--surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start', marginBottom: '16px' }}>
-                <div>
-                  <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <MessageSquareWarning size={18} color="#00a2e8" />
-                    <span>Customer Reports</span>
-                  </h2>
-                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-                    Issues & queries from the Customer profile. Each row shows the customer, Ref No. (or Query), and message.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={loadCustomerReportsData}
-                  disabled={loadingCustomerReports}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border)',
-                    background: '#fff',
-                    fontWeight: 700,
-                    fontSize: '0.8rem',
-                    cursor: loadingCustomerReports ? 'wait' : 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  {loadingCustomerReports ? <Loader2 size={14} className="spinner-icon" /> : null}
-                  Refresh
-                </button>
-              </div>
-
-              <div style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: '12px',
-                alignItems: 'flex-end',
-                padding: '14px',
-                background: 'var(--bg-main)',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                marginBottom: '16px'
-              }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '2 1 220px' }}>
-                  <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Search</label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      type="text"
-                      placeholder="Customer name, email, phone, Ref No., issue…"
-                      value={customerReportSearch}
-                      onChange={(e) => setCustomerReportSearch(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') loadCustomerReportsData();
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '8px 12px 8px 32px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border)',
-                        fontSize: '0.8rem',
-                        background: '#fff',
-                        outline: 'none',
-                        boxSizing: 'border-box'
-                      }}
-                    />
-                    <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <div className="sa-op-gmail">
+                <section className="sa-op-card sa-op-directory">
+                  <div className="sa-op-dir-toolbar">
+                    <div>
+                      <h2 className="sa-op-title">Customer Reports</h2>
+                      <p className="sa-op-sub">
+                        {customerReports.length} issue{customerReports.length === 1 ? '' : 's'} · customer, Ref No., and message
+                      </p>
+                    </div>
+                    <div className="sa-op-dir-tools">
+                      <label className="sa-op-search">
+                        <Search size={14} />
+                        <input
+                          type="search"
+                          placeholder="Search mail-style: name, email, Ref No., issue"
+                          value={customerReportSearch}
+                          onChange={(e) => setCustomerReportSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') loadCustomerReportsData();
+                          }}
+                        />
+                      </label>
+                      <select
+                        className="sa-op-filter"
+                        value={customerReportStatusFilter}
+                        onChange={(e) => setCustomerReportStatusFilter(e.target.value)}
+                      >
+                        <option value="All">All status</option>
+                        <option value="Open">Open</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Resolved">Resolved</option>
+                        <option value="Closed">Closed</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="sa-op-btn-text"
+                        onClick={loadCustomerReportsData}
+                        disabled={loadingCustomerReports}
+                      >
+                        {loadingCustomerReports ? (
+                          <>
+                            <Loader2 size={14} className="spinner-icon" />
+                            Refresh
+                          </>
+                        ) : 'Apply'}
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 140px' }}>
-                  <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--text-muted)' }}>Status</label>
-                  <select
-                    value={customerReportStatusFilter}
-                    onChange={(e) => setCustomerReportStatusFilter(e.target.value)}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      background: '#fff',
-                      height: 37
-                    }}
-                  >
-                    <option value="All">All</option>
-                    <option value="Open">Open</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Resolved">Resolved</option>
-                    <option value="Closed">Closed</option>
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  onClick={loadCustomerReportsData}
-                  style={{
-                    padding: '8px 16px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    background: 'var(--primary)',
-                    color: '#fff',
-                    fontWeight: 700,
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    height: 37
-                  }}
-                >
-                  Apply
-                </button>
-              </div>
 
-              {customerReportsError && (
-                <div style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: '0.82rem', fontWeight: 600 }}>
-                  {customerReportsError}
-                </div>
-              )}
+                  {customerReportsError && <div className="sa-op-banner error">{customerReportsError}</div>}
 
-              {loadingCustomerReports ? (
-                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
-                  <Loader2 size={18} className="spinner-icon" />
-                  <span>Loading customer reports…</span>
-                </div>
-              ) : customerReports.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  No customer reports found.
-                </div>
-              ) : (
-                <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                  <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
-                    <thead>
-                      <tr style={{ background: 'var(--bg-main)', borderBottom: '2px solid var(--border)', textAlign: 'left' }}>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Customer Identity</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Access Scope</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Ref No.</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Issue</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Status</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Submitted</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Update</th>
-                        <th style={{ padding: '10px 12px', fontWeight: 800 }}>Delete</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  {loadingCustomerReports ? (
+                    <div className="sa-op-empty">Loading customer reports…</div>
+                  ) : customerReports.length === 0 ? (
+                    <div className="sa-op-empty">
+                      <MessageSquareWarning size={28} />
+                      <p>No customer reports found.</p>
+                    </div>
+                  ) : (
+                    <div className="sa-op-inbox">
                       {customerReports.map((report) => {
                         if (!report) return null;
-                        const statusColor =
-                          report.status === 'Open' ? '#dc2626'
-                            : report.status === 'In Progress' ? '#d97706'
-                              : report.status === 'Resolved' ? '#16a34a'
-                                : '#64748b';
-                        const statusBg =
-                          report.status === 'Open' ? '#fee2e2'
-                            : report.status === 'In Progress' ? '#ffedd5'
-                              : report.status === 'Resolved' ? '#dcfce7'
-                                : '#f1f5f9';
+                        const initials = String(report.customer_name || report.customer_email || 'CU')
+                          .split(/\s+/)
+                          .filter(Boolean)
+                          .slice(0, 2)
+                          .map((p) => p[0]?.toUpperCase())
+                          .join('') || 'CU';
+                        const statusKey =
+                          report.status === 'In Progress' ? 'progress'
+                            : String(report.status || 'closed').toLowerCase();
                         return (
-                          <tr key={report.id} style={{ borderBottom: '1px solid var(--border)', verticalAlign: 'top' }}>
-                            <td style={{ padding: '12px' }}>
-                              <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>
-                                {report.customer_name || 'Unnamed customer'}
-                              </div>
-                              <div style={{ color: '#475569', fontWeight: 600 }}>{report.customer_email}</div>
-                              <div style={{ color: '#64748b', fontSize: '0.72rem', marginTop: 4 }}>
-                                {report.customer_id != null ? `Customer ID: ${report.customer_id}` : 'Customer ID: —'}
-                                {report.customer_phone ? ` · ${report.customer_phone}` : ''}
-                              </div>
-                            </td>
-                            <td style={{ padding: '12px', maxWidth: 180 }}>
-                              <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: 4 }}>
-                                <strong style={{ color: '#334155' }}>Clients:</strong>{' '}
-                                {report.allowed_clients || 'All / not set'}
-                              </div>
-                              <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                                <strong style={{ color: '#334155' }}>Warehouses:</strong>{' '}
-                                {report.allowed_warehouses || 'All / not set'}
-                              </div>
-                            </td>
-                            <td style={{ padding: '12px', fontWeight: 800, color: 'var(--primary)', whiteSpace: 'nowrap' }}>
-                              {report.reference_no}
-                            </td>
-                            <td style={{ padding: '12px', color: '#334155', maxWidth: 280, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                              {report.message}
-                            </td>
-                            <td style={{ padding: '12px' }}>
-                              <span style={{
-                                display: 'inline-block',
-                                padding: '2px 8px',
-                                borderRadius: 999,
-                                fontSize: '0.68rem',
-                                fontWeight: 800,
-                                color: statusColor,
-                                background: statusBg
-                              }}>
-                                {report.status}
+                          <div key={report.id} className="sa-op-inbox-row">
+                            <div className="sa-op-inbox-main sa-cr-report-main">
+                              <span className="sa-op-avatar">{initials}</span>
+                              <span className="sa-op-sender">
+                                <strong>{report.customer_name || 'Unnamed customer'}</strong>
+                                <em>{report.customer_email || '—'}</em>
                               </span>
-                            </td>
-                            <td style={{ padding: '12px', color: '#64748b', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
-                              {report.created_at
-                                ? new Date(report.created_at).toLocaleString('en-GB', {
-                                    day: '2-digit',
-                                    month: 'short',
-                                    year: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                    hour12: true
-                                  })
-                                : '—'}
-                            </td>
-                            <td style={{ padding: '12px' }}>
+                              <span className="sa-op-snippet">
+                                {report.reference_no || 'Query'}
+                                {report.message ? ` · ${report.message}` : ''}
+                                {' · '}
+                                {report.allowed_clients || 'All clients'}
+                                {' · '}
+                                {report.allowed_warehouses || 'All warehouses'}
+                                {report.customer_phone ? ` · ${report.customer_phone}` : ''}
+                              </span>
+                              <span className="sa-op-date">
+                                <span className={`sa-cr-pill ${statusKey}`}>{report.status || '—'}</span>
+                                {' '}
+                                {report.created_at
+                                  ? new Date(report.created_at).toLocaleDateString('en-GB')
+                                  : '—'}
+                              </span>
+                            </div>
+                            <div className="sa-op-row-actions">
                               <select
+                                className="sa-cr-status-select"
                                 value={report.status}
                                 disabled={updatingReportId === report.id}
                                 onChange={(e) => handleUpdateCustomerReportStatus(report.id, e.target.value)}
-                                style={{
-                                  padding: '6px 8px',
-                                  borderRadius: 6,
-                                  border: '1px solid var(--border)',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 600,
-                                  background: '#fff',
-                                  cursor: updatingReportId === report.id ? 'wait' : 'pointer',
-                                  minWidth: 120
-                                }}
+                                title="Update status"
                               >
                                 <option value="Open">Open</option>
                                 <option value="In Progress">In Progress</option>
                                 <option value="Resolved">Resolved</option>
                                 <option value="Closed">Closed</option>
                               </select>
-                            </td>
-                            <td style={{ padding: '12px' }}>
                               <button
                                 type="button"
+                                className="sa-op-icon-btn danger"
                                 title="Delete report"
                                 disabled={updatingReportId === report.id}
                                 onClick={() => handleDeleteCustomerReport(report.id)}
-                                style={{
-                                  backgroundColor: '#fee2e2',
-                                  border: '1px solid #fecaca',
-                                  color: '#b91c1c',
-                                  padding: '6px 8px',
-                                  borderRadius: 6,
-                                  cursor: updatingReportId === report.id ? 'wait' : 'pointer',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center'
-                                }}
                               >
                                 <Trash2 size={14} />
                               </button>
-                            </td>
-                          </tr>
+                            </div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                      </table>
                     </div>
                   )}
-                </div>
+                </section>
+              </div>
             )}
           </div>
         )}
@@ -9638,6 +10140,107 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       </main>
 
 
+
+      {opMasterDonePopup && (
+        <div
+          className="sa-profile-confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sa-master-done-title"
+          onClick={() => setOpMasterDonePopup(null)}
+        >
+          <div className="sa-profile-confirm-content" onClick={(e) => e.stopPropagation()}>
+            <div className="sa-profile-confirm-header">
+              <h3 id="sa-master-done-title" className="sa-profile-confirm-title">
+                <CheckCircle size={20} color="#10b981" />
+                <span>Master Updated</span>
+              </h3>
+            </div>
+
+            <div className="sa-profile-confirm-body">
+              <div className="sa-profile-confirm-box">
+                <h4>Chamber & Client Mappings</h4>
+                <div className="sa-profile-confirm-flags">
+                  <div className="sa-profile-confirm-flag">
+                    <span>Operator</span>
+                    <strong>{opMasterDonePopup.operatorName}</strong>
+                  </div>
+                  <div className="sa-profile-confirm-flag">
+                    <span>Warehouse</span>
+                    <strong>{opMasterDonePopup.warehouseName || '—'}</strong>
+                  </div>
+                </div>
+                {(() => {
+                  const changeRows = (opMasterDonePopup.changes || []).map((change) => (
+                    typeof change === 'string' ? { kind: 'other', text: change } : change
+                  ));
+                  const typeChanges = changeRows.filter((c) => c.kind === 'type');
+                  const clientChanges = changeRows.filter((c) => c.kind === 'client');
+                  const removeChanges = changeRows.filter((c) => c.kind === 'remove');
+                  const otherChanges = changeRows.filter((c) => !['type', 'client', 'remove'].includes(c.kind));
+                  if (!changeRows.length) {
+                    return <p className="sa-master-done-empty">No mapping changes were made in this edit.</p>;
+                  }
+                  return (
+                    <div className="sa-master-done-groups">
+                      {typeChanges.length > 0 && (
+                        <div>
+                          <h5>Chamber type updates</h5>
+                          <ul className="sa-master-done-list">
+                            {typeChanges.map((change, idx) => (
+                              <li key={`type-${idx}`}>{change.text}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {clientChanges.length > 0 && (
+                        <div>
+                          <h5>Clients added</h5>
+                          <ul className="sa-master-done-list">
+                            {clientChanges.map((change, idx) => (
+                              <li key={`client-${idx}`}>{change.text}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {removeChanges.length > 0 && (
+                        <div>
+                          <h5>Clients removed</h5>
+                          <ul className="sa-master-done-list">
+                            {removeChanges.map((change, idx) => (
+                              <li key={`remove-${idx}`}>{change.text}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {otherChanges.length > 0 && (
+                        <ul className="sa-master-done-list">
+                          {otherChanges.map((change, idx) => (
+                            <li key={`other-${idx}`}>{change.text}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })()}
+                <div className="sa-profile-confirm-banner">
+                  These mappings will appear on the operator&apos;s mobile app shortly. Ask the DO to keep the app open or tap Sync.
+                </div>
+              </div>
+            </div>
+
+            <div className="sa-profile-confirm-actions single">
+              <button
+                type="button"
+                className="sa-profile-confirm-save"
+                onClick={() => setOpMasterDonePopup(null)}
+              >
+                <span>OK</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Detailed Data Profile Modal */}
       {selectedDetailLog && (
@@ -9948,6 +10551,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </div>
                   </>
                 )}
+
+                {(detailType === 'inward' || detailType === 'outward') &&
+                  renderPhotoCaptureMetadataPanel(selectedDetailLog.photo_capture_metadata)}
               </div>
 
               {/* Right Column: Uploaded Photos & Files */}

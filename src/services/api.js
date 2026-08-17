@@ -112,6 +112,7 @@ function buildLogListQuery(params = {}) {
   if (params.warehouse && params.warehouse !== 'All') qs.set('warehouse', params.warehouse);
   if (params.action && params.action !== 'All') qs.set('action', params.action);
   if (params.category) qs.set('category', params.category);
+  if (params.operatorEmail) qs.set('operatorEmail', params.operatorEmail);
   if (params.export) qs.set('export', '1');
   const s = qs.toString();
   return s ? `?${s}` : '';
@@ -268,7 +269,8 @@ export const fetchChamberLogs = async (search = '', options = {}) => {
     limit: options.limit ?? (options.paginated ? 50 : 200),
     fromDate: options.fromDate,
     toDate: options.toDate,
-    warehouse: options.warehouse
+    warehouse: options.warehouse,
+    operatorEmail: options.operatorEmail
   };
   const result = await fetchChamberLogsPage(params);
   if (options.paginated) return result;
@@ -950,4 +952,42 @@ export const fetchDailyInventoryDeltas = async ({ warehouse, fromDate, toDate } 
   }
   const data = await res.json();
   return data.items || [];
+};
+
+export const fetchChamberAssignments = async (warehouseName) => {
+  const queryParams = new URLSearchParams();
+  if (warehouseName) queryParams.append('warehouse_name', warehouseName);
+  const res = await fetch(`${API_BASE_URL}/chambers/assignments?${queryParams.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to fetch assignments.');
+  }
+  const data = await res.json();
+  return data.data || [];
+};
+
+export const addChamberAssignment = async ({ chamber_id, client_name, remark, chamber_type, warehouse_name, operator_email }) => {
+  const res = await fetch(`${API_BASE_URL}/chambers/assignments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chamber_id, client_name, remark, chamber_type, warehouse_name, operator_email })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || err.error || 'Failed to add assignment.');
+  }
+  return await res.json();
+};
+
+export const deleteChamberAssignment = async ({ chamber_id, client_name, remark, warehouse_name, operator_email }) => {
+  const res = await fetch(`${API_BASE_URL}/chambers/assignments`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chamber_id, client_name, remark, warehouse_name, operator_email })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || err.error || 'Failed to delete assignment.');
+  }
+  return await res.json();
 };

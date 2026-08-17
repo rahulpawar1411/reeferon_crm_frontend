@@ -28,6 +28,10 @@ import {
   getExportErrorMessage,
   isRetryableExportError
 } from '../../utils/exportCsv';
+import {
+  formatPhotoCaptureMetadataForExport,
+  formatPhotoGpsForExport,
+} from '../../utils/photoCaptureExport';
 import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
 import './DOHistoryView.css';
 
@@ -215,7 +219,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
     let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
 
     if (activeTab === 'daily') {
-      const headers = ["Date", "Chamber", "Client Name", "Inspection Time", "Box Temp (°C)", "Supervisor", "Last Updated"];
+      const headers = ["Date", "Chamber", "Client Name", "Inspection Time", "Box Temp (°C)", "Supervisor", "Photo Capture Time", "Photo Location (GPS)", "Last Updated"];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
       filteredLogs.forEach(log => {
@@ -226,6 +230,12 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           log.inspection_time || '',
           log.box_temp !== undefined ? `${log.box_temp}°C` : '',
           log.monitor_supervisor_name || '',
+          log.photo_capture_time || '',
+          formatPhotoGpsForExport(
+            log.photo_capture_latitude,
+            log.photo_capture_longitude,
+            log.photo_capture_accuracy
+          ),
           getUpdateDiff(log.created_at, log.updated_at) ? formatDateTimeStr(log.updated_at) : ''
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
@@ -235,7 +245,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
         "Date", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
         "Reporting Time", "Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
         "Invoice Qty", "Received Pallets", "Received Boxes", "Short Boxes", "Excess Boxes", "Damage Boxes", 
-        "Unloading Start", "Unloading End", "Unloading Duration", "Supervisor", "Remarks", "Last Updated"
+        "Unloading Start", "Unloading End", "Unloading Duration", "Supervisor", "Remarks", "Photo Capture Time & Location", "Last Updated"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
@@ -265,6 +275,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           formatDuration(log.inward_unloading_duration_hours, log.inward_unloading_duration_mins),
           log.inward_unloading_supervisor_name || '',
           log.inward_remarks || '',
+          formatPhotoCaptureMetadataForExport(log.photo_capture_metadata),
           getUpdateDiff(log.inward_created_at, log.inward_updated_at) ? formatDateTimeStr(log.inward_updated_at) : ''
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
@@ -274,7 +285,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
         "Date", "Vehicle No", "Seal No", "Client", "Transporter", "Driver Name", "Driver Contact", "Dock No", 
         "Reporting Time", "Pre Vehicle Temp (°C)", "Material Temp (°C)", "Material Type", "Pallets Qty", 
         "Invoice Qty", "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Boxes", 
-        "Loading Start", "Loading End", "Loading Duration", "Supervisor", "Remarks", "Last Updated"
+        "Loading Start", "Loading End", "Loading Duration", "Supervisor", "Remarks", "Photo Capture Time & Location", "Last Updated"
       ];
       csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
 
@@ -304,6 +315,7 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
           formatDuration(log.outward_loading_duration_hours, log.outward_loading_duration_mins),
           log.outward_loading_supervisor_name || '',
           log.outward_remarks || '',
+          formatPhotoCaptureMetadataForExport(log.photo_capture_metadata),
           getUpdateDiff(log.outward_created_at, log.outward_updated_at) ? formatDateTimeStr(log.outward_updated_at) : ''
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
