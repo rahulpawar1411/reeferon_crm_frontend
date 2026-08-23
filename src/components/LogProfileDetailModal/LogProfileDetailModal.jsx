@@ -9,6 +9,8 @@ import {
   resolveImageSrc
 } from './logProfileHelpers';
 import CopyableRef from './CopyableRef';
+import PhotoGpsLink from '../PhotoGpsLink/PhotoGpsLink';
+import PhotoCaptureMetaPanel from '../PhotoCaptureMetaPanel/PhotoCaptureMetaPanel';
 import './LogProfileDetailModal.css';
 
 function ProfileField({ label, value, span2, valueStyle, valueClassName, copyable }) {
@@ -217,6 +219,16 @@ export default function LogProfileDetailModal({
                         }
                       />
                       <ProfileField label="Photo Capture Time" value={log.photo_capture_time || '-'} />
+                      <ProfileField
+                        label="Photo Location (GPS)"
+                        value={
+                          <PhotoGpsLink
+                            lat={log.photo_capture_latitude}
+                            lng={log.photo_capture_longitude}
+                            accuracy={log.photo_capture_accuracy}
+                          />
+                        }
+                      />
                       <ProfileField label="Submission Delay (Overdue)" value={log.overdue_time || 'same day'} />
                     </div>
                   </div>
@@ -385,6 +397,10 @@ export default function LogProfileDetailModal({
                     </div>
                   </div>
                 </>
+              )}
+
+              {(detailType === 'inward' || detailType === 'outward') && (
+                <PhotoCaptureMetaPanel metadata={log.photo_capture_metadata} />
               )}
             </div>
 

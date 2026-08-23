@@ -991,3 +991,81 @@ export const deleteChamberAssignment = async ({ chamber_id, client_name, remark,
   }
   return await res.json();
 };
+
+export const fetchMasterWarehouses = async ({ q = '', activeOnly = true } = {}) => {
+  const qs = new URLSearchParams();
+  if (q) qs.set('q', q);
+  qs.set('active_only', activeOnly ? '1' : '0');
+  const res = await fetch(`${API_BASE_URL}/masters/warehouses?${qs.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to fetch warehouses.');
+  }
+  return Array.isArray(data.data) ? data.data : [];
+};
+
+export const createMasterWarehouse = async (payload) => {
+  const res = await fetch(`${API_BASE_URL}/masters/warehouses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to create warehouse.');
+  }
+  return data;
+};
+
+export const updateMasterWarehouse = async (id, payload) => {
+  const res = await fetch(`${API_BASE_URL}/masters/warehouses/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to update warehouse.');
+  }
+  return data;
+};
+
+export const fetchMasterClients = async ({ q = '', activeOnly = true, warehouse_code = '' } = {}) => {
+  const qs = new URLSearchParams();
+  if (q) qs.set('q', q);
+  qs.set('active_only', activeOnly ? '1' : '0');
+  if (warehouse_code) qs.set('warehouse_code', warehouse_code);
+  const res = await fetch(`${API_BASE_URL}/masters/clients?${qs.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to fetch clients.');
+  }
+  return Array.isArray(data.data) ? data.data : [];
+};
+
+export const createMasterClient = async (payload) => {
+  const res = await fetch(`${API_BASE_URL}/masters/clients`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to create client.');
+  }
+  return data;
+};
+
+export const updateMasterClient = async (id, payload) => {
+  const res = await fetch(`${API_BASE_URL}/masters/clients/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Failed to update client.');
+  }
+  return data;
+};
+

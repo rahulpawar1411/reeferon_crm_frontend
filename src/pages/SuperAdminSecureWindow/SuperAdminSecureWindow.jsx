@@ -31,8 +31,11 @@ import {
   fetchInventoryReconciliation, fetchInventoryFilterOptions, fetchDailyInventoryDeltas,
   fetchAppSubAdmins, createAppSubAdmin, deleteAppSubAdmin,
   fetchChamberAssignments, addChamberAssignment, deleteChamberAssignment,
-  fetchChambers, updateChamber
+  fetchChambers, updateChamber,
+  fetchMasterWarehouses, fetchMasterClients
 } from '../../services/api';
+import MasterDataPanel from '../../components/MasterDataPanel/MasterDataPanel';
+import { formatMasterLabel, lookupMasterLabel } from '../../utils/masterLabels';
 import {
   requireExportDates,
   confirmExportSize,
@@ -46,11 +49,17 @@ import {
   formatPhotoGpsForExport,
 } from '../../utils/photoCaptureExport';
 import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
+import PhotoGpsLink from '../../components/PhotoGpsLink/PhotoGpsLink';
+import PhotoCaptureMetaPanel from '../../components/PhotoCaptureMetaPanel/PhotoCaptureMetaPanel';
+import { resolveMediaSrc as toMediaSrc } from '../../utils/resolveMediaSrc';
 import LoadErrorBanner from '../../components/LoadErrorBanner/LoadErrorBanner';
 import {
   computeDoTaskStatus,
   getActiveOperatorAssignments,
   getDefaultOpTaskRange,
+  getOperatorDisplayChambers,
+  assignmentMatchesDisplayChamber,
+  chamberNumberFromName as strictChamberNumberFromName,
   localDateStr
 } from '../../utils/doTaskStatus';
 import '../../components/DOSidebar/DOSidebar.css';
@@ -82,12 +91,7 @@ const highlightAddedDeletedWords = (text, extraNodes = null) => {
   );
 };
 
-const chamberNumberFromName = (name) => {
-  const m = String(name || '').match(/^Chamber\s+(\d+)$/i);
-  if (m) return parseInt(m[1], 10);
-  const any = String(name || '').match(/(\d+)/);
-  return any ? parseInt(any[1], 10) : null;
-};
+const chamberNumberFromName = strictChamberNumberFromName;
 
 const isDeactiveAssignment = (row) =>
   String(row?.status || 'active').trim().toLowerCase() === 'inactive';
@@ -169,6 +173,46 @@ const dedupeChamberAssignments = (rows) => {
   return Array.from(map.values());
 };
 
+/** Stable key so the same pending request never appears twice in SA UI. */
+const buildPendingPermissionFingerprint = (pr) => {
+  const desc = String(pr?.request_description || pr?.description || '');
+  const op = String(pr?.operator_email || '').toLowerCase();
+  const type = pr?.record_type || '';
+  const actionKind = pr?.raw_action === 'REQUEST_DELETE' ? 'delete' : 'edit';
+
+  if (type === 'ClientMaster') {
+    const addMatch = desc.match(/ADD client "([^"]+)"/i);
+    const delMatch = desc.match(/DELETE client "([^"]+)"/i);
+    const editMatch = desc.match(/EDIT client "([^"]+)"/i);
+    const renameTo = desc.match(/EDIT client "[^"]+"\s*(?:→|->)\s*"([^"]+)"/i);
+    const chamberMatch =
+      desc.match(/\(id:\s*(\d+)\)/i) ||
+      desc.match(/chamber_id:\s*(\d+)/i);
+    const client = String(addMatch?.[1] || delMatch?.[1] || editMatch?.[1] || '')
+      .trim()
+      .toLowerCase();
+    const chamberId = chamberMatch?.[1] || pr?.chamber_id || '';
+    const kind = addMatch ? 'add' : delMatch ? 'delete' : editMatch ? 'edit' : actionKind;
+    const renameKey = renameTo ? `->${String(renameTo[1]).trim().toLowerCase()}` : '';
+    return `${op}|ClientMaster|${kind}|${chamberId}|${client}${renameKey}`;
+  }
+
+  if (type === 'ChamberType') {
+    const chamberMatch = desc.match(/\(id:\s*(\d+)\)/i);
+    return `${op}|ChamberType|${chamberMatch?.[1] || pr?.record_id || ''}`;
+  }
+
+  if (type === 'ChamberMaster') {
+    const addMatch = desc.match(/ADD chamber "([^"]+)"/i);
+    const delMatch = desc.match(/delete chamber "([^"]+)"/i);
+    const name = String(addMatch?.[1] || delMatch?.[1] || '').trim().toLowerCase();
+    const kind = addMatch ? 'add' : delMatch ? 'delete' : actionKind;
+    return `${op}|ChamberMaster|${kind}|${name || pr?.record_id}`;
+  }
+
+  return `${op}|${type}|${pr?.record_id}|${actionKind}`;
+};
+
 /** Pending DO permission rows Super Admin can approve/deny (excludes notify-only types). */
 const filterActionablePendingPermissionRequests = (
   requests,
@@ -176,22 +220,25 @@ const filterActionablePendingPermissionRequests = (
   warehouseFilter = 'All'
 ) => {
   const pending = (requests || []).filter((pr) => pr?.status === 'Pending');
-  return pending
-    .filter((pr) => {
-      if (pr.record_type === 'ClientMaster' || pr.record_type === 'MasterSetup') return false;
-      if (pr.record_type === 'DO_CHANGE' || pr.record_type === 'activity') return false;
-      if (warehouseFilter === 'All') return true;
-      const operatorEmail = pr.operator_email ? pr.operator_email.toLowerCase() : '';
-      const wh = warehouseMap[operatorEmail];
-      if (warehouseFilter === 'System/Admin') return !wh || operatorEmail === 'system';
-      return wh === warehouseFilter;
-    })
-    .filter((pr, idx, list) => {
-      const key = `${String(pr.operator_email || '').toLowerCase()}|${pr.record_type}|${pr.record_id}|${pr.raw_action || ''}`;
-      return list.findIndex((other) => (
-        `${String(other.operator_email || '').toLowerCase()}|${other.record_type}|${other.record_id}|${other.raw_action || ''}` === key
-      )) === idx;
-    });
+  const filtered = pending.filter((pr) => {
+    if (pr.record_type === 'MasterSetup') return false;
+    if (pr.record_type === 'DO_CHANGE' || pr.record_type === 'activity') return false;
+    if (warehouseFilter === 'All') return true;
+    const operatorEmail = pr.operator_email ? pr.operator_email.toLowerCase() : '';
+    const wh = warehouseMap[operatorEmail];
+    if (warehouseFilter === 'System/Admin') return !wh || operatorEmail === 'system';
+    return wh === warehouseFilter;
+  });
+
+  const byFingerprint = new Map();
+  for (const pr of filtered) {
+    const fp = buildPendingPermissionFingerprint(pr);
+    const cur = byFingerprint.get(fp);
+    if (!cur || Number(pr.id) > Number(cur.id)) {
+      byFingerprint.set(fp, pr);
+    }
+  }
+  return Array.from(byFingerprint.values()).sort((a, b) => Number(b.id) - Number(a.id));
 };
 
 const MASTER_SETUP_ACTIONS = new Set([
@@ -522,6 +569,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [addingMappingChamberId, setAddingMappingChamberId] = useState(null); // tracking loading during insert
   const [updatingChamberTypeKey, setUpdatingChamberTypeKey] = useState(null);
   const [opChamberTypeByNum, setOpChamberTypeByNum] = useState({});
+  const [opChambersList, setOpChambersList] = useState([]);
   const [opTaskFromDate, setOpTaskFromDate] = useState('');
   const [opTaskToDate, setOpTaskToDate] = useState('');
   const [opTaskAppliedFrom, setOpTaskAppliedFrom] = useState('');
@@ -826,95 +874,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     return 'Morning';
   };
 
-  const formatPhotoGpsLink = (lat, lng, accuracy) => {
-    const latitude = parseFloat(lat);
-    const longitude = parseFloat(lng);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '-';
-    const acc =
-      accuracy != null && accuracy !== '' && Number.isFinite(parseFloat(accuracy))
-        ? ` (±${Math.round(parseFloat(accuracy))}m)`
-        : '';
-    const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
-    return (
-      <a href={mapsUrl} target="_blank" rel="noopener noreferrer">
-        {latitude.toFixed(5)}, {longitude.toFixed(5)}
-        {acc}
-      </a>
-    );
-  };
+  const formatPhotoGpsLink = (lat, lng, accuracy) => (
+    <PhotoGpsLink lat={lat} lng={lng} accuracy={accuracy} />
+  );
 
-  const parsePhotoCaptureMetadata = (raw) => {
-    if (!raw) return null;
-    if (typeof raw === 'object') return raw;
-    try {
-      return JSON.parse(String(raw));
-    } catch {
-      return null;
-    }
-  };
-
-  const PHOTO_META_FIELD_LABELS = {
-    inward_invoice_photos: 'Invoice Photo',
-    inward_pod_photo: 'POD Photo',
-    inward_vehicle_seal_photo: 'Seal Photo',
-    inward_vehicle_temp_photo: 'Vehicle Temp Photo',
-    inward_material_temp_photo: 'Material Temp Photo',
-    inward_vehicle_back_side_photo: 'Vehicle Back Photo',
-    inward_vehicle_back_side_photo_with_material: 'Loaded Vehicle Photo',
-    inward_count_sheet_photo: 'Count Sheet Photo',
-    inward_damage_boxes_photo: 'Damage Boxes Photo',
-    outward_invoice_photos: 'Invoice Photo',
-    outward_pod_photo: 'POD Photo',
-    outward_vehicle_seal_photo: 'Seal Photo',
-    outward_vehicle_temp_photo: 'Vehicle Temp Photo',
-    outward_pre_vehicle_temp_photo: 'Pre Vehicle Temp Photo',
-    outward_material_temp_photo: 'Material Temp Photo',
-    outward_vehicle_back_side_photo: 'Vehicle Back Photo',
-    outward_vehicle_back_side_photo_with_material: 'Loaded Vehicle Photo',
-    outward_count_sheet_photo: 'Count Sheet Photo',
-    outward_damage_boxes_photo: 'Damage Boxes Photo',
-  };
-
-  const renderPhotoCaptureMetadataPanel = (raw) => {
-    const meta = parsePhotoCaptureMetadata(raw);
-    if (!meta || typeof meta !== 'object') return null;
-
-    const rows = [];
-    Object.entries(meta).forEach(([key, val]) => {
-      const baseLabel = PHOTO_META_FIELD_LABELS[key] || key.replace(/_/g, ' ');
-      if (Array.isArray(val)) {
-        val.forEach((entry, idx) => {
-          rows.push({
-            label: val.length > 1 ? `${baseLabel} #${idx + 1}` : baseLabel,
-            entry,
-          });
-        });
-      } else if (val && typeof val === 'object') {
-        rows.push({ label: baseLabel, entry: val });
-      }
-    });
-
-    if (!rows.length) return null;
-
-    return (
-      <div className="profile-group-card">
-        <div className="profile-group-title">Photo capture time & location</div>
-        <div className="profile-grid-list">
-          {rows.map((row, idx) => (
-            <div className="profile-item" key={`photo-meta-${idx}`} style={{ gridColumn: 'span 2' }}>
-              <span className="profile-label">{row.label}</span>
-              <span className="profile-value">
-                <div>{row.entry.capturedAt ? formatDateTimeStr(row.entry.capturedAt) : '-'}</div>
-                <div style={{ fontSize: '0.78rem', marginTop: 4 }}>
-                  {formatPhotoGpsLink(row.entry.latitude, row.entry.longitude, row.entry.accuracy)}
-                </div>
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
+  const renderPhotoCaptureMetadataPanel = (raw) => (
+    <PhotoCaptureMetaPanel metadata={raw} />
+  );
 
   /** Chamber log detail — Quick Summary first, then full fields + update compare */
   const renderChamberLogFormView = (log, { enableCopyRef = false } = {}) => {
@@ -1234,7 +1200,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [accessScopeOptions, setAccessScopeOptions] = useState({
     clients: [],
     warehouses: [],
-    warehouseClients: {}
+    warehouseClients: {},
+    warehouseMasters: [],
+    clientMasters: []
   });
   const [subAdminSelectedClients, setSubAdminSelectedClients] = useState([]);
   const [subAdminSelectedWarehouses, setSubAdminSelectedWarehouses] = useState([]);
@@ -1468,6 +1436,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         typeByNum[num] = String(c.chamber_type || c.chamberType || 'Frozen').trim() || 'Frozen';
       });
       setOpChamberTypeByNum(typeByNum);
+      setOpChambersList(Array.isArray(chambers) ? chambers : []);
       setOpMappings(dedupeChamberAssignments(Array.isArray(data) ? data : []));
     } catch (err) {
       setOpMappingsError(err.message || 'Failed to load chamber client mappings.');
@@ -1777,11 +1746,24 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       const data = await fetchPermissionRequests();
       const list = Array.isArray(data) ? data : [];
       const seen = new Set();
-      setPermissionRequests(list.filter((pr) => {
-        if (!pr || pr.id == null || seen.has(pr.id)) return false;
+      const byPendingFp = new Map();
+      const merged = [];
+      for (const pr of list) {
+        if (!pr || pr.id == null || seen.has(pr.id)) continue;
         seen.add(pr.id);
-        return true;
-      }));
+        if (pr.status === 'Pending') {
+          const fp = buildPendingPermissionFingerprint(pr);
+          const cur = byPendingFp.get(fp);
+          if (!cur || Number(pr.id) > Number(cur.id)) {
+            byPendingFp.set(fp, pr);
+          }
+        } else {
+          merged.push(pr);
+        }
+      }
+      setPermissionRequests(
+        [...byPendingFp.values(), ...merged].sort((a, b) => Number(b.id) - Number(a.id))
+      );
     } catch (err) {
       console.error('Failed to fetch permission requests:', err);
       if (!silent) {
@@ -1816,6 +1798,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         setOpSuccess(
           `Chamber "${res.chamber_add.name}" added. Operator limit → ${res.chamber_add.chamber_limit}.`
         );
+      } else if (res?.client_master?.ok) {
+        const cm = res.client_master;
+        const actionLabel =
+          cm.action === 'add' ? 'added' : cm.action === 'delete' ? 'removed' : 'updated';
+        setOpSuccess(
+          `Client "${cm.client_name}" ${actionLabel} on ${cm.chamber_name || 'chamber'}. Operator app will sync automatically.`
+        );
+      } else if (res?.chamber_type?.ok) {
+        setOpSuccess(
+          `Chamber type of "${res.chamber_type.name}" updated to ${res.chamber_type.chamber_type}.`
+        );
       }
     } catch (err) {
       console.error('Failed to update permission request:', err);
@@ -1828,8 +1821,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     Chamber_Delete: 'Require Approval',
     ChamberMaster_Edit: 'Require Approval',
     ChamberMaster_Delete: 'Require Approval',
-    ClientMaster_Edit: 'Allow',
-    ClientMaster_Delete: 'Allow',
+    ClientMaster_Edit: 'Require Approval',
+    ClientMaster_Delete: 'Require Approval',
     Inward_Edit: 'Require Approval',
     Inward_Delete: 'Require Approval',
     Outward_Edit: 'Require Approval',
@@ -1919,7 +1912,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       (descText || '').includes('edited client')
     ) {
       const isDelete = /DELETE client/i.test(descText || '');
-      info.module = isDelete ? 'Client Notify' : 'Client Notify';
+      const isRename = /EDIT client/i.test(descText || '');
+      info.module = isDelete ? 'Client Delete' : isRename ? 'Client Rename' : 'Client Add';
       const clientMatch =
         (descText || '').match(/EDIT client "([^"]+)"/i) ||
         (descText || '').match(/DELETE client "([^"]+)"/i) ||
@@ -1930,10 +1924,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       info.client = renameTo
         ? `${clientMatch ? clientMatch[1] : 'Client'} → ${renameTo[1]}`
         : (clientMatch ? clientMatch[1] : 'Client');
-      info.refNo = 'NOTIFY';
+      info.refNo = isDelete ? 'DELETE' : isRename ? 'RENAME' : 'ADD';
       info.extra = chamberMatch
-        ? `${chamberMatch[1]} · Notification only (approval not required)`
-        : (descText || 'Client master change notified to Super Admin (approval not required).');
+        ? `${info.client} on ${chamberMatch[1]}`
+        : (descText || 'Data Operator requested Super Admin approval for client master change.');
       return info;
     } else if ((descText || '').includes('Chamber')) {
       info.module = 'Chamber Temp';
@@ -2413,6 +2407,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       checkNewDOChanges();
     } else if (activeMenu === 'customers') {
       loadSubAdminsData();
+      loadAccessScopeOptions();
+    } else if (activeMenu === 'master_data') {
       loadAccessScopeOptions();
     } else if (activeMenu === 'customer_reports') {
       loadCustomerReportsData();
@@ -2906,8 +2902,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
     if (historyTab === 'daily') {
       const headers = [
-        "Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Chamber Name", 
-        "Client Name", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
+        "Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Chamber Name", 
+        "Client Code", "Client Name", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
         "Sensor Photo Name", "Photo Capture Time", "Photo Location (GPS)", "Time Variance (minutes)", "Box Count", 
         "Chamber Type", "Overdue Status/Time", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
@@ -2918,9 +2914,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.id || '',
           log.reference_no || '',
           formatDateDisplay(log.formatted_date || log.entry_date),
+          log.warehouse_code || '',
           log.warehouse_name || 'Generic',
           log.operator_email || '-',
           log.chamber_name || '',
+          log.client_code || '',
           log.client_name || '',
           log.inspection_time || '',
           log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : (log.box_temp !== undefined ? `${log.box_temp}°C` : ''),
@@ -2945,9 +2943,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       });
     } else if (historyTab === 'inward') {
       const headers = [
-        "Inward Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
+        "Inward Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
         "Vehicle Temp (°C)", "Material Temp (°C)", "Transporter Name", "Driver Name", "Driver Contact No.", 
-        "Client Name", "Dock No", "Vehicle Reporting Time", "Unloading Start Time", "Unloading Duration", 
+        "Client Code", "Client Name", "Dock No", "Vehicle Reporting Time", "Unloading Start Time", "Unloading Duration", 
         "Unloading End Time", "Pallets Qty", "Invoice Qty", "Received Pallets", 
         "Received Boxes", "Short Received Boxes", "Excess Received Boxes", "Damage Received Boxes", "Material Type", 
         "Supervisor Name", "Remarks", "Invoice Photos", "POD Photo", "Vehicle Seal Photo", "Vehicle Temp Photo", 
@@ -2961,6 +2959,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.inward_id || '',
           log.reference_no || '',
           formatDateDisplay(log.inward_entry_date),
+          log.warehouse_code || '',
           log.warehouse_name || 'Generic',
           log.operator_email || '-',
           log.inward_vehicle_no || '',
@@ -2970,6 +2969,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.inward_transporter_name || '',
           log.inward_driver_name || '',
           log.inward_driver_no || '',
+          log.inward_client_code || '',
           log.inward_client_name || '',
           log.inward_dock_no || '',
           log.inward_vehicle_reporting_time || '',
@@ -3005,9 +3005,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       });
     } else if (historyTab === 'outward') {
       const headers = [
-        "Outward Log ID", "Reference No", "Date", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
+        "Outward Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
         "Vehicle Temp (°C)", "Pre-Cooling Temp (°C)", "Material Temp (°C)", "Transporter Name", "Driver Name", 
-        "Driver Contact No.", "Client Name", "Dock No", "Vehicle Reporting Time", "Loading Start Time", 
+        "Driver Contact No.", "Client Code", "Client Name", "Dock No", "Vehicle Reporting Time", "Loading Start Time", 
         "Loading Duration", "Loading End Time", "Pallets Qty", "Invoice Qty", 
         "Loaded Pallets", "Loaded Boxes", "Short Loaded Boxes", "Excess Loaded Boxes", "Damage Loaded Boxes", "Material Type", 
         "Supervisor Name", "Remarks", "Invoice Photos", "POD Photo", "Vehicle Seal Photo", "Vehicle Temp Photo", 
@@ -3021,6 +3021,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.outward_id || '',
           log.reference_no || '',
           formatDateDisplay(log.outward_entry_date),
+          log.warehouse_code || '',
           log.warehouse_name || 'Generic',
           log.operator_email || '-',
           log.outward_vehicle_no || '',
@@ -3031,6 +3032,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.outward_transporter_name || '',
           log.outward_driver_name || '',
           log.outward_driver_no || '',
+          log.outward_client_code || '',
           log.outward_client_name || '',
           log.outward_dock_no || '',
           log.outward_vehicle_reporting_time || '',
@@ -3105,6 +3107,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         full_name: opFullName,
         phone_no: toStoredIndiaPhone(phoneLocal),
         warehouse_name: String(opWarehouseName || '').trim(),
+        warehouse_code: (() => {
+          const selected = String(opWarehouseName || '').trim().toLowerCase();
+          const hit = (accessScopeOptions.warehouseMasters || []).find((w) => {
+            const code = String(w.warehouse_code || '').trim().toLowerCase();
+            const name = String(w.warehouse_name || '').trim().toLowerCase();
+            const label = formatMasterLabel(w.warehouse_code, w.warehouse_name).toLowerCase();
+            return code === selected || name === selected || label === selected;
+          });
+          return hit?.warehouse_code || undefined;
+        })(),
         chamber_limit: opChamberLimit
       };
 
@@ -3176,7 +3188,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpEmail(op.email);
     setOpFullName(op.full_name || '');
     setOpPhoneNo(toLocalTenDigitPhone(op.phone_no));
-    setOpWarehouseName(op.warehouse_name || '');
+    setOpWarehouseName(op.warehouse_code || op.warehouse_name || '');
     setOpChamberLimit(op.chamber_limit || 4);
     setOpPassword(''); // Leave blank unless updating
     setOpError('');
@@ -3322,50 +3334,87 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
   const loadAccessScopeOptions = async () => {
     try {
-      const data = await fetchAccessScopeOptions();
+      const [data, warehouseMasters, clientMasters] = await Promise.all([
+        fetchAccessScopeOptions(),
+        fetchMasterWarehouses({ activeOnly: true }).catch(() => []),
+        fetchMasterClients({ activeOnly: true }).catch(() => [])
+      ]);
       setAccessScopeOptions({
         clients: Array.isArray(data?.clients) ? data.clients : [],
         warehouses: Array.isArray(data?.warehouses) ? data.warehouses : [],
         warehouseClients:
           data?.warehouseClients && typeof data.warehouseClients === 'object'
             ? data.warehouseClients
-            : {}
+            : {},
+        warehouseMasters: Array.isArray(warehouseMasters) ? warehouseMasters : [],
+        clientMasters: Array.isArray(clientMasters) ? clientMasters : []
       });
     } catch (err) {
       console.error('Failed to load access scope options:', err);
-      setAccessScopeOptions({ clients: [], warehouses: [], warehouseClients: {} });
+      setAccessScopeOptions({
+        clients: [],
+        warehouses: [],
+        warehouseClients: {},
+        warehouseMasters: [],
+        clientMasters: []
+      });
     }
   };
 
+  const warehouseSelectOptions = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    (accessScopeOptions.warehouseMasters || []).forEach((w) => {
+      const value = w.warehouse_code || w.warehouse_name;
+      if (!value) return;
+      seen.add(String(w.warehouse_code || '').toLowerCase());
+      seen.add(String(w.warehouse_name || '').toLowerCase());
+      out.push({ value, label: formatMasterLabel(w.warehouse_code, w.warehouse_name) });
+    });
+    (accessScopeOptions.warehouses || []).forEach((name) => {
+      const key = String(name || '').trim().toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      out.push({ value: name, label: name });
+    });
+    return out;
+  }, [accessScopeOptions.warehouseMasters, accessScopeOptions.warehouses]);
+
   // Clients shown in Customer form = only those linked to selected warehouses
   const subAdminClientOptions = useMemo(() => {
-    const map = accessScopeOptions.warehouseClients || {};
     if (!subAdminSelectedWarehouses.length) return [];
-
-    const merged = new Set();
     const selectedKeys = subAdminSelectedWarehouses.map((w) => String(w).trim().toLowerCase());
+    const seen = new Set();
+    const out = [];
 
+    (accessScopeOptions.clientMasters || []).forEach((c) => {
+      const whCode = String(c.warehouse_code || '').trim().toLowerCase();
+      const whName = String(c.warehouse_name || '').trim().toLowerCase();
+      if (selectedKeys.includes(whCode) || selectedKeys.includes(whName)) {
+        const value = c.client_code || c.client_name;
+        const key = String(value || '').trim().toLowerCase();
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        seen.add(String(c.client_name || '').trim().toLowerCase());
+        out.push({ value, label: formatMasterLabel(c.client_code, c.client_name) });
+      }
+    });
+
+    const map = accessScopeOptions.warehouseClients || {};
     Object.entries(map).forEach(([wh, clients]) => {
       const key = String(wh).trim().toLowerCase();
       if (!selectedKeys.includes(key)) return;
       (clients || []).forEach((c) => {
-        if (c) merged.add(String(c).trim());
+        const name = String(c || '').trim();
+        const k = name.toLowerCase();
+        if (!name || seen.has(k)) return;
+        seen.add(k);
+        out.push({ value: name, label: name });
       });
     });
 
-    // Case-insensitive unique
-    const unique = [];
-    const seen = new Set();
-    [...merged]
-      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-      .forEach((name) => {
-        const k = name.toLowerCase();
-        if (seen.has(k)) return;
-        seen.add(k);
-        unique.push(name);
-      });
-    return unique;
-  }, [accessScopeOptions.warehouseClients, subAdminSelectedWarehouses]);
+    return out.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+  }, [accessScopeOptions.warehouseClients, accessScopeOptions.clientMasters, subAdminSelectedWarehouses]);
 
   // Drop selected clients that no longer belong to selected warehouses
   useEffect(() => {
@@ -3375,7 +3424,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
     if (!subAdminClientOptions.length) return;
     setSubAdminSelectedClients((prev) => {
-      const allowed = new Set(subAdminClientOptions.map((c) => c.toLowerCase()));
+      const allowed = new Set(subAdminClientOptions.map((c) => String(c.value || c).trim().toLowerCase()));
       const next = prev.filter((c) => allowed.has(String(c).trim().toLowerCase()));
       if (next.length === prev.length && next.every((v, i) => v === prev[i])) return prev;
       return next;
@@ -4035,6 +4084,34 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 <span>Customers</span>
               </div>
             </button>
+            <button 
+              className={`clean-menu-item ${activeMenu === 'master_data' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('master_data');
+                setViewingOperator(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: activeMenu === 'master_data' ? 'var(--primary-light)' : 'transparent',
+                color: activeMenu === 'master_data' ? 'var(--primary)' : 'var(--text-dark)',
+                fontWeight: '700',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Database size={18} />
+                <span>Master Data</span>
+              </div>
+            </button>
 
             <button 
               className={`clean-menu-item ${activeMenu === 'customer_reports' ? 'active' : ''}`}
@@ -4334,6 +4411,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <div className="item-left">
                 <ShieldCheck size={18} className="item-icon" />
                 <span>Customers</span>
+              </div>
+              <ChevronRight size={16} className="item-arrow" />
+            </button>
+            <button 
+              className={`clean-menu-item ${activeMenu === 'master_data' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveMenu('master_data');
+                setViewingOperator(null);
+                setIsMobileMenuOpen(false);
+              }}
+            >
+              <div className="item-left">
+                <Database size={18} className="item-icon" />
+                <span>Master Data</span>
               </div>
               <ChevronRight size={16} className="item-arrow" />
             </button>
@@ -7272,9 +7363,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       ))) ? (
                       <div className="profile-photo-grid">
                         {searchedRecordType === 'daily' && searchedRecord.temp_sensor_image && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(searchedRecord.temp_sensor_image) ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.temp_sensor_image))}>
                             <div className="profile-photo-wrapper">
-                              <img src={searchedRecord.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(searchedRecord.temp_sensor_image) ? searchedRecord.temp_sensor_image : `/${searchedRecord.temp_sensor_image}`} alt="Temp Sensor" />
+                              <img src={toMediaSrc(searchedRecord.temp_sensor_image)} alt="Temp Sensor" />
                             </div>
                             <div className="profile-photo-label">Temp Sensor</div>
                           </div>
@@ -7283,73 +7374,73 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         {searchedRecordType === 'inward' && (
                           <>
                             {searchedRecord.inward_invoice_photos && searchedRecord.inward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                              <div key={`siinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                              <div key={`siinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
+                                  <img src={toMediaSrc(img)} alt={`Invoice ${idx + 1}`} />
                                 </div>
                                 <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                               </div>
                             ))}
                             {searchedRecord.inward_pod_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_pod_photo.startsWith('data:') ? searchedRecord.inward_pod_photo : `/${searchedRecord.inward_pod_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.inward_pod_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_pod_photo.startsWith('data:') ? searchedRecord.inward_pod_photo : `/${searchedRecord.inward_pod_photo}`} alt="POD" />
+                                  <img src={toMediaSrc(searchedRecord.inward_pod_photo)} alt="POD" />
                                 </div>
                                 <div className="profile-photo-label">POD Photo</div>
                               </div>
                             )}
                             {searchedRecord.inward_vehicle_seal_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_vehicle_seal_photo.startsWith('data:') ? searchedRecord.inward_vehicle_seal_photo : `/${searchedRecord.inward_vehicle_seal_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.inward_vehicle_seal_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_vehicle_seal_photo.startsWith('data:') ? searchedRecord.inward_vehicle_seal_photo : `/${searchedRecord.inward_vehicle_seal_photo}`} alt="Seal" />
+                                  <img src={toMediaSrc(searchedRecord.inward_vehicle_seal_photo)} alt="Seal" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Seal</div>
                               </div>
                             )}
                             {searchedRecord.inward_vehicle_temp_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_vehicle_temp_photo.startsWith('data:') ? searchedRecord.inward_vehicle_temp_photo : `/${searchedRecord.inward_vehicle_temp_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.inward_vehicle_temp_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_vehicle_temp_photo.startsWith('data:') ? searchedRecord.inward_vehicle_temp_photo : `/${searchedRecord.inward_vehicle_temp_photo}`} alt="Temp" />
+                                  <img src={toMediaSrc(searchedRecord.inward_vehicle_temp_photo)} alt="Temp" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Temp</div>
                               </div>
                             )}
                             {searchedRecord.inward_material_temp_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_material_temp_photo.startsWith('data:') ? searchedRecord.inward_material_temp_photo : `/${searchedRecord.inward_material_temp_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.inward_material_temp_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_material_temp_photo.startsWith('data:') ? searchedRecord.inward_material_temp_photo : `/${searchedRecord.inward_material_temp_photo}`} alt="Material Temp" />
+                                  <img src={toMediaSrc(searchedRecord.inward_material_temp_photo)} alt="Material Temp" />
                                 </div>
                                 <div className="profile-photo-label">Material Temp</div>
                               </div>
                             )}
                             {searchedRecord.inward_vehicle_back_side_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_vehicle_back_side_photo.startsWith('data:') ? searchedRecord.inward_vehicle_back_side_photo : `/${searchedRecord.inward_vehicle_back_side_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.inward_vehicle_back_side_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_vehicle_back_side_photo.startsWith('data:') ? searchedRecord.inward_vehicle_back_side_photo : `/${searchedRecord.inward_vehicle_back_side_photo}`} alt="Back" />
+                                  <img src={toMediaSrc(searchedRecord.inward_vehicle_back_side_photo)} alt="Back" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Back</div>
                               </div>
                             )}
                             {searchedRecord.inward_vehicle_back_side_photo_with_material && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.inward_vehicle_back_side_photo_with_material.startsWith('data:') ? searchedRecord.inward_vehicle_back_side_photo_with_material : `/${searchedRecord.inward_vehicle_back_side_photo_with_material}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.inward_vehicle_back_side_photo_with_material))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.inward_vehicle_back_side_photo_with_material.startsWith('data:') ? searchedRecord.inward_vehicle_back_side_photo_with_material : `/${searchedRecord.inward_vehicle_back_side_photo_with_material}`} alt="Back Loaded" />
+                                  <img src={toMediaSrc(searchedRecord.inward_vehicle_back_side_photo_with_material)} alt="Back Loaded" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Loaded</div>
                               </div>
                             )}
                             {searchedRecord.inward_count_sheet_photo && searchedRecord.inward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                              <div key={`sics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                              <div key={`sics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
+                                  <img src={toMediaSrc(img)} alt={`Count Sheet ${idx + 1}`} />
                                 </div>
                                 <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                               </div>
                             ))}
                             {searchedRecord.inward_damage_boxes_photo && searchedRecord.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
-                              <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
+                              <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(dmgImg))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`} alt="Damage" />
+                                  <img src={toMediaSrc(dmgImg)} alt="Damage" />
                                 </div>
                                 <div className="profile-photo-label">Damage #{idx + 1}</div>
                               </div>
@@ -7360,81 +7451,81 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         {searchedRecordType === 'outward' && (
                           <>
                             {searchedRecord.outward_invoice_photos && searchedRecord.outward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                              <div key={`soinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                              <div key={`soinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
+                                  <img src={toMediaSrc(img)} alt={`Invoice ${idx + 1}`} />
                                 </div>
                                 <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                               </div>
                             ))}
                             {searchedRecord.outward_pod_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_pod_photo.startsWith('data:') ? searchedRecord.outward_pod_photo : `/${searchedRecord.outward_pod_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_pod_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_pod_photo.startsWith('data:') ? searchedRecord.outward_pod_photo : `/${searchedRecord.outward_pod_photo}`} alt="POD" />
+                                  <img src={toMediaSrc(searchedRecord.outward_pod_photo)} alt="POD" />
                                 </div>
                                 <div className="profile-photo-label">POD Photo</div>
                               </div>
                             )}
                             {searchedRecord.outward_vehicle_seal_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_vehicle_seal_photo.startsWith('data:') ? searchedRecord.outward_vehicle_seal_photo : `/${searchedRecord.outward_vehicle_seal_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_vehicle_seal_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_vehicle_seal_photo.startsWith('data:') ? searchedRecord.outward_vehicle_seal_photo : `/${searchedRecord.outward_vehicle_seal_photo}`} alt="Seal" />
+                                  <img src={toMediaSrc(searchedRecord.outward_vehicle_seal_photo)} alt="Seal" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Seal</div>
                               </div>
                             )}
                             {searchedRecord.outward_pre_vehicle_temp_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_pre_vehicle_temp_photo.startsWith('data:') ? searchedRecord.outward_pre_vehicle_temp_photo : `/${searchedRecord.outward_pre_vehicle_temp_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_pre_vehicle_temp_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_pre_vehicle_temp_photo.startsWith('data:') ? searchedRecord.outward_pre_vehicle_temp_photo : `/${searchedRecord.outward_pre_vehicle_temp_photo}`} alt="Pre Temp" />
+                                  <img src={toMediaSrc(searchedRecord.outward_pre_vehicle_temp_photo)} alt="Pre Temp" />
                                 </div>
                                 <div className="profile-photo-label">Pre-Cooling Temp</div>
                               </div>
                             )}
                             {searchedRecord.outward_vehicle_temp_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_vehicle_temp_photo.startsWith('data:') ? searchedRecord.outward_vehicle_temp_photo : `/${searchedRecord.outward_vehicle_temp_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_vehicle_temp_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_vehicle_temp_photo.startsWith('data:') ? searchedRecord.outward_vehicle_temp_photo : `/${searchedRecord.outward_vehicle_temp_photo}`} alt="Temp" />
+                                  <img src={toMediaSrc(searchedRecord.outward_vehicle_temp_photo)} alt="Temp" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Temp</div>
                               </div>
                             )}
                             {searchedRecord.outward_material_temp_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_material_temp_photo.startsWith('data:') ? searchedRecord.outward_material_temp_photo : `/${searchedRecord.outward_material_temp_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_material_temp_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_material_temp_photo.startsWith('data:') ? searchedRecord.outward_material_temp_photo : `/${searchedRecord.outward_material_temp_photo}`} alt="Material Temp" />
+                                  <img src={toMediaSrc(searchedRecord.outward_material_temp_photo)} alt="Material Temp" />
                                 </div>
                                 <div className="profile-photo-label">Material Temp</div>
                               </div>
                             )}
                             {searchedRecord.outward_vehicle_back_side_photo && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_vehicle_back_side_photo.startsWith('data:') ? searchedRecord.outward_vehicle_back_side_photo : `/${searchedRecord.outward_vehicle_back_side_photo}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_vehicle_back_side_photo))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_vehicle_back_side_photo.startsWith('data:') ? searchedRecord.outward_vehicle_back_side_photo : `/${searchedRecord.outward_vehicle_back_side_photo}`} alt="Back" />
+                                  <img src={toMediaSrc(searchedRecord.outward_vehicle_back_side_photo)} alt="Back" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Back</div>
                               </div>
                             )}
                             {searchedRecord.outward_vehicle_back_side_photo_with_material && (
-                              <div className="profile-photo-card" onClick={() => setLightboxImg(searchedRecord.outward_vehicle_back_side_photo_with_material.startsWith('data:') ? searchedRecord.outward_vehicle_back_side_photo_with_material : `/${searchedRecord.outward_vehicle_back_side_photo_with_material}`)}>
+                              <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(searchedRecord.outward_vehicle_back_side_photo_with_material))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={searchedRecord.outward_vehicle_back_side_photo_with_material.startsWith('data:') ? searchedRecord.outward_vehicle_back_side_photo_with_material : `/${searchedRecord.outward_vehicle_back_side_photo_with_material}`} alt="Back Loaded" />
+                                  <img src={toMediaSrc(searchedRecord.outward_vehicle_back_side_photo_with_material)} alt="Back Loaded" />
                                 </div>
                                 <div className="profile-photo-label">Vehicle Loaded</div>
                               </div>
                             )}
                             {searchedRecord.outward_count_sheet_photo && searchedRecord.outward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                              <div key={`socs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                              <div key={`socs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
+                                  <img src={toMediaSrc(img)} alt={`Count Sheet ${idx + 1}`} />
                                 </div>
                                 <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                               </div>
                             ))}
                             {searchedRecord.outward_damage_boxes_photo && searchedRecord.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
-                              <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
+                              <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(dmgImg))}>
                                 <div className="profile-photo-wrapper">
-                                  <img src={dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`} alt="Damage" />
+                                  <img src={toMediaSrc(dmgImg)} alt="Damage" />
                                 </div>
                                 <div className="profile-photo-label">Damage #{idx + 1}</div>
                               </div>
@@ -8541,7 +8632,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                             if (isAllowStyle) return;
                                             showLogDetailsByRef(parsed.refNo, pr.record_id, parsed.module);
                                           }}
-                                          title={isClientMaster ? 'Client master notify only' : (isChamberType ? 'Chamber type allow request' : (isChamberMaster ? (parsed.refNo === 'ADD' ? 'Chamber add allow request' : 'Chamber delete allow request') : (isMasterSetup ? 'Master Setup opens without allow' : 'Click to view data profile')))}
+                                          title={isClientMaster ? 'Client master allow request' : (isChamberType ? 'Chamber type allow request' : (isChamberMaster ? (parsed.refNo === 'ADD' ? 'Chamber add allow request' : 'Chamber delete allow request') : (isMasterSetup ? 'Master Setup opens without allow' : 'Click to view data profile')))}
                                         >
                                           {isMasterSetup ? 'OPEN' : (isChamberMaster || isChamberType || isClientMaster ? (parsed.client || parsed.refNo) : (parsed.refNo || `#${pr.record_id}`))}
                                         </td>
@@ -8659,6 +8750,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           </div>
         )}
 
+        {activeMenu === 'master_data' && <MasterDataPanel />}
+
         {activeMenu === 'customers' && (
           <div className="sa-um">
               <div className="sa-op-gmail">
@@ -8760,15 +8853,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           }}
                         >
                           <option value="">
-                            {(accessScopeOptions.warehouses || []).length === 0
-                              ? 'No warehouses yet — register a DO operator or save a log first'
-                              : 'Select warehouse from DO records…'}
+                            {warehouseSelectOptions.length === 0
+                              ? 'No warehouses yet — add them in Master Data'
+                              : 'Select warehouse…'}
                           </option>
-                          {(accessScopeOptions.warehouses || [])
-                            .filter((w) => !subAdminSelectedWarehouses.includes(w))
+                          {warehouseSelectOptions
+                            .filter((w) => !subAdminSelectedWarehouses.includes(w.value))
                             .map((wh) => (
-                              <option key={wh} value={wh}>
-                                {wh}
+                              <option key={wh.value} value={wh.value}>
+                                {wh.label}
                               </option>
                             ))}
                         </select>
@@ -8778,7 +8871,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           ) : (
                             subAdminSelectedWarehouses.map((wh, idx) => (
                               <span key={idx} className="sa-op-chip">
-                                {wh}
+                                {lookupMasterLabel(wh, accessScopeOptions.warehouseMasters)}
                                 <button type="button" onClick={() => setSubAdminSelectedWarehouses((prev) => prev.filter((_, i) => i !== idx))} title="Remove">
                                   <X size={12} />
                                 </button>
@@ -8808,10 +8901,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 : `Select client (${subAdminClientOptions.length} for selected warehouse(s))…`}
                           </option>
                           {subAdminClientOptions
-                            .filter((c) => !subAdminSelectedClients.includes(c))
+                            .filter((c) => !subAdminSelectedClients.includes(c.value))
                             .map((client) => (
-                              <option key={client} value={client}>
-                                {client}
+                              <option key={client.value} value={client.value}>
+                                {client.label}
                               </option>
                             ))}
                         </select>
@@ -8823,7 +8916,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           ) : (
                             subAdminSelectedClients.map((client, idx) => (
                               <span key={idx} className="sa-op-chip">
-                                {client}
+                                {lookupMasterLabel(client, accessScopeOptions.clientMasters)}
                                 <button type="button" onClick={() => setSubAdminSelectedClients((prev) => prev.filter((_, i) => i !== idx))} title="Remove">
                                   <X size={12} />
                                 </button>
@@ -8981,6 +9074,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   { label: 'Registration Date', value: op.created_at ? new Date(op.created_at).toLocaleDateString('en-GB') : '—' }
                 ];
                 const opActiveAssignments = getActiveOperatorAssignments(opMappings, op.chamber_limit || 4);
+                const opDisplayChambers = getOperatorDisplayChambers(
+                  opChambersList,
+                  opMappings,
+                  op.chamber_limit || 4
+                );
                 const opTaskStatus = computeDoTaskStatus({
                   assignments: opActiveAssignments,
                   logs: opTaskLogs,
@@ -9214,7 +9312,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           <h3 className="do-gmail-title">Chamber & Client Mappings</h3>
                           <p className="do-gmail-sub">
                             {op.warehouse_name
-                              ? `${op.warehouse_name} · Chambers 1 to ${op.chamber_limit || 4}${opMasterEditMode ? ' · editing this operator master' : ''}`
+                              ? `${op.warehouse_name} · ${opDisplayChambers.length} chamber${opDisplayChambers.length === 1 ? '' : 's'} in use (limit ${op.chamber_limit || 4})${opMasterEditMode ? ' · editing this operator master' : ''}`
                               : 'Configure warehouse access to see chamber mappings.'}
                           </p>
                         </div>
@@ -9262,23 +9360,39 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             <span style={{ textAlign: 'right' }}>Status</span>
                             {opMasterEditMode ? <span /> : null}
                           </div>
-                          {Array.from({ length: op.chamber_limit || 4 }, (_, idx) => {
-                            const chamberNum = idx + 1;
-                            const chamberName = `Chamber ${chamberNum}`;
-                            const chamberAssignments = opMappings.filter((m) => chamberNumberFromName(m.chamber_name || '') === chamberNum);
+                          {opDisplayChambers.length === 0 ? (
+                            <div className="do-gmail-empty">
+                              {opMasterEditMode
+                                ? 'No chambers in use for this operator yet. The DO can request a chamber add from the mobile app; after approval it will appear here.'
+                                : 'No chambers assigned yet. Data Operator can request a chamber add from the mobile app.'}
+                            </div>
+                          ) : null}
+                          {opDisplayChambers.map((chamberRow) => {
+                            const chamberNum = chamberRow.chamberNum;
+                            const chamberName = chamberRow.name;
+                            const chamberAssignments = opMappings.filter((m) =>
+                              assignmentMatchesDisplayChamber(m, chamberRow)
+                            );
                             const activeClients = uniqueClientsByName(chamberAssignments.filter((m) => !isDeactiveAssignment(m)));
                             const activeNames = new Set(activeClients.map((m) => String(m.client_name || '').trim().toLowerCase()));
                             const deactiveClients = uniqueClientsByName(
                               chamberAssignments.filter((m) => isDeactiveAssignment(m) && !activeNames.has(String(m.client_name || '').trim().toLowerCase()))
                             );
-                            const chamberType = activeClients[0]?.chamber_type || deactiveClients[0]?.chamber_type || opChamberTypeByNum[chamberNum] || newChamberTypes[chamberNum] || 'Frozen';
-                            const resolvedChamberId = chamberAssignments.find((row) => row?.chamber_id)?.chamber_id || chamberNum;
+                            const chamberType =
+                              activeClients[0]?.chamber_type ||
+                              deactiveClients[0]?.chamber_type ||
+                              (chamberNum != null ? opChamberTypeByNum[chamberNum] : null) ||
+                              (chamberNum != null ? newChamberTypes[chamberNum] : null) ||
+                              chamberRow.chamber_type ||
+                              'Frozen';
+                            const resolvedChamberId = chamberRow.id;
+                            const typeEditKey = chamberNum != null ? chamberNum : `id-${resolvedChamberId}`;
                             const rows = [
                               ...activeClients.map((assign) => ({ ...assign, _status: 'Active' })),
                               ...deactiveClients.map((assign) => ({ ...assign, _status: 'Deactive' }))
                             ];
                             return (
-                              <div key={chamberNum}>
+                              <div key={chamberRow.slotKey}>
                                 <div className="do-gmail-section-label do-gmail-chamber-label">
                                   {chamberName} · Type: {chamberType} · {activeClients.length} active, {deactiveClients.length} deactive
                                 </div>
@@ -9286,8 +9400,18 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                   <div className="do-gmail-type-row">
                                     <span>Update type</span>
                                     <select
-                                      value={newChamberTypes[chamberNum] || chamberType || 'Frozen'}
-                                      onChange={(e) => setNewChamberTypes((prev) => ({ ...prev, [chamberNum]: e.target.value }))}
+                                      value={
+                                        (chamberNum != null ? newChamberTypes[chamberNum] : newChamberTypes[typeEditKey]) ||
+                                        chamberType ||
+                                        'Frozen'
+                                      }
+                                      onChange={(e) =>
+                                        setNewChamberTypes((prev) => ({
+                                          ...prev,
+                                          [typeEditKey]: e.target.value,
+                                          ...(chamberNum != null ? { [chamberNum]: e.target.value } : {})
+                                        }))
+                                      }
                                     >
                                       <option value="Frozen">Frozen</option>
                                       <option value="Chilled">Chilled</option>
@@ -9298,12 +9422,23 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                       type="button"
                                       className="do-gmail-type-btn"
                                       disabled={
-                                        updatingChamberTypeKey === chamberNum ||
-                                        String(newChamberTypes[chamberNum] || chamberType) === String(chamberType)
+                                        updatingChamberTypeKey === typeEditKey ||
+                                        String(
+                                          (chamberNum != null ? newChamberTypes[chamberNum] : newChamberTypes[typeEditKey]) ||
+                                            chamberType
+                                        ) === String(chamberType)
                                       }
-                                      onClick={() => handleUpdateOpChamberType(op, resolvedChamberId, chamberName, chamberType, chamberNum)}
+                                      onClick={() =>
+                                        handleUpdateOpChamberType(
+                                          op,
+                                          resolvedChamberId,
+                                          chamberName,
+                                          chamberType,
+                                          typeEditKey
+                                        )
+                                      }
                                     >
-                                      {updatingChamberTypeKey === chamberNum ? 'Saving...' : 'Update type'}
+                                      {updatingChamberTypeKey === typeEditKey ? 'Saving...' : 'Update type'}
                                     </button>
                                   </div>
                                 ) : null}
@@ -9339,22 +9474,27 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     <input
                                       type="text"
                                       placeholder={`Add client to ${chamberName}`}
-                                      value={newClientInputs[chamberNum] || ''}
-                                      onChange={(e) => setNewClientInputs((prev) => ({ ...prev, [chamberNum]: e.target.value }))}
+                                      value={newClientInputs[typeEditKey] || ''}
+                                      onChange={(e) => setNewClientInputs((prev) => ({ ...prev, [typeEditKey]: e.target.value }))}
                                       onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
                                           e.preventDefault();
-                                          handleAddOpMapping(op, resolvedChamberId, chamberName, chamberNum);
+                                          handleAddOpMapping(op, resolvedChamberId, chamberName, typeEditKey);
                                         }
                                       }}
                                     />
                                     <button
                                       type="button"
                                       className="do-gmail-add-btn"
-                                      disabled={addingMappingChamberId === resolvedChamberId || addingMappingChamberId === chamberNum}
-                                      onClick={() => handleAddOpMapping(op, resolvedChamberId, chamberName, chamberNum)}
+                                      disabled={
+                                        addingMappingChamberId === resolvedChamberId ||
+                                        addingMappingChamberId === typeEditKey
+                                      }
+                                      onClick={() => handleAddOpMapping(op, resolvedChamberId, chamberName, typeEditKey)}
                                     >
-                                      {addingMappingChamberId === resolvedChamberId || addingMappingChamberId === chamberNum ? 'Adding...' : 'Add client'}
+                                      {addingMappingChamberId === resolvedChamberId || addingMappingChamberId === typeEditKey
+                                        ? 'Adding...'
+                                        : 'Add client'}
                                     </button>
                                   </div>
                                 ) : null}
@@ -9645,28 +9785,28 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <input
                           type="text"
                           name="op-warehouse"
-                          list="op-warehouse-suggestions"
-                          inputMode="text"
-                          autoComplete="organization"
-                          placeholder="e.g. Delhi Warehouse"
+                          list="do-warehouse-datalist"
+                          placeholder={
+                            warehouseSelectOptions.length === 0
+                              ? 'Type warehouse name (e.g. Mumbai Cold Store)'
+                              : 'Type or pick warehouse from list'
+                          }
                           value={opWarehouseName}
                           onChange={(e) => setOpWarehouseName(e.target.value)}
                           required
+                          autoComplete="off"
                         />
-                        <datalist id="op-warehouse-suggestions">
-                          {Array.from(new Set([
-                            ...(accessScopeOptions.warehouses || []),
-                            ...((operators || []).map((o) => o?.warehouse_name).filter(Boolean))
-                          ]))
-                            .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }))
-                            .map((wh) => (
-                              <option key={wh} value={wh} />
-                            ))}
+                        <datalist id="do-warehouse-datalist">
+                          {warehouseSelectOptions.map((wh) => (
+                            <option key={wh.value} value={wh.value}>{wh.label}</option>
+                          ))}
                         </datalist>
                         <em>
-                          {editingOp
-                            ? 'Updates profile + past logs for this operator. New tasks also use this warehouse.'
-                            : 'New operator can only access logs for this warehouse.'}
+                          {warehouseSelectOptions.length === 0
+                            ? 'No Master Data warehouses yet — type the warehouse name here, or add warehouses under Master Data first.'
+                            : editingOp
+                              ? 'Updates profile + past logs for this operator. New tasks also use this warehouse.'
+                              : 'Pick from the list or type a warehouse name. Add new warehouses in Master Data to manage codes.'}
                         </em>
                       </label>
 
@@ -10587,9 +10727,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   ))) ? (
                   <div className="profile-photo-grid">
                     {detailType === 'daily' && selectedDetailLog.temp_sensor_image && (
-                      <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(selectedDetailLog.temp_sensor_image) ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`)}>
+                      <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.temp_sensor_image))}>
                         <div className="profile-photo-wrapper">
-                          <img src={selectedDetailLog.temp_sensor_image.startsWith('data:') || /^https?:\/\//i.test(selectedDetailLog.temp_sensor_image) ? selectedDetailLog.temp_sensor_image : `/${selectedDetailLog.temp_sensor_image}`} alt="Temp Sensor" />
+                          <img src={toMediaSrc(selectedDetailLog.temp_sensor_image)} alt="Temp Sensor" />
                         </div>
                         <div className="profile-photo-label">Temp Sensor</div>
                       </div>
@@ -10599,73 +10739,73 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     {detailType === 'inward' && (
                       <>
                         {selectedDetailLog.inward_invoice_photos && selectedDetailLog.inward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                          <div key={`diinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                          <div key={`diinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                             <div className="profile-photo-wrapper">
-                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
+                              <img src={toMediaSrc(img)} alt={`Invoice ${idx + 1}`} />
                             </div>
                             <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
                         ))}
                         {selectedDetailLog.inward_pod_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.inward_pod_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_pod_photo.startsWith('data:') ? selectedDetailLog.inward_pod_photo : `/${selectedDetailLog.inward_pod_photo}`} alt="POD" />
+                              <img src={toMediaSrc(selectedDetailLog.inward_pod_photo)} alt="POD" />
                             </div>
                             <div className="profile-photo-label">POD Photo</div>
                           </div>
                         )}
                         {selectedDetailLog.inward_vehicle_seal_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_seal_photo : `/${selectedDetailLog.inward_vehicle_seal_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.inward_vehicle_seal_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_seal_photo : `/${selectedDetailLog.inward_vehicle_seal_photo}`} alt="Vehicle Seal" />
+                              <img src={toMediaSrc(selectedDetailLog.inward_vehicle_seal_photo)} alt="Vehicle Seal" />
                             </div>
                             <div className="profile-photo-label">Vehicle Seal</div>
                           </div>
                         )}
                         {selectedDetailLog.inward_vehicle_temp_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_temp_photo : `/${selectedDetailLog.inward_vehicle_temp_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.inward_vehicle_temp_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_temp_photo : `/${selectedDetailLog.inward_vehicle_temp_photo}`} alt="Vehicle Temp" />
+                              <img src={toMediaSrc(selectedDetailLog.inward_vehicle_temp_photo)} alt="Vehicle Temp" />
                             </div>
                             <div className="profile-photo-label">Vehicle Temp</div>
                           </div>
                         )}
                         {selectedDetailLog.inward_material_temp_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_material_temp_photo.startsWith('data:') ? selectedDetailLog.inward_material_temp_photo : `/${selectedDetailLog.inward_material_temp_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.inward_material_temp_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_material_temp_photo.startsWith('data:') ? selectedDetailLog.inward_material_temp_photo : `/${selectedDetailLog.inward_material_temp_photo}`} alt="Material Temp" />
+                              <img src={toMediaSrc(selectedDetailLog.inward_material_temp_photo)} alt="Material Temp" />
                             </div>
                             <div className="profile-photo-label">Material Temp</div>
                           </div>
                         )}
                         {selectedDetailLog.inward_vehicle_back_side_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo : `/${selectedDetailLog.inward_vehicle_back_side_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.inward_vehicle_back_side_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo : `/${selectedDetailLog.inward_vehicle_back_side_photo}`} alt="Vehicle Back" />
+                              <img src={toMediaSrc(selectedDetailLog.inward_vehicle_back_side_photo)} alt="Vehicle Back" />
                             </div>
                             <div className="profile-photo-label">Vehicle Back</div>
                           </div>
                         )}
                         {selectedDetailLog.inward_vehicle_back_side_photo_with_material && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.inward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.inward_vehicle_back_side_photo_with_material}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.inward_vehicle_back_side_photo_with_material))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.inward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.inward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.inward_vehicle_back_side_photo_with_material}`} alt="Vehicle Back Load" />
+                              <img src={toMediaSrc(selectedDetailLog.inward_vehicle_back_side_photo_with_material)} alt="Vehicle Back Load" />
                             </div>
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
                         {selectedDetailLog.inward_count_sheet_photo && selectedDetailLog.inward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                          <div key={`dics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                          <div key={`dics-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                             <div className="profile-photo-wrapper">
-                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
+                              <img src={toMediaSrc(img)} alt={`Count Sheet ${idx + 1}`} />
                             </div>
                             <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
                         ))}
                         {selectedDetailLog.inward_damage_boxes_photo && selectedDetailLog.inward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
-                          <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
+                          <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(dmgImg))}>
                             <div className="profile-photo-wrapper">
-                              <img src={dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`} alt={`Damage ${idx + 1}`} />
+                              <img src={toMediaSrc(dmgImg)} alt={`Damage ${idx + 1}`} />
                             </div>
                             <div className="profile-photo-label">Damage #{idx + 1}</div>
                           </div>
@@ -10677,81 +10817,81 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     {detailType === 'outward' && (
                       <>
                         {selectedDetailLog.outward_invoice_photos && selectedDetailLog.outward_invoice_photos.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                          <div key={`doinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                          <div key={`doinv-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                             <div className="profile-photo-wrapper">
-                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Invoice ${idx + 1}`} />
+                              <img src={toMediaSrc(img)} alt={`Invoice ${idx + 1}`} />
                             </div>
                             <div className="profile-photo-label">{arr.length === 1 ? 'Invoice Photo' : `Invoice #${idx + 1}`}</div>
                           </div>
                         ))}
                         {selectedDetailLog.outward_pod_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_pod_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_pod_photo.startsWith('data:') ? selectedDetailLog.outward_pod_photo : `/${selectedDetailLog.outward_pod_photo}`} alt="POD" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_pod_photo)} alt="POD" />
                             </div>
                             <div className="profile-photo-label">POD Photo</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_vehicle_seal_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_seal_photo : `/${selectedDetailLog.outward_vehicle_seal_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_vehicle_seal_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_vehicle_seal_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_seal_photo : `/${selectedDetailLog.outward_vehicle_seal_photo}`} alt="Vehicle Seal" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_vehicle_seal_photo)} alt="Vehicle Seal" />
                             </div>
                             <div className="profile-photo-label">Vehicle Seal</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_pre_vehicle_temp_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_pre_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_pre_vehicle_temp_photo : `/${selectedDetailLog.outward_pre_vehicle_temp_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_pre_vehicle_temp_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_pre_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_pre_vehicle_temp_photo : `/${selectedDetailLog.outward_pre_vehicle_temp_photo}`} alt="Pre vehicle temp" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_pre_vehicle_temp_photo)} alt="Pre vehicle temp" />
                             </div>
                             <div className="profile-photo-label">Pre-Cooling Temp</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_vehicle_temp_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_temp_photo : `/${selectedDetailLog.outward_vehicle_temp_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_vehicle_temp_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_vehicle_temp_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_temp_photo : `/${selectedDetailLog.outward_vehicle_temp_photo}`} alt="Vehicle Temp" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_vehicle_temp_photo)} alt="Vehicle Temp" />
                             </div>
                             <div className="profile-photo-label">Vehicle Temp</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_material_temp_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_material_temp_photo.startsWith('data:') ? selectedDetailLog.outward_material_temp_photo : `/${selectedDetailLog.outward_material_temp_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_material_temp_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_material_temp_photo.startsWith('data:') ? selectedDetailLog.outward_material_temp_photo : `/${selectedDetailLog.outward_material_temp_photo}`} alt="Material Temp" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_material_temp_photo)} alt="Material Temp" />
                             </div>
                             <div className="profile-photo-label">Material Temp</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_vehicle_back_side_photo && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo : `/${selectedDetailLog.outward_vehicle_back_side_photo}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_vehicle_back_side_photo))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_vehicle_back_side_photo.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo : `/${selectedDetailLog.outward_vehicle_back_side_photo}`} alt="Vehicle Back" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_vehicle_back_side_photo)} alt="Vehicle Back" />
                             </div>
                             <div className="profile-photo-label">Vehicle Back</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_vehicle_back_side_photo_with_material && (
-                          <div className="profile-photo-card" onClick={() => setLightboxImg(selectedDetailLog.outward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.outward_vehicle_back_side_photo_with_material}`)}>
+                          <div className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(selectedDetailLog.outward_vehicle_back_side_photo_with_material))}>
                             <div className="profile-photo-wrapper">
-                              <img src={selectedDetailLog.outward_vehicle_back_side_photo_with_material.startsWith('data:') ? selectedDetailLog.outward_vehicle_back_side_photo_with_material : `/${selectedDetailLog.outward_vehicle_back_side_photo_with_material}`} alt="Vehicle Back Load" />
+                              <img src={toMediaSrc(selectedDetailLog.outward_vehicle_back_side_photo_with_material)} alt="Vehicle Back Load" />
                             </div>
                             <div className="profile-photo-label">Vehicle Loaded</div>
                           </div>
                         )}
                         {selectedDetailLog.outward_count_sheet_photo && selectedDetailLog.outward_count_sheet_photo.split(',').map((p) => p.trim()).filter(Boolean).map((img, idx, arr) => (
-                          <div key={`docs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(img.startsWith('data:') ? img : `/${img}`)}>
+                          <div key={`docs-${idx}`} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(img))}>
                             <div className="profile-photo-wrapper">
-                              <img src={img.startsWith('data:') ? img : `/${img}`} alt={`Count Sheet ${idx + 1}`} />
+                              <img src={toMediaSrc(img)} alt={`Count Sheet ${idx + 1}`} />
                             </div>
                             <div className="profile-photo-label">{arr.length === 1 ? 'Count Sheet' : `Count Sheet #${idx + 1}`}</div>
                           </div>
                         ))}
                         {selectedDetailLog.outward_damage_boxes_photo && selectedDetailLog.outward_damage_boxes_photo.split(',').map((dmgImg, idx) => (
-                          <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`)}>
+                          <div key={idx} className="profile-photo-card" onClick={() => setLightboxImg(toMediaSrc(dmgImg))}>
                             <div className="profile-photo-wrapper">
-                              <img src={dmgImg.startsWith('data:') ? dmgImg : `/${dmgImg}`} alt={`Damage ${idx + 1}`} />
+                              <img src={toMediaSrc(dmgImg)} alt={`Damage ${idx + 1}`} />
                             </div>
                             <div className="profile-photo-label">Damage #{idx + 1}</div>
                           </div>

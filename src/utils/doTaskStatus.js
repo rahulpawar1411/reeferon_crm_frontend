@@ -43,10 +43,78 @@ export const resolveLogShift = (log) => {
 const namesMatch = (a, b) =>
   String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
+/** Only numbered masters like "Chamber 3" — not custom names such as "C1". */
 export const chamberNumberFromName = (name) => {
-  const m = String(name || '').match(/(?:chamber\s*)?(\d+)/i);
+  const m = String(name || '').match(/^Chamber\s+(\d+)$/i);
   return m ? parseInt(m[1], 10) : null;
 };
+
+/** Chambers this operator actually uses (from warehouse assignments only — no global placeholders). */
+export function getOperatorDisplayChambers(allChambers, mappings, chamberLimit) {
+  const limit = Number(chamberLimit) || 4;
+  const rows = Array.isArray(allChambers) ? allChambers : [];
+  const byId = new Map(
+    rows
+      .filter((row) => Number.isFinite(Number(row?.id)))
+      .map((row) => [Number(row.id), row])
+  );
+
+  const picked = [];
+  const seen = new Set();
+
+  const pushRow = (row) => {
+    if (!row) return;
+    const id = Number(row.id);
+    if (!Number.isFinite(id) || seen.has(id)) return;
+    const num = chamberNumberFromName(row.name || row.chamber_name);
+    if (num != null && num > limit) return;
+    picked.push(row);
+    seen.add(id);
+  };
+
+  (mappings || []).forEach((assignment) => {
+    const id = Number(assignment?.chamber_id);
+    if (Number.isFinite(id) && byId.has(id)) {
+      pushRow(byId.get(id));
+      return;
+    }
+    const assignName = String(assignment?.chamber_name || '').trim();
+    if (!assignName) return;
+    const fromList = rows.find((c) => namesMatch(c.name || c.chamber_name, assignName));
+    pushRow(fromList);
+  });
+
+  picked.sort((a, b) => {
+    const na = chamberNumberFromName(a.name || a.chamber_name);
+    const nb = chamberNumberFromName(b.name || b.chamber_name);
+    if (na != null && nb != null && na !== nb) return na - nb;
+    if (na != null && nb == null) return -1;
+    if (na == null && nb != null) return 1;
+    return String(a.name || a.chamber_name || '').localeCompare(String(b.name || b.chamber_name || ''));
+  });
+
+  return picked.map((row) => {
+    const name = row.name || row.chamber_name || `Chamber ${row.id}`;
+    const num = chamberNumberFromName(name);
+    return {
+      id: row.id,
+      name,
+      chamber_type: row.chamber_type || row.chamberType || 'Frozen',
+      chamberNum: num,
+      slotKey: num != null ? `num-${num}` : `id-${row.id}`
+    };
+  });
+}
+
+export function assignmentMatchesDisplayChamber(assignment, chamber) {
+  if (!assignment || !chamber) return false;
+  if (Number(assignment.chamber_id) === Number(chamber.id)) return true;
+  const assignNum = chamberNumberFromName(assignment.chamber_name);
+  if (assignNum != null && chamber.chamberNum != null && assignNum === chamber.chamberNum) {
+    return true;
+  }
+  return namesMatch(assignment.chamber_name, chamber.name);
+}
 
 const assignmentChamberNum = (assignment) => {
   const fromName = chamberNumberFromName(assignment?.chamber_name);

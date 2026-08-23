@@ -10,6 +10,7 @@ import {
   Thermometer, Plus, CheckCircle, PlusCircle, Camera, Loader2, Check, Trash2, RefreshCw
 } from 'lucide-react';
 import { addChamberLog, fetchChamberLogs, deleteChamberLog, updateChamberLog } from '../../services/api';
+import { resolveMediaSrc } from '../../utils/resolveMediaSrc';
 import exifr from 'exifr';
 import {
   CHAMBER_PRESETS,
@@ -165,10 +166,7 @@ export default function TempMonitor({ forcedMenu, onMenuChange, editData, setEdi
       setIsTimeCustom(!isPresetInspectionTime(time));
       const imgSrc = editData.temp_sensor_image || editData.chamber_image;
       if (imgSrc) {
-        const imageSrc = imgSrc.startsWith('data:image') 
-          ? imgSrc 
-          : `/${imgSrc}`;
-        setImagePreview(imageSrc);
+        setImagePreview(resolveMediaSrc(imgSrc));
       }
     }
   }, [editData]);

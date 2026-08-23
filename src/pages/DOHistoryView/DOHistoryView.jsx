@@ -33,6 +33,8 @@ import {
   formatPhotoGpsForExport,
 } from '../../utils/photoCaptureExport';
 import ExportErrorBanner from '../../components/ExportErrorBanner/ExportErrorBanner';
+import PhotoGpsLink from '../../components/PhotoGpsLink/PhotoGpsLink';
+import PhotoCaptureMetaPanel from '../../components/PhotoCaptureMetaPanel/PhotoCaptureMetaPanel';
 import './DOHistoryView.css';
 
 export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setEditOutwardData, setEditDailyData }) {
@@ -1401,6 +1403,16 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                           <span className="profile-value">{selectedDetailLog.photo_capture_time || '-'}</span>
                         </div>
                         <div className="profile-item">
+                          <span className="profile-label">Photo Location (GPS)</span>
+                          <span className="profile-value">
+                            <PhotoGpsLink
+                              lat={selectedDetailLog.photo_capture_latitude}
+                              lng={selectedDetailLog.photo_capture_longitude}
+                              accuracy={selectedDetailLog.photo_capture_accuracy}
+                            />
+                          </span>
+                        </div>
+                        <div className="profile-item">
                           <span className="profile-label">Supervisor Name</span>
                           <span className="profile-value">{selectedDetailLog.monitor_supervisor_name || '-'}</span>
                         </div>
@@ -1685,6 +1697,10 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                   </>
                 )}
               </div>
+
+              {(detailType === 'inward' || detailType === 'outward') && (
+                <PhotoCaptureMetaPanel metadata={selectedDetailLog.photo_capture_metadata} />
+              )}
 
               {/* Right Column: Uploaded Photos & Files */}
               <div className="profile-photos-section">

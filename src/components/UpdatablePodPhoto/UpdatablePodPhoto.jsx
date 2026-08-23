@@ -5,12 +5,11 @@
 import React, { useRef, useState } from 'react';
 import { Camera, Loader2, ImagePlus } from 'lucide-react';
 import { updateInwardPodPhoto, updateOutwardPodPhoto } from '../../services/api';
+import { resolveMediaSrc } from '../../utils/resolveMediaSrc';
 import './UpdatablePodPhoto.css';
 
 function resolveImgSrc(path) {
-  if (!path) return null;
-  if (path.startsWith('data:') || path.startsWith('blob:') || path.startsWith('http')) return path;
-  return path.startsWith('/') ? path : `/${path}`;
+  return resolveMediaSrc(path);
 }
 
 export default function UpdatablePodPhoto({

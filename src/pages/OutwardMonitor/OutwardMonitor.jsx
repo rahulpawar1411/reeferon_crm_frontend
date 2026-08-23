@@ -10,6 +10,7 @@ import {
   ArrowUpRight, Plus, CheckCircle, PlusCircle, Camera, Loader2, Trash2, Calendar, FileText, Truck, Thermometer, Check, RefreshCw
 } from 'lucide-react';
 import { addOutwardLog, fetchOutwardLogs, deleteOutwardLog, updateOutwardLog } from '../../services/api';
+import { resolveMediaSrc } from '../../utils/resolveMediaSrc';
 import exifr from 'exifr';
 import '../InwardMonitor/InwardMonitor.css';
 
@@ -202,10 +203,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
           setDriverCountryCode(parts[0]);
         }
       }
-      const getImgUrl = (path) => {
-        if (!path) return null;
-        return path.startsWith('data:image') ? path : `/${path}`;
-      };
+      const getImgUrl = (path) => resolveMediaSrc(path);
       setInvoicePhotos([]);
       setInvoicePreviews(
         editData.outward_invoice_photos
