@@ -56,9 +56,8 @@ export function formatQty(val) {
   }).format(n);
 }
 
+import { resolveMediaSrc as resolveMediaFromUtils } from '../../utils/resolveMediaSrc';
+
 export function resolveImageSrc(path) {
-  if (!path || !String(path).trim()) return null;
-  const p = String(path).trim();
-  if (p.startsWith('data:') || /^https?:\/\//i.test(p)) return p;
-  return p.startsWith('/') ? p : `/${p}`;
+  return resolveMediaFromUtils(path);
 }

@@ -11,6 +11,7 @@ import {
 import CopyableRef from './CopyableRef';
 import PhotoGpsLink from '../PhotoGpsLink/PhotoGpsLink';
 import PhotoCaptureMetaPanel from '../PhotoCaptureMetaPanel/PhotoCaptureMetaPanel';
+import FallbackImg from '../FallbackImg/FallbackImg';
 import './LogProfileDetailModal.css';
 
 function ProfileField({ label, value, span2, valueStyle, valueClassName, copyable }) {
@@ -32,12 +33,16 @@ function ProfileField({ label, value, span2, valueStyle, valueClassName, copyabl
 }
 
 function PhotoCard({ src, label, onZoom }) {
-  const url = resolveImageSrc(src);
-  if (!url) return null;
+  if (!src || !String(src).trim()) return null;
   return (
-    <div className="profile-photo-card" onClick={() => onZoom(url)} role="button" tabIndex={0}>
+    <div
+      className="profile-photo-card"
+      onClick={() => onZoom(resolveImageSrc(src))}
+      role="button"
+      tabIndex={0}
+    >
       <div className="profile-photo-wrapper">
-        <img src={url} alt={label} loading="lazy" />
+        <FallbackImg src={src} alt={label} loading="lazy" />
       </div>
       <div className="profile-photo-label">{label}</div>
     </div>

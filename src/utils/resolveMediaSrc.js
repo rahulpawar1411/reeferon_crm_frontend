@@ -1,11 +1,16 @@
 /**
  * Build display URL candidates for uploaded media.
- * Cloudinary URLs in DB often 404 while local /uploads backups still exist.
+ *
+ * Feature default: serve from server `/uploads/…` (same path stored in DB).
+ * Optional testing: set VITE_PREFER_CLOUDINARY=true to try Cloudinary CDN first.
  */
+
+const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'de9ba8bpk';
 
 const UPLOAD_FOLDER_RE =
   /(outward_images|inward_images|daily_temp_monitor_images|crm\/(?:outward_images|inward_images|daily_temp_monitor_images))/i;
 
+/** Map Cloudinary CRM URL → local uploads path. */
 export function cloudinaryUrlToUploadsPath(raw) {
   if (raw == null) return null;
   const value = String(raw).trim();
@@ -20,17 +25,48 @@ export function cloudinaryUrlToUploadsPath(raw) {
   return `uploads/${rest}`;
 }
 
-/**
- * Resolve a single best-effort src for <img>.
- * Prefers local /uploads when the value is a Cloudinary CRM asset URL.
- */
-export function resolveMediaSrc(path) {
-  const candidates = buildMediaSrcCandidates(path);
-  return candidates[0] || null;
+/** Map uploads/… path → Cloudinary CDN URL (testing / backup only). */
+export function uploadsPathToCloudinaryUrl(raw) {
+  if (raw == null) return null;
+  const value = String(raw).trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!value.startsWith('uploads/')) return null;
+
+  const match = value.match(
+    /^uploads\/(outward_images|inward_images|daily_temp_monitor_images)\/(.+)$/i
+  );
+  if (!match || !match[2]) return null;
+
+  const folder = match[1];
+  const file = match[2];
+  return `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/crm/${folder}/${file}`;
+}
+
+function isCloudinaryUrl(u) {
+  return /^https?:\/\/res\.cloudinary\.com\//i.test(String(u || ''));
+}
+
+/** Testing-only: prefer CDN. Feature default is always server /uploads. */
+function preferCdnFirst() {
+  return import.meta.env.VITE_PREFER_CLOUDINARY === 'true';
 }
 
 /**
- * Ordered candidates for onError fallback (local ↔ CDN).
+ * Resolve a single best-effort src for <img>.
+ * Default: `/uploads/…` on the API/server.
+ */
+export function resolveMediaSrc(path) {
+  const candidates = buildMediaSrcCandidates(path);
+  if (!candidates.length) return null;
+  if (preferCdnFirst()) {
+    const cdn = candidates.find(isCloudinaryUrl);
+    if (cdn) return cdn;
+  }
+  return candidates[0];
+}
+
+/**
+ * Ordered candidates for onError fallback.
+ * Default order: server uploads first; Cloudinary only if testing flag is on.
  */
 export function buildMediaSrcCandidates(path) {
   if (path == null) return [];
@@ -47,17 +83,34 @@ export function buildMediaSrcCandidates(path) {
     out.push(s);
   };
 
+  const cdnFirst = preferCdnFirst();
+
   if (/^https?:\/\//i.test(value)) {
     const local = cloudinaryUrlToUploadsPath(value);
-    if (local) push(`/${local}`);
-    push(value);
+    if (cdnFirst) {
+      push(value);
+      if (local) push(`/${local}`);
+    } else {
+      // Feature: prefer mapped /uploads when CDN URL is stored
+      if (local) push(`/${local}`);
+      push(value);
+    }
     return out;
   }
 
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
+
   if (normalized.startsWith('uploads/')) {
     push(`/${normalized}`);
-  } else if (!normalized.includes('/')) {
+    // Testing only: allow CDN as secondary candidate
+    if (cdnFirst) {
+      const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
+      if (cloudUrl) push(cloudUrl);
+    }
+    return out;
+  }
+
+  if (!normalized.includes('/')) {
     push(`/${normalized}`);
   } else {
     push(`/${normalized}`);

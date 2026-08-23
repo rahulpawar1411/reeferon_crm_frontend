@@ -5,12 +5,8 @@
 import React, { useRef, useState } from 'react';
 import { Camera, Loader2, ImagePlus } from 'lucide-react';
 import { updateInwardPodPhoto, updateOutwardPodPhoto } from '../../services/api';
-import { resolveMediaSrc } from '../../utils/resolveMediaSrc';
+import FallbackImg from '../FallbackImg/FallbackImg';
 import './UpdatablePodPhoto.css';
-
-function resolveImgSrc(path) {
-  return resolveMediaSrc(path);
-}
 
 export default function UpdatablePodPhoto({
   type, // 'inward' | 'outward'
@@ -21,7 +17,7 @@ export default function UpdatablePodPhoto({
 }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
-  const src = resolveImgSrc(photoPath);
+  const hasPhoto = photoPath && String(photoPath).trim();
 
   const handlePick = (e) => {
     e.stopPropagation();
@@ -72,13 +68,13 @@ export default function UpdatablePodPhoto({
       <div
         className="profile-photo-wrapper"
         onClick={() => {
-          if (src && typeof onPreview === 'function') onPreview(src);
+          if (hasPhoto && typeof onPreview === 'function') onPreview(photoPath);
         }}
-        role={src ? 'button' : undefined}
-        style={{ cursor: src ? 'pointer' : 'default' }}
+        role={hasPhoto ? 'button' : undefined}
+        style={{ cursor: hasPhoto ? 'pointer' : 'default' }}
       >
-        {src ? (
-          <img src={src} alt="POD" />
+        {hasPhoto ? (
+          <FallbackImg src={photoPath} alt="POD" />
         ) : (
           <div className="pod-photo-empty">
             <ImagePlus size={28} color="#94a3b8" />
@@ -100,7 +96,7 @@ export default function UpdatablePodPhoto({
         title="Update POD photo without admin permission"
       >
         <Camera size={13} />
-        <span>{uploading ? 'Uploading…' : src ? 'Update POD' : 'Add POD'}</span>
+        <span>{uploading ? 'Uploading…' : hasPhoto ? 'Update POD' : 'Add POD'}</span>
       </button>
       <input
         ref={inputRef}
