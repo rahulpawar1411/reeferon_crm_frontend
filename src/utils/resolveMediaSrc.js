@@ -1,8 +1,9 @@
 /**
  * Build display URL candidates for uploaded media.
  *
- * Feature default: serve from server `/uploads/…` (same path stored in DB).
- * Optional testing: set VITE_PREFER_CLOUDINARY=true to try Cloudinary CDN first.
+ * Local (dev): `/uploads/…` first (files on your PC).
+ * Live (production build): Cloudinary first, then `/uploads` if CDN 404s.
+ * Force CDN locally: VITE_PREFER_CLOUDINARY=true
  */
 
 const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'de9ba8bpk';
@@ -45,9 +46,9 @@ function isCloudinaryUrl(u) {
   return /^https?:\/\/res\.cloudinary\.com\//i.test(String(u || ''));
 }
 
-/** Testing-only: prefer CDN. Feature default is always server /uploads. */
+/** Live/production: Cloudinary first. Local: /uploads unless flag is on. */
 function preferCdnFirst() {
-  return import.meta.env.VITE_PREFER_CLOUDINARY === 'true';
+  return import.meta.env.PROD || import.meta.env.VITE_PREFER_CLOUDINARY === 'true';
 }
 
 /**
@@ -101,11 +102,12 @@ export function buildMediaSrcCandidates(path) {
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
 
   if (normalized.startsWith('uploads/')) {
-    push(`/${normalized}`);
-    // Testing only: allow CDN as secondary candidate
+    const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
     if (cdnFirst) {
-      const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
       if (cloudUrl) push(cloudUrl);
+      push(`/${normalized}`);
+    } else {
+      push(`/${normalized}`);
     }
     return out;
   }
