@@ -1,9 +1,9 @@
 /**
  * Build display URL candidates for uploaded media.
  *
- * Local (dev): `/uploads/…` first (files on your PC).
- * Live (production build): Cloudinary first, then `/uploads` if CDN 404s.
- * Force CDN locally: VITE_PREFER_CLOUDINARY=true
+ * Live DB often stores `uploads/…` while the file also lives on Cloudinary
+ * under `crm/<folder>/<file>`. Prefer CDN for those paths so local backends
+ * without the binary still show images; keep `/uploads` as fallback.
  */
 
 const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'de9ba8bpk';
@@ -103,12 +103,10 @@ export function buildMediaSrcCandidates(path) {
 
   if (normalized.startsWith('uploads/')) {
     const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
-    if (cdnFirst) {
-      if (cloudUrl) push(cloudUrl);
-      push(`/${normalized}`);
-    } else {
-      push(`/${normalized}`);
-    }
+    // Live DB often stores uploads/… while the real file is on Cloudinary (same name).
+    // Prefer CDN so local/dev backends without the file still show images.
+    if (cloudUrl) push(cloudUrl);
+    push(`/${normalized}`);
     return out;
   }
 
