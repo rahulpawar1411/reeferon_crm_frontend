@@ -614,6 +614,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [opMasterEditMode, setOpMasterEditMode] = useState(false);
   const [opMasterSessionChanges, setOpMasterSessionChanges] = useState([]);
   const [opMasterDonePopup, setOpMasterDonePopup] = useState(null);
+  const [denyPermissionModal, setDenyPermissionModal] = useState({
+    open: false,
+    id: null,
+    remark: '',
+    busy: false,
+    operatorLabel: '',
+    summary: ''
+  });
   const [newClientInputs, setNewClientInputs] = useState({}); // { [chamberId]: 'clientName' }
   const [newChamberTypes, setNewChamberTypes] = useState({}); // { [chamberId]: 'Frozen' }
   const [addingMappingChamberId, setAddingMappingChamberId] = useState(null); // tracking loading during insert
@@ -1904,10 +1912,41 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     return () => clearInterval(interval);
   }, []);
 
-  const handleApproveDenyPermission = async (id, status) => {
+  const openDenyPermissionModal = (pr) => {
+    if (!pr?.id) return;
+    const parsed = parseRequestDescription(pr.description || pr.request_description, pr.record_type);
+    setDenyPermissionModal({
+      open: true,
+      id: pr.id,
+      remark: '',
+      busy: false,
+      operatorLabel: pr.operator_email || 'DO',
+      summary: [parsed.module, parsed.client !== '-' ? parsed.client : null]
+        .filter(Boolean)
+        .join(' · ')
+    });
+  };
+
+  const closeDenyPermissionModal = () => {
+    setDenyPermissionModal({
+      open: false,
+      id: null,
+      remark: '',
+      busy: false,
+      operatorLabel: '',
+      summary: ''
+    });
+  };
+
+  const handleApproveDenyPermission = async (id, status, remark = '') => {
     setLogsError('');
+    const note = String(remark || '').trim();
+    if (status === 'Denied' && !note) {
+      setLogsError('A remark is required when denying a permission request.');
+      return;
+    }
     try {
-      const res = await updatePermissionRequest(id, status);
+      const res = await updatePermissionRequest(id, status, note);
       loadPermissionRequests();
       loadActivities();
       // Chamber Add approve bumps chamber_limit — refresh Operators Directory
@@ -1929,10 +1968,30 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         setOpSuccess(
           `Chamber type of "${res.chamber_type.name}" updated to ${res.chamber_type.chamber_type}.`
         );
+      } else if (status === 'Denied') {
+        setOpSuccess('Request denied. Your remark was sent to the DO.');
       }
     } catch (err) {
       console.error('Failed to update permission request:', err);
       setLogsError(err.message || 'Failed to update permission request.');
+      throw err;
+    }
+  };
+
+  const confirmDenyPermission = async () => {
+    const id = denyPermissionModal.id;
+    const remark = String(denyPermissionModal.remark || '').trim();
+    if (!id) return;
+    if (!remark) {
+      setLogsError('Please enter a remark so the DO knows why this was denied.');
+      return;
+    }
+    setDenyPermissionModal((prev) => ({ ...prev, busy: true }));
+    try {
+      await handleApproveDenyPermission(id, 'Denied', remark);
+      closeDenyPermissionModal();
+    } catch (_) {
+      setDenyPermissionModal((prev) => ({ ...prev, busy: false }));
     }
   };
 
@@ -5262,7 +5321,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           <button
                             type="button"
                             className="sa-op-btn-text"
-                            onClick={() => handleApproveDenyPermission(pr.id, 'Denied')}
+                            onClick={() => openDenyPermissionModal(pr)}
                           >
                             Deny
                           </button>
@@ -8855,7 +8914,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                             Approve
                                           </button>
                                           <button
-                                            onClick={() => handleApproveDenyPermission(pr.id, 'Denied')}
+                                            onClick={() => openDenyPermissionModal(pr)}
                                             style={{
                                               padding: '4px 10px',
                                               borderRadius: 'var(--radius-sm)',
@@ -10520,6 +10579,85 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       </main>
 
 
+
+      {denyPermissionModal.open && (
+        <div
+          className="sa-profile-confirm-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sa-deny-permission-title"
+          onClick={() => {
+            if (!denyPermissionModal.busy) closeDenyPermissionModal();
+          }}
+        >
+          <div className="sa-profile-confirm-content sa-deny-permission-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="sa-profile-confirm-header">
+              <h3 id="sa-deny-permission-title" className="sa-profile-confirm-title">
+                <MessageSquareWarning size={20} color="#b91c1c" />
+                <span>Deny permission</span>
+              </h3>
+            </div>
+            <div className="sa-profile-confirm-body">
+              <div className="sa-profile-confirm-box">
+                <p className="sa-deny-permission-lead">
+                  Add a remark so the DO knows why this request was denied.
+                </p>
+                {denyPermissionModal.operatorLabel ? (
+                  <div className="sa-deny-permission-meta">
+                    <span>Operator</span>
+                    <strong>{denyPermissionModal.operatorLabel}</strong>
+                  </div>
+                ) : null}
+                {denyPermissionModal.summary ? (
+                  <div className="sa-deny-permission-meta">
+                    <span>Request</span>
+                    <strong>{denyPermissionModal.summary}</strong>
+                  </div>
+                ) : null}
+                <label className="sa-deny-permission-label" htmlFor="sa-deny-remark">
+                  Admin remark <em>(required)</em>
+                </label>
+                <textarea
+                  id="sa-deny-remark"
+                  className="sa-deny-permission-textarea"
+                  rows={4}
+                  placeholder="Example: Photo is unclear — please capture again and resubmit."
+                  value={denyPermissionModal.remark}
+                  disabled={denyPermissionModal.busy}
+                  onChange={(e) =>
+                    setDenyPermissionModal((prev) => ({ ...prev, remark: e.target.value }))
+                  }
+                />
+              </div>
+            </div>
+            <div className="sa-profile-confirm-actions">
+              <button
+                type="button"
+                className="sa-profile-confirm-cancel"
+                disabled={denyPermissionModal.busy}
+                onClick={closeDenyPermissionModal}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="sa-profile-confirm-save sa-deny-permission-submit"
+                disabled={denyPermissionModal.busy || !String(denyPermissionModal.remark || '').trim()}
+                onClick={confirmDenyPermission}
+              >
+                {denyPermissionModal.busy ? (
+                  <>
+                    <Loader2 size={16} className="spinner-icon" />
+                    <span>Denying…</span>
+                  </>
+                ) : (
+                  <span>Deny &amp; send remark</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {opMasterDonePopup && (
         <div
