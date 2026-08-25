@@ -1,3 +1,10 @@
+/**
+ * Super Admin web — Master Data panel (catalog only).
+ *
+ * Manages warehouse_master + client_master via /api/masters.
+ * Does NOT edit chamber ↔ client assignments (those are DO / Sub Admin
+ * Master Setup: chambers + chamber_client_assignments).
+ */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Building2,

@@ -1838,6 +1838,34 @@
   background: #f1f3f4;
   border-top: 1px solid #e0e0e0;
   border-bottom: 1px solid #e8eaed;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.do-gmail-chamber-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #fad2cf;
+  background: #fff;
+  color: #c5221f;
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.do-gmail-chamber-delete:hover:not(:disabled) {
+  background: #fce8e6;
+}
+
+.do-gmail-chamber-delete:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 .do-gmail-panel > .do-gmail-inbox-head + div .do-gmail-chamber-label {
@@ -3943,6 +3971,96 @@ button.sa-dash-stat:hover {
 .sa-box-tracker .sa-box-back-btn:hover {
   background: #f2f6fc;
   border-color: #c2e7ff;
+}
+
+.sa-box-month-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  padding: 12px 16px 4px;
+  border-bottom: 1px solid #e8eaed;
+}
+
+.sa-box-month-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sa-box-month-meta-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #5f6368;
+}
+
+.sa-box-month-meta-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: #202124;
+  word-break: break-word;
+}
+
+.sa-box-month-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+  padding: 8px 16px 4px;
+  border-bottom: 1px solid #e8eaed;
+}
+
+.sa-box-month-filters .sa-op-field {
+  margin: 0;
+  min-width: 150px;
+}
+
+.sa-box-month-filters .sa-op-field span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #5f6368;
+}
+
+.sa-box-month-stats {
+  padding: 12px 16px 8px;
+}
+
+.sa-box-excel-wrap {
+  max-height: min(70vh, 640px);
+  overflow: auto;
+}
+
+.sa-box-excel-table {
+  border-collapse: collapse;
+  min-width: 980px;
+}
+
+.sa-box-excel-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8f9fa;
+  border-bottom: 2px solid #dadce0;
+  white-space: nowrap;
+}
+
+.sa-box-excel-table tbody tr:nth-child(even) {
+  background: #fafbfc;
+}
+
+.sa-box-excel-table tbody tr:hover {
+  background: #eef4ff;
+}
+
+.sa-box-excel-date {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 

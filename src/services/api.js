@@ -496,10 +496,23 @@ export const fetchDashboardStats = async () => {
   return data.stats || data;
 };
 
-export const fetchInventoryReconciliation = async ({ search, warehouse } = {}) => {
+export const fetchInventoryReconciliation = async ({
+  search,
+  warehouse,
+  client,
+  view,
+  offset = 0,
+  limit = 50,
+  page
+} = {}) => {
   const queryParams = new URLSearchParams();
   if (search) queryParams.append('search', search);
   if (warehouse) queryParams.append('warehouse', warehouse);
+  if (client) queryParams.append('client', client);
+  if (view) queryParams.append('view', view);
+  if (offset != null) queryParams.append('offset', String(offset));
+  if (limit != null) queryParams.append('limit', String(limit));
+  if (page != null) queryParams.append('page', String(page));
 
   const res = await fetch(`${API_BASE_URL}/dashboard/inventory-reconciliation?${queryParams.toString()}`);
   if (!res.ok) {
@@ -552,6 +565,20 @@ export const updateChamber = async (id, data) => {
   });
   if (!res.ok) {
     throw new Error(await readApiError(res, 'Failed to update chamber.'));
+  }
+  return await res.json();
+};
+
+/** Super Admin: delete a chamber from master (client mappings deactivated). */
+export const deleteChamber = async (id, remark = '') => {
+  const res = await fetch(`${API_BASE_URL}/chambers/${id}`, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remark })
+  });
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to delete chamber.'));
   }
   return await res.json();
 };
@@ -952,6 +979,31 @@ export const fetchDailyInventoryDeltas = async ({ warehouse, fromDate, toDate } 
   }
   const data = await res.json();
   return data.items || [];
+};
+
+/** 1-month Excel-style daily sheet for one client lot (Morning/Evening/In/Out/Total). */
+export const fetchClientMonthBoxSheet = async ({
+  client,
+  warehouse,
+  chamber,
+  fromDate,
+  toDate
+} = {}) => {
+  const queryParams = new URLSearchParams();
+  if (client) queryParams.append('client', client);
+  if (warehouse) queryParams.append('warehouse', warehouse);
+  if (chamber) queryParams.append('chamber', chamber);
+  if (fromDate) queryParams.append('fromDate', fromDate);
+  if (toDate) queryParams.append('toDate', toDate);
+
+  const res = await fetch(
+    `${API_BASE_URL}/dashboard/client-month-box-sheet?${queryParams.toString()}`
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || err.error || 'Failed to load client month sheet.');
+  }
+  return await res.json();
 };
 
 export const fetchChamberAssignments = async (warehouseName) => {

@@ -29,9 +29,10 @@ import {
   fetchCustomerNoteThreads, fetchCustomerNotes, postCustomerNote, deleteCustomerNote,
   fetchDailyInspections, deleteDailyInspection,
   fetchInventoryReconciliation, fetchInventoryFilterOptions, fetchDailyInventoryDeltas,
+  fetchClientMonthBoxSheet,
   fetchAppSubAdmins, createAppSubAdmin, deleteAppSubAdmin,
   fetchChamberAssignments, addChamberAssignment, deleteChamberAssignment,
-  fetchChambers, updateChamber,
+  fetchChambers, updateChamber, deleteChamber,
   fetchMasterWarehouses, fetchMasterClients
 } from '../../services/api';
 import MasterDataPanel from '../../components/MasterDataPanel/MasterDataPanel';
@@ -239,6 +240,55 @@ const filterActionablePendingPermissionRequests = (
     }
   }
   return Array.from(byFingerprint.values()).sort((a, b) => Number(b.id) - Number(a.id));
+};
+
+/** Recent Approved/Denied rows for Super Admin audit (who decided). */
+const filterDecidedPermissionRequests = (
+  requests,
+  warehouseMap = {},
+  warehouseFilter = 'All',
+  limit = 40
+) => {
+  const decided = (requests || []).filter(
+    (pr) => pr?.status === 'Approved' || pr?.status === 'Denied'
+  );
+  const filtered = decided.filter((pr) => {
+    if (pr.record_type === 'MasterSetup') return false;
+    if (pr.record_type === 'DO_CHANGE' || pr.record_type === 'activity') return false;
+    if (warehouseFilter === 'All') return true;
+    const operatorEmail = pr.operator_email ? pr.operator_email.toLowerCase() : '';
+    const wh = warehouseMap[operatorEmail];
+    if (warehouseFilter === 'System/Admin') return !wh || operatorEmail === 'system';
+    return wh === warehouseFilter;
+  });
+  return filtered.sort((a, b) => Number(b.id) - Number(a.id)).slice(0, limit);
+};
+
+/** Render Sub Admin / Super Admin name + email from decision audit fields. */
+const renderDecidedByCell = (row) => {
+  if (!row) return '—';
+  const name = String(row.decided_by_name || '').trim();
+  const email = String(row.decided_by_email || '').trim();
+  const role = String(row.decided_by_role || '').trim();
+  if (name || email) {
+    return (
+      <div style={{ lineHeight: 1.35 }}>
+        {role ? (
+          <div style={{ fontSize: '0.64rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>
+            {role}
+          </div>
+        ) : null}
+        {name ? (
+          <div style={{ fontWeight: 800, color: '#0f172a' }}>{name}</div>
+        ) : null}
+        {email ? (
+          <div style={{ fontSize: '0.72rem', fontWeight: 600, color: '#0369a1' }}>{email}</div>
+        ) : null}
+      </div>
+    );
+  }
+  const label = String(row.decided_by || '').trim();
+  return label || '—';
 };
 
 const MASTER_SETUP_ACTIONS = new Set([
@@ -568,6 +618,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [newChamberTypes, setNewChamberTypes] = useState({}); // { [chamberId]: 'Frozen' }
   const [addingMappingChamberId, setAddingMappingChamberId] = useState(null); // tracking loading during insert
   const [updatingChamberTypeKey, setUpdatingChamberTypeKey] = useState(null);
+  const [deletingOpChamberId, setDeletingOpChamberId] = useState(null);
   const [opChamberTypeByNum, setOpChamberTypeByNum] = useState({});
   const [opChambersList, setOpChambersList] = useState([]);
   const [opTaskFromDate, setOpTaskFromDate] = useState('');
@@ -1123,8 +1174,56 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [deltasCurrentPage, setDeltasCurrentPage] = useState(1);
   const [deltasPerPage] = useState(15);
   const [deltasViewClient, setDeltasViewClient] = useState(null); // selected row for View detail
-  const [deltasViewHistoryPage, setDeltasViewHistoryPage] = useState(1);
-  const [deltasViewHistoryPerPage] = useState(10);
+  const [clientMonthSheet, setClientMonthSheet] = useState(null); // { meta, days }
+  const [loadingMonthSheet, setLoadingMonthSheet] = useState(false);
+  const [monthSheetError, setMonthSheetError] = useState('');
+  const [monthSheetFromDate, setMonthSheetFromDate] = useState('');
+  const [monthSheetToDate, setMonthSheetToDate] = useState('');
+  const [monthSheetPage, setMonthSheetPage] = useState(1);
+  const [monthSheetPerPage] = useState(15);
+
+  const openClientMonthSheet = async (row, rangeOverride) => {
+    if (!row?.client_name) return;
+    const defaults = getDefaultOpTaskRange(30);
+    const fromDate = toApiDateParam(
+      rangeOverride?.fromDate ?? (monthSheetFromDate || defaults.fromDate)
+    );
+    const toDate = toApiDateParam(
+      rangeOverride?.toDate ?? (monthSheetToDate || defaults.toDate)
+    );
+    setMonthSheetFromDate(fromDate);
+    setMonthSheetToDate(toDate);
+    setMonthSheetPage(1);
+    setDeltasViewClient(row);
+    setClientMonthSheet(null);
+    setMonthSheetError('');
+    setLoadingMonthSheet(true);
+    try {
+      const data = await fetchClientMonthBoxSheet({
+        client: row.client_name,
+        warehouse: row.warehouse_name || undefined,
+        chamber: row.chamber_name && row.chamber_name !== '-' ? row.chamber_name : undefined,
+        fromDate: fromDate || undefined,
+        toDate: toDate || undefined
+      });
+      setClientMonthSheet(data);
+    } catch (err) {
+      console.error('Failed to load client month box sheet:', err);
+      setMonthSheetError(err.message || 'Failed to load 1-month box sheet.');
+    } finally {
+      setLoadingMonthSheet(false);
+    }
+  };
+
+  const closeClientMonthSheet = () => {
+    setDeltasViewClient(null);
+    setClientMonthSheet(null);
+    setMonthSheetError('');
+    setLoadingMonthSheet(false);
+    setMonthSheetFromDate('');
+    setMonthSheetToDate('');
+    setMonthSheetPage(1);
+  };
 
   const loadDailyBoxTrackerData = async (warehouseOverride) => {
     const warehouse = warehouseOverride !== undefined ? warehouseOverride : deltasWarehouseFilter;
@@ -1143,15 +1242,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         total_clients: Number(filterData?.total_clients) || 0
       });
       setDailyDeltas(Array.isArray(deltaRows) ? deltaRows : []);
-      setDeltasViewClient((prev) => {
-        if (!prev) return null;
-        const match = (Array.isArray(deltaRows) ? deltaRows : []).find((r) =>
-          r.client_name === prev.client_name &&
-          String(r.chamber_name || '') === String(prev.chamber_name || '') &&
-          String(r.warehouse_name || '') === String(prev.warehouse_name || '')
-        );
-        return match || prev;
-      });
       setDeltasCurrentPage(1);
     } catch (err) {
       console.error('Failed to load Daily Box Tracker data:', err);
@@ -1660,6 +1750,36 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
+  const handleDeleteOpChamber = async (op, chamberId, chamberName) => {
+    if (!chamberId) {
+      setOpMappingsError('Cannot delete this chamber because its id is missing.');
+      return;
+    }
+    const label = chamberName || `Chamber ${chamberId}`;
+    if (
+      !window.confirm(
+        `Delete ${label}?\n\nThis removes the chamber from master and its client mappings. Temperature logs are kept in history.`
+      )
+    ) {
+      return;
+    }
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setDeletingOpChamberId(chamberId);
+    try {
+      const chambers = await fetchChambers().catch(() => []);
+      const resolvedId = resolveChamberIdFromList(chambers, chamberId, chamberName) || chamberId;
+      await deleteChamber(resolvedId, `Deleted by Super Admin from ${op.full_name || op.email} details`);
+      const deletedLabel = `Deleted ${label}.`;
+      pushOpMasterChange('remove', deletedLabel);
+      await refreshOperatorProfileMaster(op, deletedLabel);
+    } catch (err) {
+      setOpMappingsError(err.message || 'Failed to delete chamber.');
+    } finally {
+      setDeletingOpChamberId(null);
+    }
+  };
+
   const loadActivities = async () => {
     if (auditSubTab === 'permission_log') return;
 
@@ -2117,10 +2237,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Operator</div>
                     <div style={{ fontWeight: 600, color: '#334155' }}>{renderOperatorEmail(ev.operator_email)}</div>
                   </div>
-                  {ev.decided_by ? (
+                  {ev.decided_by || ev.decided_by_email || ev.decided_by_name ? (
                     <div>
                       <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Decided By</div>
-                      <div style={{ fontWeight: 600, color: '#334155' }}>{ev.decided_by}</div>
+                      <div style={{ fontWeight: 600, color: '#334155' }}>{renderDecidedByCell(ev)}</div>
                     </div>
                   ) : null}
                 </div>
@@ -5957,252 +6077,271 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             <div className="sa-op-gmail sa-box-tracker">
               {deltasViewClient ? (() => {
                 const row = deltasViewClient;
-                const latestQty = Math.max(0, Number(row.latest_count) || 0);
-                const prevQty = Math.max(0, Number(row.prev_count) || 0);
-                const inwardQty = Number(row.inward_qty) >= 0
-                  ? Number(row.inward_qty)
-                  : (latestQty > prevQty ? latestQty - prevQty : 0);
-                const outwardQty = Number(row.outward_qty) >= 0
-                  ? Number(row.outward_qty)
-                  : (prevQty > latestQty ? prevQty - latestQty : 0);
-                const history = Array.isArray(row.history)
-                  ? [...row.history].sort((a, b) => {
-                      const da = String(a.date || a.entry_date || '');
-                      const db = String(b.date || b.entry_date || '');
-                      if (db !== da) return db.localeCompare(da);
-                      const shiftOf = (h) => resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
-                      const sa = shiftOf(a) === 'Evening' ? 1 : 0;
-                      const sb = shiftOf(b) === 'Evening' ? 1 : 0;
-                      if (sb !== sa) return sb - sa;
-                      return (Number(b.id) || 0) - (Number(a.id) || 0);
-                    })
-                  : [];
+                const meta = clientMonthSheet?.meta || {};
+                const days = Array.isArray(clientMonthSheet?.days) ? clientMonthSheet.days : [];
+                const warehouseLabel = meta.warehouse_name || row.warehouse_name || '—';
+                const chamberLabel = meta.chamber_name || row.chamber_name || '—';
+                const supervisorLabel = meta.supervisor_name
+                  ? meta.supervisor_email
+                    ? `${meta.supervisor_name} (${meta.supervisor_email})`
+                    : meta.supervisor_name
+                  : '—';
 
-                const historyStart = (deltasViewHistoryPage - 1) * deltasViewHistoryPerPage;
-                const paginatedHistory = history.slice(historyStart, historyStart + deltasViewHistoryPerPage);
-
-                const handleExportClientHistoryCSV = () => {
-                  if (!history.length) return;
-                  const headers = 'Date,Slot,Box Qty,Box Temp,Plus/Minus,Status\n';
-                  const csvContent = headers + history.map((h, i) => {
-                    const countRaw = h.box_count ?? h.count;
-                    const count = countRaw === null || countRaw === undefined || countRaw === ''
-                      ? ''
-                      : Math.max(0, Number(countRaw) || 0);
-                    const olderRaw = i < history.length - 1
-                      ? (history[i + 1].box_count ?? history[i + 1].count)
-                      : null;
-                    const older = olderRaw === null || olderRaw === undefined || olderRaw === ''
-                      ? null
-                      : Math.max(0, Number(olderRaw) || 0);
-                    const step = (count === '' || older === null) ? null : Number(count) - older;
-                    const status = step == null ? 'Start' : step > 0 ? 'Plus' : step < 0 ? 'Minus' : 'No Change';
-                    const plusMinus = step == null ? '' : step > 0 ? `+${step}` : step < 0 ? `-${Math.abs(step)}` : '0';
-                    const tempRaw = h.box_temp ?? h.temp ?? h.chamber_temp;
-                    const temp = tempRaw != null && tempRaw !== '' && Number.isFinite(Number(tempRaw))
-                      ? `${Number(tempRaw)}°C`
-                      : '';
-                    const slot = resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
-                    const dateVal = h.date || h.entry_date;
+                const handleExportMonthSheetCSV = () => {
+                  if (!days.length) return;
+                  const headers =
+                    'Date,Warehouse,Chamber,Warehouse Supervisor,Morning Boxes,Evening Boxes,Inward Boxes,Outward Boxes,Total Boxes\n';
+                  const csvContent = headers + days.map((d) => {
+                    const fmtQty = (v) => (v == null || v === '' ? '' : Math.max(0, Number(v) || 0));
                     return [
-                      `"${formatDate(dateVal)}"`,
-                      `"${slot}"`,
-                      count,
-                      temp,
-                      plusMinus,
-                      `"${status}"`
+                      `"${formatDate(d.date)}"`,
+                      `"${String(warehouseLabel).replace(/"/g, '""')}"`,
+                      `"${String(chamberLabel).replace(/"/g, '""')}"`,
+                      `"${String(supervisorLabel).replace(/"/g, '""')}"`,
+                      fmtQty(d.morning_qty),
+                      fmtQty(d.evening_qty),
+                      fmtQty(d.inward_boxes),
+                      fmtQty(d.outward_boxes),
+                      fmtQty(d.total_boxes)
                     ].join(',');
                   }).join('\n');
                   const safeName = String(row.client_name || 'Client').replace(/[^\w\-]+/g, '_');
-                  downloadCsv(`Client_History_${safeName}_${new Date().toISOString().split('T')[0]}.csv`, csvContent);
+                  downloadCsv(
+                    `Box_Month_${safeName}_${meta.fromDate || 'from'}_${meta.toDate || 'to'}.csv`,
+                    csvContent
+                  );
                 };
 
+                const cellQty = (v) => {
+                  if (v == null || v === '') return '—';
+                  return Math.max(0, Number(v) || 0).toLocaleString();
+                };
+
+                const monthSheetStart = (monthSheetPage - 1) * monthSheetPerPage;
+                const paginatedDays = days.slice(
+                  monthSheetStart,
+                  monthSheetStart + monthSheetPerPage
+                );
+
                 return (
-                  <section className="sa-op-card">
+                  <section className="sa-op-card sa-box-month-sheet">
                     <div className="sa-op-dir-toolbar">
                       <div className="sa-op-dir-tools">
                         <button
                           type="button"
                           className="sa-box-back-btn"
-                          onClick={() => {
-                            setDeltasViewClient(null);
-                            setDeltasViewHistoryPage(1);
-                          }}
+                          onClick={closeClientMonthSheet}
                         >
                           ← Back
                         </button>
                         <div>
                           <h2 className="sa-op-title">{row.client_name}</h2>
                           <p className="sa-op-sub">
-                            {row.warehouse_name || '-'} · {row.chamber_name || '-'}
+                            1-month daily box sheet · Morning / Evening / Inward / Outward / Total
+                            {meta.fromDate && meta.toDate
+                              ? ` · ${formatDate(meta.fromDate)} → ${formatDate(meta.toDate)}`
+                              : ''}
                           </p>
                         </div>
                       </div>
+                      <div className="sa-op-dir-tools">
+                        <button
+                          type="button"
+                          className="sa-op-btn-primary"
+                          onClick={() =>
+                            openClientMonthSheet(row, {
+                              fromDate: monthSheetFromDate,
+                              toDate: monthSheetToDate
+                            })
+                          }
+                          disabled={loadingMonthSheet}
+                        >
+                          {loadingMonthSheet ? <Loader2 size={14} className="spinner-icon" /> : <Activity size={14} />}
+                          Refresh
+                        </button>
+                        <button
+                          type="button"
+                          className="sa-op-btn-export"
+                          onClick={handleExportMonthSheetCSV}
+                          disabled={!days.length || loadingMonthSheet}
+                        >
+                          <Download size={14} />
+                          Export Excel CSV
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="sa-box-month-filters">
+                      <label className="sa-op-field">
+                        <span>From</span>
+                        <input
+                          className="sa-op-filter"
+                          type="date"
+                          value={monthSheetFromDate}
+                          max={monthSheetToDate || localDateStr()}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setMonthSheetFromDate(val);
+                            if (val && monthSheetToDate && val > monthSheetToDate) {
+                              setMonthSheetToDate(val);
+                            }
+                          }}
+                          title="From date"
+                        />
+                      </label>
+                      <label className="sa-op-field">
+                        <span>To</span>
+                        <input
+                          className="sa-op-filter"
+                          type="date"
+                          value={monthSheetToDate}
+                          min={monthSheetFromDate || undefined}
+                          max={localDateStr()}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setMonthSheetToDate(val);
+                            if (val && monthSheetFromDate && val < monthSheetFromDate) {
+                              setMonthSheetFromDate(val);
+                            }
+                          }}
+                          title="To date"
+                        />
+                      </label>
                       <button
                         type="button"
-                        className="sa-op-btn-export"
-                        onClick={handleExportClientHistoryCSV}
-                        disabled={history.length === 0}
+                        className="sa-op-btn-primary"
+                        disabled={loadingMonthSheet || !monthSheetFromDate || !monthSheetToDate}
+                        onClick={() =>
+                          openClientMonthSheet(row, {
+                            fromDate: monthSheetFromDate,
+                            toDate: monthSheetToDate
+                          })
+                        }
                       >
-                        <Download size={14} />
-                        Export
+                        Apply Filter
+                      </button>
+                      <button
+                        type="button"
+                        className="sa-op-btn-text"
+                        disabled={loadingMonthSheet}
+                        onClick={() => {
+                          const { fromDate, toDate } = getDefaultOpTaskRange(30);
+                          openClientMonthSheet(row, { fromDate, toDate });
+                        }}
+                      >
+                        Last 30 days
                       </button>
                     </div>
 
-                    <div className="sa-box-detail-body">
-                    <div className="sa-box-stat-grid">
+                    <div className="sa-box-stat-grid sa-box-month-stats">
                       <div className="sa-box-stat-card">
-                        <div className="sa-box-stat-label">Previous Qty</div>
-                        <div className="sa-box-stat-value">
-                          {row.prev_date ? prevQty.toLocaleString() : '—'}
+                        <div className="sa-box-stat-label">Month Inward</div>
+                        <div className="sa-box-stat-value" style={{ color: '#137333' }}>
+                          +{(Number(meta.month_inward_total) || 0).toLocaleString()}
                         </div>
-                        <div className="sa-box-stat-sub">{formatDate(row.prev_date)}</div>
                       </div>
                       <div className="sa-box-stat-card">
-                        <div className="sa-box-stat-label">Latest Qty</div>
+                        <div className="sa-box-stat-label">Month Outward</div>
+                        <div className="sa-box-stat-value" style={{ color: '#c5221f' }}>
+                          −{(Number(meta.month_outward_total) || 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="sa-box-stat-card">
+                        <div className="sa-box-stat-label">Closing Total</div>
                         <div className="sa-box-stat-value primary">
-                          {latestQty.toLocaleString()}
+                          {meta.closing_total == null
+                            ? '—'
+                            : Number(meta.closing_total).toLocaleString()}
                         </div>
-                        <div className="sa-box-stat-sub">{formatDate(row.latest_date)}</div>
                       </div>
                       <div className="sa-box-stat-card">
-                        <div className="sa-box-stat-label">Latest Slot</div>
-                        {(() => {
-                          const slotLabel = resolveShiftLabel(row.latest_shift || row.latest_slot, null, null);
-                          const isMorning = slotLabel === 'Morning';
-                          return (
-                            <>
-                              <div className="sa-box-stat-value" style={{ color: isMorning ? '#1967d2' : '#b06000' }}>
-                                {slotLabel}
-                              </div>
-                              {row.prev_shift && (
-                                <div className="sa-box-stat-sub">
-                                  Prev: {resolveShiftLabel(row.prev_shift, null, null)}
-                                </div>
-                              )}
-                            </>
-                          );
-                        })()}
-                      </div>
-                      <div className="sa-box-stat-card">
-                        <div className="sa-box-stat-label">Box Temp</div>
-                        {(() => {
-                          const latestTempRaw = row.latest_temp ?? row.box_temp ?? row.chamber_temp;
-                          const latestTemp = latestTempRaw != null && latestTempRaw !== '' && Number.isFinite(Number(latestTempRaw))
-                            ? Number(latestTempRaw)
-                            : null;
-                          const prevTempRaw = row.prev_temp;
-                          const prevTemp = prevTempRaw != null && prevTempRaw !== '' && Number.isFinite(Number(prevTempRaw))
-                            ? Number(prevTempRaw)
-                            : null;
-                          return (
-                            <>
-                              <div className="sa-box-stat-value" style={{
-                                color: latestTemp == null ? '#5f6368' : latestTemp <= -18 ? '#137333' : '#c5221f'
-                              }}>
-                                {latestTemp == null ? '—' : `${latestTemp}°C`}
-                              </div>
-                              {prevTemp != null && (
-                                <div className="sa-box-stat-sub">Prev: {prevTemp}°C</div>
-                              )}
-                            </>
-                          );
-                        })()}
-                      </div>
-                      <div className="sa-box-stat-card">
-                        <div className="sa-box-stat-label">
-                          {inwardQty > 0 ? 'Plus (In)' : outwardQty > 0 ? 'Minus (Out)' : 'In / Out'}
-                        </div>
-                        <div className="sa-box-stat-value" style={{
-                          color: inwardQty > 0 ? '#137333' : outwardQty > 0 ? '#c5221f' : '#5f6368'
-                        }}>
-                          {inwardQty > 0 ? `+${inwardQty}` : outwardQty > 0 ? `-${outwardQty}` : '0'}
+                        <div className="sa-box-stat-label">Days</div>
+                        <div className="sa-box-stat-value">
+                          {meta.day_count != null ? meta.day_count : days.length || '—'}
                         </div>
                       </div>
                     </div>
 
-                    <div>
+                    {monthSheetError && (
+                      <LoadErrorBanner
+                        message={monthSheetError}
+                        onRetry={() =>
+                          openClientMonthSheet(row, {
+                            fromDate: monthSheetFromDate,
+                            toDate: monthSheetToDate
+                          })
+                        }
+                        onDismiss={() => setMonthSheetError('')}
+                      />
+                    )}
+
+                    <div className="sa-box-detail-body">
                       <div className="sa-box-table-head" style={{ borderTop: '1px solid #e0e0e0' }}>
-                        <h3 className="sa-op-title">Audit History</h3>
-                        <span className="sa-box-chart-sub">{history.length} records</span>
+                        <h3 className="sa-op-title">Daily Sheet (Excel style)</h3>
+                        <span className="sa-box-chart-sub">
+                          {loadingMonthSheet ? 'Loading…' : `${days.length} days`}
+                        </span>
                       </div>
-                      {history.length === 0 ? (
-                        <div className="sa-box-empty">No history available.</div>
+
+                      {loadingMonthSheet && !days.length ? (
+                        <div className="sa-box-empty">
+                          <Loader2 size={18} className="spinner-icon" /> Loading 1-month sheet…
+                        </div>
+                      ) : days.length === 0 ? (
+                        <div className="sa-box-empty">No daily rows for this period.</div>
                       ) : (
                         <>
-                          <div className="sa-box-table-wrap table-responsive">
-                            <table className="logs-table">
+                          <div className="sa-box-table-wrap table-responsive sa-box-excel-wrap">
+                            <table className="logs-table sa-box-excel-table">
                               <thead>
                                 <tr>
                                   <th>Date</th>
-                                  <th className="sa-box-th-center">Slot</th>
-                                  <th className="sa-box-th-center">Box Qty</th>
-                                  <th className="sa-box-th-center">Box Temp</th>
-                                  <th className="sa-box-th-center">In / Out</th>
+                                  <th>Warehouse</th>
+                                  <th>Chamber</th>
+                                  <th>Warehouse Supervisor</th>
+                                  <th className="sa-box-th-center">Morning</th>
+                                  <th className="sa-box-th-center">Evening</th>
+                                  <th className="sa-box-th-center">Inward</th>
+                                  <th className="sa-box-th-center">Outward</th>
+                                  <th className="sa-box-th-center">Total Boxes</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {paginatedHistory.map((h, i) => {
-                                  const globalIndex = historyStart + i;
-                                  const countRaw = h.box_count ?? h.count;
-                                  const count = countRaw === null || countRaw === undefined || countRaw === ''
-                                    ? null
-                                    : Math.max(0, Number(countRaw) || 0);
-                                  const olderRaw = globalIndex < history.length - 1
-                                    ? (history[globalIndex + 1].box_count ?? history[globalIndex + 1].count)
-                                    : null;
-                                  const older = olderRaw === null || olderRaw === undefined || olderRaw === ''
-                                    ? null
-                                    : Math.max(0, Number(olderRaw) || 0);
-                                  const step = (count === null || older === null) ? null : count - older;
-                                  const tempRaw = h.box_temp ?? h.temp ?? h.chamber_temp;
-                                  const tempVal = tempRaw != null && tempRaw !== '' && Number.isFinite(Number(tempRaw))
-                                    ? Number(tempRaw)
-                                    : null;
-                                  const slotLabel = resolveShiftLabel(h.shift || h.slot, h.inspection_time, null);
-                                  const isMorning = slotLabel === 'Morning';
-                                  return (
-                                    <tr key={`${dateVal}-${slotLabel}-${h.id || globalIndex}`}>
-                                      <td>{formatDate(dateVal)}</td>
-                                      <td className="sa-box-td-center">
-                                        <span className={`sa-box-slot ${isMorning ? 'morning' : 'evening'}`}>
-                                          {slotLabel}
-                                        </span>
-                                      </td>
-                                      <td className="sa-box-td-center sa-box-qty-latest">
-                                        {count === null ? '—' : count.toLocaleString()}
-                                      </td>
-                                      <td className="sa-box-td-center" style={{
-                                        fontWeight: 500,
-                                        color: tempVal == null ? '#5f6368' : tempVal <= -18 ? '#137333' : '#c5221f'
-                                      }}>
-                                        {tempVal == null ? '—' : `${tempVal}°C`}
-                                      </td>
-                                      <td className={`sa-box-td-center sa-box-flow ${step == null ? 'neutral' : step > 0 ? 'up' : step < 0 ? 'down' : 'neutral'}`}>
-                                        {step == null
-                                          ? '—'
-                                          : step > 0
-                                            ? `Plus: +${step}`
-                                            : step < 0
-                                              ? `Minus: -${Math.abs(step)}`
-                                              : '0'}
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
+                                {paginatedDays.map((d) => (
+                                  <tr key={d.date}>
+                                    <td className="sa-box-excel-date">{formatDate(d.date)}</td>
+                                    <td className="sa-box-muted">{warehouseLabel}</td>
+                                    <td className="sa-box-muted">{chamberLabel}</td>
+                                    <td className="sa-box-muted">{supervisorLabel}</td>
+                                    <td className="sa-box-td-center">{cellQty(d.morning_qty)}</td>
+                                    <td className="sa-box-td-center">{cellQty(d.evening_qty)}</td>
+                                    <td className={`sa-box-td-center ${Number(d.inward_boxes) > 0 ? 'sa-box-flow up' : ''}`}>
+                                      {Number(d.inward_boxes) > 0
+                                        ? `+${Number(d.inward_boxes).toLocaleString()}`
+                                        : '0'}
+                                    </td>
+                                    <td className={`sa-box-td-center ${Number(d.outward_boxes) > 0 ? 'sa-box-flow down' : ''}`}>
+                                      {Number(d.outward_boxes) > 0
+                                        ? `−${Number(d.outward_boxes).toLocaleString()}`
+                                        : '0'}
+                                    </td>
+                                    <td className="sa-box-td-center sa-box-qty-latest">
+                                      {cellQty(d.total_boxes)}
+                                    </td>
+                                  </tr>
+                                ))}
                               </tbody>
                             </table>
                           </div>
                           <PaginationBar
-                            page={deltasViewHistoryPage}
-                            totalItems={history.length}
-                            pageSize={deltasViewHistoryPerPage}
-                            onPageChange={setDeltasViewHistoryPage}
-                            itemLabel="records"
+                            page={monthSheetPage}
+                            totalItems={days.length}
+                            pageSize={monthSheetPerPage}
+                            onPageChange={setMonthSheetPage}
+                            itemLabel="days"
                           />
                         </>
                       )}
-                    </div>
                     </div>
                   </section>
                 );
@@ -6248,6 +6387,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         setDeltasClientFilter('All');
                         setDeltasCurrentPage(1);
                         setDeltasViewClient(null);
+                        setClientMonthSheet(null);
+                        setMonthSheetError('');
                         loadDailyBoxTrackerData(wh);
                       }}
                     >
@@ -6432,15 +6573,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                   <button
                                     type="button"
                                     className="sa-box-view-link"
-                                    onClick={() => {
-                                      setDeltasViewHistoryPage(1);
-                                      const fresh = (dailyDeltas || []).find((r) =>
-                                        r.client_name === row.client_name &&
-                                        String(r.chamber_name || '') === String(row.chamber_name || '') &&
-                                        String(r.warehouse_name || '') === String(row.warehouse_name || '')
-                                      );
-                                      setDeltasViewClient(fresh || row);
-                                    }}
+                                    onClick={() => openClientMonthSheet(row)}
                                   >
                                     View
                                   </button>
@@ -7877,6 +8010,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             <thead>
                               <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>DO Name / Email</th>
+                                <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Decided by (Name / Email)</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Warehouse</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Action</th>
                                 <th style={{ padding: '8px 10px', fontWeight: '800', color: 'var(--text-dark)', position: 'sticky', top: 0, backgroundColor: '#f8fafc', zIndex: 1 }}>Module/Log</th>
@@ -7898,10 +8032,18 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                 }
 
                                 const isMasterRow = MASTER_SETUP_ACTIONS.has(String(act.action || '').toUpperCase());
+                                const isDecisionAction = ['GRANT_PERMISSION', 'GRANT_DELETE', 'DENY_PERMISSION', 'DENY_DELETE'].includes(
+                                  String(act.action || '')
+                                );
 
                                 return (
                                   <tr key={act.id} style={{ borderBottom: '1px solid var(--border)' }}>
                                     <td style={{ padding: '6px 8px', fontWeight: '700', color: '#0f172a' }}>{renderOperatorEmail(act.operator_email)}</td>
+                                    <td style={{ padding: '6px 8px' }}>
+                                      {isDecisionAction
+                                        ? renderDecidedByCell(act)
+                                        : <span style={{ color: '#94a3b8' }}>—</span>}
+                                    </td>
                                     <td style={{ padding: '6px 8px', color: '#475569', fontWeight: 600 }}>
                                       {operatorWarehouseMap[act.operator_email ? act.operator_email.toLowerCase() : ''] || 'System / Admin'}
                                     </td>
@@ -8740,6 +8882,92 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       );
                     })()}
 
+                    {/* Recent decisions — who (Sub Admin / Super Admin name + email) approved or denied */}
+                    {(() => {
+                      const decidedRows = filterDecidedPermissionRequests(
+                        permissionRequests,
+                        operatorWarehouseMap,
+                        selectedWarehouseFilter,
+                        40
+                      );
+                      return (
+                        <div style={{ backgroundColor: 'var(--surface)', padding: '20px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                          <h3 style={{ fontSize: '0.9rem', fontWeight: 800, margin: '0 0 12px 0', color: 'var(--text-dark)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Users size={18} color="#0369a1" />
+                            <span>Permission audit — who approved / denied</span>
+                          </h3>
+                          <p style={{ margin: '0 0 12px 0', fontSize: '0.75rem', color: '#64748b', fontWeight: 600 }}>
+                            Shows Sub Admin / Super Admin <strong>name</strong> and <strong>email</strong> for each decision.
+                          </p>
+                          {decidedRows.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                              No approved or denied permission decisions yet for this filter.
+                            </div>
+                          ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                              <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                                <thead>
+                                  <tr style={{ borderBottom: '2px solid var(--border)', textAlign: 'left', backgroundColor: 'var(--bg-main)' }}>
+                                    <th style={{ padding: '6px 8px', color: 'var(--text-dark)' }}>Status</th>
+                                    <th style={{ padding: '6px 8px', color: 'var(--text-dark)' }}>DO (requester)</th>
+                                    <th style={{ padding: '6px 8px', color: 'var(--text-dark)' }}>Decided by (Name / Email)</th>
+                                    <th style={{ padding: '6px 8px', color: 'var(--text-dark)' }}>Module</th>
+                                    <th style={{ padding: '6px 8px', color: 'var(--text-dark)' }}>Admin remark</th>
+                                    <th style={{ padding: '6px 8px', color: 'var(--text-dark)' }}>When</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {decidedRows.map((pr) => {
+                                    if (!pr) return null;
+                                    const isApproved = pr.status === 'Approved';
+                                    return (
+                                      <tr key={`decided-${pr.id}`} style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '6px 8px' }}>
+                                          <span style={{
+                                            display: 'inline-block',
+                                            padding: '1px 6px',
+                                            borderRadius: '100px',
+                                            fontSize: '0.64rem',
+                                            fontWeight: '800',
+                                            color: isApproved ? '#15803d' : '#b91c1c',
+                                            backgroundColor: isApproved ? '#dcfce7' : '#fee2e2'
+                                          }}>
+                                            {pr.status}
+                                          </span>
+                                        </td>
+                                        <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f172a' }}>
+                                          {renderOperatorEmail(pr.operator_email)}
+                                        </td>
+                                        <td style={{ padding: '6px 8px' }}>{renderDecidedByCell(pr)}</td>
+                                        <td style={{ padding: '6px 8px', fontWeight: 700, color: '#475569' }}>
+                                          {pr.record_type || '—'}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', color: '#0f766e', fontWeight: 600, maxWidth: 220 }}>
+                                          {pr.admin_remark || pr.remark || '—'}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', color: '#64748b', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                                          {pr.created_at
+                                            ? new Date(pr.created_at).toLocaleString('en-GB', {
+                                                day: '2-digit',
+                                                month: 'short',
+                                                year: 'numeric',
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                                hour12: true
+                                              })
+                                            : '—'}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {/* Security logs removed from Tab 2 */}
                   </div>
                 );
@@ -9394,7 +9622,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             return (
                               <div key={chamberRow.slotKey}>
                                 <div className="do-gmail-section-label do-gmail-chamber-label">
-                                  {chamberName} · Type: {chamberType} · {activeClients.length} active, {deactiveClients.length} deactive
+                                  <span>
+                                    {chamberName} · Type: {chamberType} · {activeClients.length} active, {deactiveClients.length} deactive
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="do-gmail-chamber-delete"
+                                    disabled={deletingOpChamberId === resolvedChamberId}
+                                    title={`Delete ${chamberName}`}
+                                    onClick={() => handleDeleteOpChamber(op, resolvedChamberId, chamberName)}
+                                  >
+                                    <Trash2 size={13} />
+                                    {deletingOpChamberId === resolvedChamberId ? 'Deleting…' : 'Delete chamber'}
+                                  </button>
                                 </div>
                                 {opMasterEditMode ? (
                                   <div className="do-gmail-type-row">
