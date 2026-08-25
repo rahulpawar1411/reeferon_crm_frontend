@@ -242,6 +242,14 @@ const filterActionablePendingPermissionRequests = (
   return Array.from(byFingerprint.values()).sort((a, b) => Number(b.id) - Number(a.id));
 };
 
+/** Circle spinner used while Super Admin section data is loading. */
+const SaDataLoading = ({ label = 'Loading data…', compact = false }) => (
+  <div className={`sa-data-loading${compact ? ' is-compact' : ''}`} role="status" aria-live="polite">
+    <Loader2 size={compact ? 22 : 32} className="spinner-icon" color="#0033a0" aria-hidden />
+    <span>{label}</span>
+  </div>
+);
+
 /** Recent Approved/Denied rows for Super Admin audit (who decided). */
 const filterDecidedPermissionRequests = (
   requests,
@@ -2223,7 +2231,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       ) : null}
 
       {loadingAllowHistory ? (
-        <div style={{ padding: '12px 0', color: '#64748b', fontSize: '0.8rem' }}>Loading approval history…</div>
+        <SaDataLoading label="Loading approval history…" compact />
       ) : !hasTrail ? (
         <div style={{ padding: '10px 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b', fontSize: '0.8rem' }}>
           {hasCompare
@@ -4133,6 +4141,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     );
   };
 
+  const isMainDataLoading =
+    !saEditLog &&
+    ((activeMenu === 'history_logs' && loadingLogs) ||
+      (activeMenu === 'activity_logs' && loadingActivities) ||
+      (activeMenu === 'data_operators' && !viewingOperator && loadingOps) ||
+      (activeMenu === 'data_operators' && !!viewingOperator && (opMappingsLoading || opTaskLogsLoading)) ||
+      (activeMenu === 'customers' && loadingSubAdmins) ||
+      (activeMenu === 'customer_reports' && loadingCustomerReports) ||
+      (activeMenu === 'daily_box_tracker' && (loadingInventory || loadingDeltas || loadingMonthSheet)) ||
+      (activeMenu === 'dashboard' && loadingPermRequests));
+
   return (
     <div className="app-container">
       {(savingOp || savingSubAdmin) && (
@@ -4141,6 +4160,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             <Loader2 size={28} className="spinner-icon" color="#00a2e8" />
             <strong>{savingOp ? (opProcessStatus || 'Processing…') : (subAdminProcessStatus || 'Processing…')}</strong>
             <span>Please wait — account save and email are in progress.</span>
+          </div>
+        </div>
+      )}
+      {isMainDataLoading && (
+        <div className="sa-main-loading-overlay" role="status" aria-live="polite">
+          <div className="sa-main-loading-card">
+            <Loader2 size={36} className="spinner-icon" color="#0033a0" aria-hidden />
+            <strong>Loading data…</strong>
+            <span>Please wait while this section loads.</span>
           </div>
         </div>
       )}
@@ -5783,9 +5811,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
                 {/* Inventory Table */}
                 {loadingInventory ? (
-                  <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    <span>Calculating inventory stock reconciliation...</span>
-                  </div>
+                  <SaDataLoading label="Calculating inventory stock reconciliation…" />
                 ) : inventoryLogs.length === 0 ? (
                   <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
                     <span>No stock records found matching filters.</span>
@@ -6344,7 +6370,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
                       {loadingMonthSheet && !days.length ? (
                         <div className="sa-box-empty">
-                          <Loader2 size={18} className="spinner-icon" /> Loading 1-month sheet…
+                          <SaDataLoading label="Loading 1-month sheet…" compact />
                         </div>
                       ) : days.length === 0 ? (
                         <div className="sa-box-empty">No daily rows for this period.</div>
@@ -6548,7 +6574,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </div>
 
                 {loadingDeltas ? (
-                  <div className="sa-box-empty">Loading warehouse inventory…</div>
+                  <SaDataLoading label="Loading warehouse inventory…" />
                 ) : filteredRows.length === 0 ? (
                   <div className="sa-box-empty">No box inventory data matches this filter.</div>
                 ) : (
@@ -6863,7 +6889,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 )}
 
                 {loadingLogs ? (
-                  <div className="sa-op-empty">Loading system database logs…</div>
+                  <SaDataLoading label="Loading system database logs…" />
                 ) : getFilteredHistoryLogs().length === 0 ? (
                   <div className="sa-op-empty">
                     <Database size={28} />
@@ -8059,7 +8085,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     )}
 
                     {loadingActivities ? (
-                      <div className="sa-op-empty">Loading activity history logs…</div>
+                      <SaDataLoading label="Loading activity history logs…" />
                     ) : paginatedActivities.length === 0 ? (
                       <div className="sa-op-empty">No operator activities found matching the filters.</div>
                     ) : (
@@ -8379,9 +8405,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     )}
 
                     {loadingActivities ? (
-                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                        <span>Loading security logs...</span>
-                      </div>
+                      <SaDataLoading label="Loading security logs…" />
                     ) : paginatedSecurityLogs.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                         <span>No permission or security logs found matching the filters.</span>
@@ -8662,9 +8686,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     )}
 
                     {loadingActivities ? (
-                      <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                        <span>Loading system logs...</span>
-                      </div>
+                      <SaDataLoading label="Loading system logs…" />
                     ) : paginatedSystemLogs.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                         <span>No system or error logs found matching the filters.</span>
@@ -9272,7 +9294,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         {subAdminError && <div className="sa-op-banner error">{subAdminError}</div>}
 
                         {loadingSubAdmins ? (
-                          <div className="sa-op-empty">Loading customers…</div>
+                          <SaDataLoading label="Loading customers…" />
                         ) : filteredSubAdminsList.length === 0 ? (
                           <div className="sa-op-empty">
                             <ShieldAlert size={28} />
@@ -9508,17 +9530,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       {!op.warehouse_name ? (
                         <div className="do-gmail-empty">Configure warehouse access to track chamber tasks.</div>
                       ) : opMappingsLoading && opActiveAssignments.length === 0 ? (
-                        <div className="do-gmail-empty" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Loader2 size={14} className="spinner-icon" />
-                          Loading assignments…
-                        </div>
+                        <SaDataLoading label="Loading assignments…" compact />
                       ) : opActiveAssignments.length === 0 ? (
                         <div className="do-gmail-empty">No active chamber clients assigned for this operator.</div>
                       ) : opTaskLogsLoading && opTaskStatus.total === 0 ? (
-                        <div className="do-gmail-empty" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Loader2 size={14} className="spinner-icon" />
-                          Loading task status…
-                        </div>
+                        <SaDataLoading label="Loading task status…" compact />
                       ) : (
                         <>
                           <div className="do-gmail-filters">
@@ -9634,10 +9650,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       {!op.warehouse_name ? (
                         <div className="do-gmail-empty">Warehouse is not configured for this operator.</div>
                       ) : opMappingsLoading ? (
-                        <div className="do-gmail-empty" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Loader2 size={14} className="spinner-icon" />
-                          Loading mappings for {op.warehouse_name}...
-                        </div>
+                        <SaDataLoading label={`Loading mappings for ${op.warehouse_name}…`} compact />
                       ) : (
                         <>
                           <div className={`do-gmail-inbox-head${opMasterEditMode ? ' editing' : ''}`}>
@@ -9849,7 +9862,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       )}
 
                       {opMasterActivitiesLoading && profileMasterActivities.length === 0 ? (
-                        <div className="do-gmail-empty">Loading Master Setup activity...</div>
+                        <SaDataLoading label="Loading Master Setup activity…" compact />
                       ) : profileMasterActivities.length === 0 ? (
                         <div className="do-gmail-empty">No Master Setup changes yet for this operator.</div>
                       ) : (
@@ -10209,7 +10222,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         )}
 
                         {loadingOps ? (
-                          <div className="sa-op-empty">Loading operators…</div>
+                          <SaDataLoading label="Loading operators…" />
                         ) : filteredOperators.length === 0 ? (
                           <div className="sa-op-empty">
                             <ShieldAlert size={28} />
@@ -10497,7 +10510,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   {customerReportsError && <div className="sa-op-banner error">{customerReportsError}</div>}
 
                   {loadingCustomerReports ? (
-                    <div className="sa-op-empty">Loading customer reports…</div>
+                    <SaDataLoading label="Loading customer reports…" />
                   ) : customerReports.length === 0 ? (
                     <div className="sa-op-empty">
                       <MessageSquareWarning size={28} />

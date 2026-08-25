@@ -1363,6 +1363,70 @@
   to { transform: rotate(360deg); }
 }
 
+.sa-data-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 180px;
+  padding: 40px 16px;
+  text-align: center;
+  color: #64748b;
+}
+
+.sa-data-loading span {
+  font-size: 0.88rem;
+  font-weight: 650;
+  color: #475569;
+}
+
+.sa-data-loading.is-compact {
+  min-height: 96px;
+  padding: 24px 12px;
+  gap: 10px;
+}
+
+.sa-data-loading.is-compact span {
+  font-size: 0.8rem;
+}
+
+.sa-main-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.55);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.sa-main-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 28px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  pointer-events: none;
+}
+
+.sa-main-loading-card strong {
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+
+.sa-main-loading-card span {
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
 /* Super Admin log edit — content column only (never covers left sidebar) */
 .sa-edit-log-panel {
   width: 100%;
