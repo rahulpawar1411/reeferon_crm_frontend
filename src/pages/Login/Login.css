@@ -240,6 +240,15 @@
   transform: none !important;
 }
 
+.login-spinner {
+  animation: login-spin 0.8s linear infinite;
+}
+
+@keyframes login-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .login-footer-notice {
   text-align: center;
   padding: 0 10px;

@@ -167,7 +167,10 @@ export default function Login({ onLoginSuccess }) {
             disabled={loading}
           >
             {loading ? (
-              <Loader2 size={18} className="spinner-icon" />
+              <>
+                <Loader2 size={18} className="login-spinner" />
+                <span>Signing in…</span>
+              </>
             ) : (
               <>
                 <span>Enter Portal</span>

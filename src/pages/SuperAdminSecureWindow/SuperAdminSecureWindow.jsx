@@ -3332,7 +3332,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setNewChamberTypes({});
     setOpMasterActivities([]);
     setOpMasterActivitiesError('');
-    const { fromDate, toDate } = getDefaultOpTaskRange(7);
+    const { fromDate, toDate } = getDefaultOpTaskRange(1); // default: today only
     setOpTaskFromDate(fromDate);
     setOpTaskToDate(toDate);
     setOpTaskAppliedFrom(fromDate);
