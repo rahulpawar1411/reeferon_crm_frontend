@@ -401,17 +401,31 @@ export default function DOProfileLookup({ setActiveDOMenu, setEditInwardData, se
                       <span className="profile-label">Created Time</span>
                       <span className="profile-value">{formatDateTimeStr(searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at)}</span>
                     </div>
-                    {getUpdateDiff(
-                      searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
-                      searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
-                    ) && (
-                      <div className="profile-item">
-                        <span className="profile-label">Last Updated Time</span>
-                        <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
-                          {formatDateTimeStr(searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at)}
-                        </span>
-                      </div>
-                    )}
+                    <div className="profile-item">
+                      <span className="profile-label">Last Updated Time</span>
+                      <span
+                        className="profile-value"
+                        style={
+                          getUpdateDiff(
+                            searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
+                            searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
+                          )
+                            ? { color: '#0284c7', fontWeight: '800' }
+                            : undefined
+                        }
+                      >
+                        {getUpdateDiff(
+                          searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
+                          searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
+                        )
+                          ? formatDateTimeStr(
+                              searchedRecord.updated_at ||
+                                searchedRecord.inward_updated_at ||
+                                searchedRecord.outward_updated_at
+                            )
+                          : '-'}
+                      </span>
+                    </div>
                     {(Number(searchedRecord.update_count) > 0 || searchedRecord.update_details) && (
                       <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                         <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>

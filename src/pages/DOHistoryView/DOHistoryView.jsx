@@ -1302,17 +1302,31 @@ export default function DOHistoryView({ setActiveDOMenu, setEditInwardData, setE
                       <span className="profile-label">Created Time</span>
                       <span className="profile-value">{formatDateTimeStr(selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at)}</span>
                     </div>
-                    {getUpdateDiff(
-                      selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
-                      selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
-                    ) && (
-                      <div className="profile-item">
-                        <span className="profile-label">Last Updated Time</span>
-                        <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
-                          {formatDateTimeStr(selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at)}
-                        </span>
-                      </div>
-                    )}
+                    <div className="profile-item">
+                      <span className="profile-label">Last Updated Time</span>
+                      <span
+                        className="profile-value"
+                        style={
+                          getUpdateDiff(
+                            selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
+                            selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
+                          )
+                            ? { color: '#0284c7', fontWeight: '800' }
+                            : undefined
+                        }
+                      >
+                        {getUpdateDiff(
+                          selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
+                          selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
+                        )
+                          ? formatDateTimeStr(
+                              selectedDetailLog.updated_at ||
+                                selectedDetailLog.inward_updated_at ||
+                                selectedDetailLog.outward_updated_at
+                            )
+                          : '-'}
+                      </span>
+                    </div>
                     {(Number(selectedDetailLog.update_count) > 0 || selectedDetailLog.update_details) && (
                       <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                         <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>

@@ -50,7 +50,7 @@ export const chamberNumberFromName = (name) => {
 };
 
 /** Chambers this operator actually uses (from warehouse assignments only — no global placeholders). */
-export function getOperatorDisplayChambers(allChambers, mappings, chamberLimit) {
+export function getOperatorDisplayChambers(allChambers, mappings, chamberLimit, warehouseName = '') {
   const limit = Number(chamberLimit) || 4;
   const rows = Array.isArray(allChambers) ? allChambers : [];
   const byId = new Map(
@@ -58,6 +58,7 @@ export function getOperatorDisplayChambers(allChambers, mappings, chamberLimit) 
       .filter((row) => Number.isFinite(Number(row?.id)))
       .map((row) => [Number(row.id), row])
   );
+  const warehouseKey = String(warehouseName || '').trim().toLowerCase();
 
   const picked = [];
   const seen = new Set();
@@ -83,6 +84,14 @@ export function getOperatorDisplayChambers(allChambers, mappings, chamberLimit) 
     const fromList = rows.find((c) => namesMatch(c.name || c.chamber_name, assignName));
     pushRow(fromList);
   });
+
+  // Include warehouse-owned chambers even before clients are assigned
+  if (warehouseKey) {
+    rows.forEach((row) => {
+      const wh = String(row.warehouse_name || '').trim().toLowerCase();
+      if (wh && wh === warehouseKey) pushRow(row);
+    });
+  }
 
   picked.sort((a, b) => {
     const na = chamberNumberFromName(a.name || a.chamber_name);

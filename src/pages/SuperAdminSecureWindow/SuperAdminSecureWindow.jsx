@@ -5,12 +5,13 @@
 // ====================================================================
 
 import React, { useState, useEffect, useMemo, Suspense, lazy, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   ShieldCheck, Clock, LogOut, Database, Lock,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
   Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard,
   Copy, Check, Loader2, CheckCircle, MessageSquareWarning, MessageSquare, Smartphone, Package, Users, LayoutGrid,
-  ChevronDown, ChevronUp, Plus, ArrowLeft
+  ChevronDown, ChevronUp, Plus, ArrowLeft, Undo2
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
 import PaginationBar from '../../components/PaginationBar/PaginationBar';
@@ -32,7 +33,7 @@ import {
   fetchClientMonthBoxSheet,
   fetchAppSubAdmins, createAppSubAdmin, deleteAppSubAdmin,
   fetchChamberAssignments, addChamberAssignment, deleteChamberAssignment,
-  fetchChambers, updateChamber, deleteChamber,
+  fetchChambers, createChamber, updateChamber, deleteChamber,
   fetchMasterWarehouses, fetchMasterClients
 } from '../../services/api';
 import MasterDataPanel from '../../components/MasterDataPanel/MasterDataPanel';
@@ -619,6 +620,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [opMasterActivitiesError, setOpMasterActivitiesError] = useState('');
   const [opMasterActivityFilter, setOpMasterActivityFilter] = useState('all');
   const [opMasterActivityPage, setOpMasterActivityPage] = useState(1);
+  const [opMasterFromDate, setOpMasterFromDate] = useState('');
+  const [opMasterToDate, setOpMasterToDate] = useState('');
+  const [opMasterAppliedFrom, setOpMasterAppliedFrom] = useState('');
+  const [opMasterAppliedTo, setOpMasterAppliedTo] = useState('');
   const [opMasterEditMode, setOpMasterEditMode] = useState(false);
   const [opMasterSessionChanges, setOpMasterSessionChanges] = useState([]);
   const [opMasterDonePopup, setOpMasterDonePopup] = useState(null);
@@ -635,6 +640,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [addingMappingChamberId, setAddingMappingChamberId] = useState(null); // tracking loading during insert
   const [updatingChamberTypeKey, setUpdatingChamberTypeKey] = useState(null);
   const [deletingOpChamberId, setDeletingOpChamberId] = useState(null);
+  const [addingOpChamber, setAddingOpChamber] = useState(false);
+  const [opNewChamberName, setOpNewChamberName] = useState('');
+  const [opNewChamberType, setOpNewChamberType] = useState('Frozen');
   const [opChamberTypeByNum, setOpChamberTypeByNum] = useState({});
   const [opChambersList, setOpChambersList] = useState([]);
   const [opTaskFromDate, setOpTaskFromDate] = useState('');
@@ -645,6 +653,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [opTaskLogsLoading, setOpTaskLogsLoading] = useState(false);
   const [opTaskLogsError, setOpTaskLogsError] = useState('');
   const [opTaskFilter, setOpTaskFilter] = useState('all');
+  const [opTaskChamberFilter, setOpTaskChamberFilter] = useState('all');
   const [opEmail, setOpEmail] = useState('');
   const [opPassword, setOpPassword] = useState('');
   const [opFullName, setOpFullName] = useState('');
@@ -683,6 +692,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [showAppSubPassword, setShowAppSubPassword] = useState(false);
   const [editingOp, setEditingOp] = useState(null);
   const [viewingOperator, setViewingOperator] = useState(null);
+  /** DO profile sections: task_status | mappings | master_activity */
+  const [opProfileSection, setOpProfileSection] = useState('task_status');
   const [opError, setOpError] = useState('');
   const [opSuccess, setOpSuccess] = useState('');
   const [savingOp, setSavingOp] = useState(false);
@@ -736,6 +747,26 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   /** Super Admin direct edit (no permission): { type: 'daily'|'inward'|'outward', data } */
   const [saEditLog, setSaEditLog] = useState(null);
   const [saLogActionBusy, setSaLogActionBusy] = useState(false);
+  /** Soft-pending delete for chamber / inward / outward — Undo for 30s */
+  const [pendingLogDelete, setPendingLogDelete] = useState(null);
+  const pendingLogDeleteRef = useRef(null);
+  const pendingLogDeleteTimerRef = useRef(null);
+  const pendingLogDeleteTickRef = useRef(null);
+  /** Soft-pending revoke for Registered Operators — Undo for 30s */
+  const [pendingOperatorDelete, setPendingOperatorDelete] = useState(null);
+  const pendingOperatorDeleteRef = useRef(null);
+  const pendingOperatorDeleteTimerRef = useRef(null);
+  const pendingOperatorDeleteTickRef = useRef(null);
+  /** Soft-pending revoke for Customers Directory — Undo for 30s */
+  const [pendingCustomerDelete, setPendingCustomerDelete] = useState(null);
+  const pendingCustomerDeleteRef = useRef(null);
+  const pendingCustomerDeleteTimerRef = useRef(null);
+  const pendingCustomerDeleteTickRef = useRef(null);
+  /** Soft-pending master mapping delete (chamber / client) — Undo for 30s */
+  const [pendingMasterDelete, setPendingMasterDelete] = useState(null);
+  const pendingMasterDeleteRef = useRef(null);
+  const pendingMasterDeleteTimerRef = useRef(null);
+  const pendingMasterDeleteTickRef = useRef(null);
 
   // Lookup Menu States
   const [lookupQuery, setLookupQuery] = useState('');
@@ -772,6 +803,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     } catch {
       return dateVal;
     }
+  };
+
+  /** Show Updated At only when record was really edited after create; else '-'. */
+  const formatUpdatedAtStr = (created, updated) => {
+    if (!created || !updated) return '-';
+    const cTime = Math.floor(new Date(created).getTime() / 1000);
+    const uTime = Math.floor(new Date(updated).getTime() / 1000);
+    if (!(uTime > cTime)) return '-';
+    return formatDateTimeStr(updated);
   };
 
   /** Shorten long file paths for readable update diffs */
@@ -1066,7 +1106,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
               <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#c2410c', marginBottom: 4 }}>
                 Updated {Number(log.update_count) > 0 ? log.update_count : updateRows.length}{' '}
                 {Number(log.update_count) === 1 ? 'time' : 'times'}
-                {log.updated_at ? ` · Last: ${formatDateTimeStr(log.updated_at)}` : ''}
+                {formatUpdatedAtStr(log.created_at, log.updated_at) !== '-'
+                  ? ` · Last: ${formatUpdatedAtStr(log.created_at, log.updated_at)}`
+                  : ''}
               </div>
               {updateRows.length > 0
                 ? renderFieldCompareTable(updateRows, { title: 'Before → After' })
@@ -1133,7 +1175,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             })}
             {formField('Source', Number(log.is_native) === 1 ? 'Mobile Native App' : 'Web / Monitor')}
             {formField('Created At', formatDateTimeStr(log.created_at) || '-')}
-            {formField('Updated At', log.updated_at ? formatDateTimeStr(log.updated_at) : '-')}
+            {formField('Updated At', formatUpdatedAtStr(log.created_at, log.updated_at))}
             {formField(
               'Update Count',
               Number(log.update_count) > 0 ? String(log.update_count) : '0'
@@ -1558,7 +1600,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
   const finishOpMasterEdit = async (op) => {
+    const pendingBefore = pendingMasterDeleteRef.current;
+    if (pendingBefore) {
+      await finalizePendingMasterDelete();
+    }
     const changes = Array.isArray(opMasterSessionChanges) ? [...opMasterSessionChanges] : [];
+    if (pendingBefore) {
+      const text =
+        pendingBefore.kind === 'chamber'
+          ? `Deleted ${pendingBefore.chamberName || pendingBefore.label}.`
+          : `Removed "${pendingBefore.clientName}" from ${pendingBefore.chamberName}.`;
+      if (!changes.some((c) => c.text === text)) {
+        changes.push({ kind: 'remove', text });
+      }
+    }
     setOpMasterEditMode(false);
     setOpMappingsError('');
     setOpMappingsSuccess('');
@@ -1568,9 +1623,169 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       changes
     });
     setOpMasterSessionChanges([]);
+    setNewClientInputs({});
+    setNewChamberTypes({});
+    setOpNewChamberName('');
+    setOpNewChamberType('Frozen');
     if (op?.email) {
       await loadOpMasterActivities(op.email);
     }
+  };
+
+  const cancelOpMasterEdit = () => {
+    setOpMasterEditMode(false);
+    setOpMasterSessionChanges([]);
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setNewClientInputs({});
+    setNewChamberTypes({});
+    setOpNewChamberName('');
+    setOpNewChamberType('Frozen');
+  };
+
+  const clearPendingMasterDeleteTimers = () => {
+    if (pendingMasterDeleteTimerRef.current) {
+      clearTimeout(pendingMasterDeleteTimerRef.current);
+      pendingMasterDeleteTimerRef.current = null;
+    }
+    if (pendingMasterDeleteTickRef.current) {
+      clearInterval(pendingMasterDeleteTickRef.current);
+      pendingMasterDeleteTickRef.current = null;
+    }
+  };
+
+  const mappingMatchesPendingClient = (row, pending) => {
+    if (!row || !pending) return false;
+    const sameClient =
+      String(row.client_name || '').trim().toLowerCase() ===
+      String(pending.clientName || '').trim().toLowerCase();
+    if (!sameClient) return false;
+    if (pending.chamberId != null && Number(row.chamber_id) === Number(pending.chamberId)) return true;
+    const rowNum = chamberNumberFromName(row.chamber_name);
+    const pendingNum = chamberNumberFromName(pending.chamberName);
+    return rowNum != null && pendingNum != null && rowNum === pendingNum;
+  };
+
+  const mappingBelongsToPendingChamber = (row, pending) => {
+    if (!row || !pending) return false;
+    if (pending.chamberId != null && Number(row.chamber_id) === Number(pending.chamberId)) return true;
+    const rowNum = chamberNumberFromName(row.chamber_name);
+    const pendingNum = chamberNumberFromName(pending.chamberName);
+    return rowNum != null && pendingNum != null && rowNum === pendingNum;
+  };
+
+  const restorePendingMasterToUi = (pending) => {
+    if (!pending) return;
+    if (pending.kind === 'chamber') {
+      if (pending.chamberRecord) {
+        setOpChambersList((prev) =>
+          prev.some((c) => Number(c.id) === Number(pending.chamberId))
+            ? prev
+            : [pending.chamberRecord, ...prev]
+        );
+      }
+      if (Array.isArray(pending.mappings) && pending.mappings.length) {
+        setOpMappings((prev) => {
+          const keys = new Set((prev || []).map(assignmentClientKey));
+          const restored = pending.mappings.filter((m) => !keys.has(assignmentClientKey(m)));
+          return restored.length ? [...restored, ...(prev || [])] : prev;
+        });
+      }
+      return;
+    }
+    if (pending.kind === 'client' && pending.assignment) {
+      setOpMappings((prev) => {
+        if ((prev || []).some((m) => mappingMatchesPendingClient(m, pending))) return prev;
+        return [pending.assignment, ...(prev || [])];
+      });
+    }
+  };
+
+  const commitPendingMasterDelete = async (pending) => {
+    if (!pending?.op) return;
+    const op = pending.op;
+    try {
+      if (pending.kind === 'chamber') {
+        const chambers = await fetchChambers().catch(() => []);
+        const resolvedId =
+          resolveChamberIdFromList(chambers, pending.chamberId, pending.chamberName) || pending.chamberId;
+        await deleteChamber(
+          resolvedId,
+          `Deleted by Super Admin from ${op.full_name || op.email} details`
+        );
+        const deletedLabel = `Deleted ${pending.chamberName || `Chamber ${pending.chamberId}`}.`;
+        pushOpMasterChange('remove', deletedLabel);
+        setOpMappingsSuccess(deletedLabel);
+        if (op.email) await loadOpMasterActivities(op.email);
+        return;
+      }
+      if (pending.kind === 'client') {
+        const chambers = await fetchChambers().catch(() => []);
+        const resolvedId = resolveChamberIdFromList(
+          chambers,
+          pending.chamberId,
+          pending.chamberName
+        );
+        await deleteChamberAssignment({
+          chamber_id: resolvedId,
+          client_name: pending.clientName,
+          remark: 'Removed by Super Admin',
+          warehouse_name: op.warehouse_name,
+          operator_email: op.email
+        });
+        const removedLabel = `Removed "${pending.clientName}" from ${pending.chamberName}.`;
+        pushOpMasterChange('remove', removedLabel);
+        setOpMappingsSuccess(removedLabel);
+        if (op.email) await loadOpMasterActivities(op.email);
+      }
+    } catch (err) {
+      restorePendingMasterToUi(pending);
+      setOpMappingsError(err.message || 'Delete failed. Item was restored.');
+    }
+  };
+
+  const finalizePendingMasterDelete = async () => {
+    const pending = pendingMasterDeleteRef.current;
+    clearPendingMasterDeleteTimers();
+    pendingMasterDeleteRef.current = null;
+    setPendingMasterDelete(null);
+    if (pending) await commitPendingMasterDelete(pending);
+  };
+
+  const handleUndoMasterDelete = () => {
+    const pending = pendingMasterDeleteRef.current;
+    clearPendingMasterDeleteTimers();
+    pendingMasterDeleteRef.current = null;
+    setPendingMasterDelete(null);
+    if (!pending) return;
+    restorePendingMasterToUi(pending);
+    setOpMappingsSuccess(
+      pending.kind === 'chamber' ? 'Chamber delete undone.' : 'Client remove undone.'
+    );
+  };
+
+  const startPendingMasterDelete = async (pendingBase) => {
+    if (pendingLogDeleteRef.current) await finalizePendingLogDelete();
+    if (pendingOperatorDeleteRef.current) await finalizePendingOperatorDelete();
+    if (pendingCustomerDeleteRef.current) await finalizePendingCustomerDelete();
+    if (pendingMasterDeleteRef.current) await finalizePendingMasterDelete();
+
+    const pending = { ...pendingBase, secondsLeft: 30 };
+    pendingMasterDeleteRef.current = pending;
+    setPendingMasterDelete(pending);
+
+    pendingMasterDeleteTickRef.current = setInterval(() => {
+      setPendingMasterDelete((prev) => {
+        if (!prev) return null;
+        const next = prev.secondsLeft - 1;
+        if (next <= 0) return prev;
+        return { ...prev, secondsLeft: next };
+      });
+    }, 1000);
+
+    pendingMasterDeleteTimerRef.current = setTimeout(() => {
+      finalizePendingMasterDelete();
+    }, 30000);
   };
 
   const loadOpMasterActivities = async (email) => {
@@ -1743,26 +1958,103 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
   const handleDeleteOpMapping = async (op, chamberId, clientName, chamberName) => {
-    if (!window.confirm(`Are you sure you want to remove "${clientName}" from ${chamberName}?`)) {
+    if (
+      !window.confirm(
+        `Remove "${clientName}" from ${chamberName}?\n\nYou can Undo for 30 seconds.`
+      )
+    ) {
       return;
     }
     setOpMappingsError('');
     setOpMappingsSuccess('');
-    try {
-      const chambers = await fetchChambers().catch(() => []);
-      const resolvedId = resolveChamberIdFromList(chambers, chamberId, chamberName);
-      await deleteChamberAssignment({
-        chamber_id: resolvedId,
+
+    const assignment =
+      (opMappings || []).find(
+        (m) =>
+          String(m.client_name || '').trim().toLowerCase() ===
+            String(clientName || '').trim().toLowerCase() &&
+          (Number(m.chamber_id) === Number(chamberId) ||
+            chamberNumberFromName(m.chamber_name) === chamberNumberFromName(chamberName))
+      ) || {
+        chamber_id: chamberId,
         client_name: clientName,
-        remark: 'Removed by Super Admin',
+        chamber_name: chamberName,
+        status: 'active'
+      };
+
+    setOpMappings((prev) =>
+      (prev || []).filter(
+        (m) =>
+          !(
+            String(m.client_name || '').trim().toLowerCase() ===
+              String(clientName || '').trim().toLowerCase() &&
+            (Number(m.chamber_id) === Number(chamberId) ||
+              chamberNumberFromName(m.chamber_name) === chamberNumberFromName(chamberName))
+          )
+      )
+    );
+
+    await startPendingMasterDelete({
+      kind: 'client',
+      chamberId,
+      clientName,
+      chamberName,
+      assignment: { ...assignment },
+      op: {
+        email: op.email,
+        warehouse_name: op.warehouse_name,
+        full_name: op.full_name
+      },
+      label: clientName
+    });
+  };
+
+  const handleAddOpChamber = async (op) => {
+    if (!op?.warehouse_name) {
+      setOpMappingsError('Configure warehouse access before adding a chamber.');
+      return;
+    }
+    const usedNums = (opChambersList || [])
+      .map((c) => chamberNumberFromName(c.name || c.chamber_name))
+      .filter((n) => n != null);
+    const nextNum = Math.max(Number(op.chamber_limit) || 4, ...usedNums, 0) + 1;
+    const name = String(opNewChamberName || '').trim() || `Chamber ${nextNum}`;
+    const chamberType = String(opNewChamberType || 'Frozen').trim() || 'Frozen';
+    setOpMappingsError('');
+    setOpMappingsSuccess('');
+    setAddingOpChamber(true);
+    try {
+      const res = await createChamber({
+        name,
+        chamber_type: chamberType,
+        remark: `Added by Super Admin for ${op.full_name || op.email}`,
         warehouse_name: op.warehouse_name,
         operator_email: op.email
       });
-      const removedLabel = `Removed "${clientName}" from ${chamberName}.`;
-      pushOpMasterChange('remove', removedLabel);
-      await refreshOperatorProfileMaster(op, removedLabel);
+      const created = res?.data || {};
+      const newLimit = res?.chamber_limit != null ? Number(res.chamber_limit) : null;
+      if (newLimit && Number.isFinite(newLimit)) {
+        setViewingOperator((prev) =>
+          prev && Number(prev.id) === Number(op.id) ? { ...prev, chamber_limit: newLimit } : prev
+        );
+        setOperators((prev) =>
+          (prev || []).map((row) =>
+            Number(row.id) === Number(op.id) ? { ...row, chamber_limit: newLimit } : row
+          )
+        );
+      }
+      setOpNewChamberName('');
+      setOpNewChamberType('Frozen');
+      const addedLabel = `Added chamber "${created.name || name}"${
+        newLimit ? ` · limit ${newLimit}` : ''
+      }.`;
+      pushOpMasterChange('chamber', addedLabel);
+      await refreshOperatorProfileMaster(op, addedLabel);
+      if (op.email) await loadOpMasterActivities(op.email);
     } catch (err) {
-      setOpMappingsError(err.message || 'Failed to delete client mapping.');
+      setOpMappingsError(err.message || 'Failed to add chamber.');
+    } finally {
+      setAddingOpChamber(false);
     }
   };
 
@@ -1774,26 +2066,42 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     const label = chamberName || `Chamber ${chamberId}`;
     if (
       !window.confirm(
-        `Delete ${label}?\n\nThis removes the chamber from master and its client mappings. Temperature logs are kept in history.`
+        `Delete ${label}?\n\nThis removes the chamber from master and its client mappings. Temperature logs are kept in history.\n\nYou can Undo for 30 seconds.`
       )
     ) {
       return;
     }
     setOpMappingsError('');
     setOpMappingsSuccess('');
-    setDeletingOpChamberId(chamberId);
-    try {
-      const chambers = await fetchChambers().catch(() => []);
-      const resolvedId = resolveChamberIdFromList(chambers, chamberId, chamberName) || chamberId;
-      await deleteChamber(resolvedId, `Deleted by Super Admin from ${op.full_name || op.email} details`);
-      const deletedLabel = `Deleted ${label}.`;
-      pushOpMasterChange('remove', deletedLabel);
-      await refreshOperatorProfileMaster(op, deletedLabel);
-    } catch (err) {
-      setOpMappingsError(err.message || 'Failed to delete chamber.');
-    } finally {
-      setDeletingOpChamberId(null);
-    }
+
+    const chamberRecord =
+      (opChambersList || []).find((c) => Number(c.id) === Number(chamberId)) || {
+        id: chamberId,
+        name: chamberName,
+        chamber_name: chamberName
+      };
+    const relatedMappings = (opMappings || []).filter((m) =>
+      mappingBelongsToPendingChamber(m, { chamberId, chamberName })
+    );
+
+    setOpChambersList((prev) => (prev || []).filter((c) => Number(c.id) !== Number(chamberId)));
+    setOpMappings((prev) =>
+      (prev || []).filter((m) => !mappingBelongsToPendingChamber(m, { chamberId, chamberName }))
+    );
+
+    await startPendingMasterDelete({
+      kind: 'chamber',
+      chamberId,
+      chamberName: label,
+      chamberRecord: { ...chamberRecord },
+      mappings: relatedMappings.map((m) => ({ ...m })),
+      op: {
+        email: op.email,
+        warehouse_name: op.warehouse_name,
+        full_name: op.full_name
+      },
+      label
+    });
   };
 
   const loadActivities = async () => {
@@ -2220,13 +2528,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             {Number(logForCompare?.update_count) > 0 ? ` · Edit #${logForCompare.update_count}` : ''}
           </div>
           {renderFieldCompareTable(latestCompareRows, { title: 'Compare: Before → After' })}
-          {logForCompare?.updated_at || logForCompare?.inward_updated_at || logForCompare?.outward_updated_at ? (
-            <div style={{ marginTop: 8, fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
-              Last updated: {formatAllowDate(
-                logForCompare.updated_at || logForCompare.inward_updated_at || logForCompare.outward_updated_at
-              )}
-            </div>
-          ) : null}
+          {(() => {
+            const lastUpd = formatUpdatedAtStr(
+              logForCompare?.created_at || logForCompare?.inward_created_at || logForCompare?.outward_created_at,
+              logForCompare?.updated_at || logForCompare?.inward_updated_at || logForCompare?.outward_updated_at
+            );
+            return (
+              <div style={{ marginTop: 8, fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>
+                Last updated: {lastUpd}
+              </div>
+            );
+          })()}
         </div>
       ) : null}
 
@@ -3085,6 +3397,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       }
     };
 
+    const formatUpdatedAtDisplay = (created, updated) => {
+      if (!created || !updated) return '';
+      const cTime = Math.floor(new Date(created).getTime() / 1000);
+      const uTime = Math.floor(new Date(updated).getTime() / 1000);
+      if (!(uTime > cTime)) return '';
+      return formatDateTimeDisplay(updated);
+    };
+
     let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
 
     if (historyTab === 'daily') {
@@ -3124,7 +3444,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.update_details || '',
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.created_at),
-          formatDateTimeDisplay(log.updated_at)
+          formatUpdatedAtDisplay(log.created_at, log.updated_at)
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
@@ -3186,7 +3506,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.update_details || '',
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.inward_created_at),
-          formatDateTimeDisplay(log.inward_updated_at)
+          formatUpdatedAtDisplay(log.inward_created_at, log.inward_updated_at)
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
@@ -3249,7 +3569,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.update_details || '',
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.outward_created_at),
-          formatDateTimeDisplay(log.outward_updated_at)
+          formatUpdatedAtDisplay(log.outward_created_at, log.outward_updated_at)
         ];
         csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
       });
@@ -3348,25 +3668,114 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
-  const handleDeleteOperator = async (id) => {
-    if (!window.confirm('Are you sure you want to revoke workspace access for this data operator?')) {
+  const clearPendingOperatorDeleteTimers = () => {
+    if (pendingOperatorDeleteTimerRef.current) {
+      clearTimeout(pendingOperatorDeleteTimerRef.current);
+      pendingOperatorDeleteTimerRef.current = null;
+    }
+    if (pendingOperatorDeleteTickRef.current) {
+      clearInterval(pendingOperatorDeleteTickRef.current);
+      pendingOperatorDeleteTickRef.current = null;
+    }
+  };
+
+  const restorePendingOperatorToUi = (pending) => {
+    if (!pending?.operator) return;
+    setOperators((prev) =>
+      prev.some((o) => Number(o.id) === Number(pending.id))
+        ? prev
+        : [pending.operator, ...prev]
+    );
+  };
+
+  const commitPendingOperatorDelete = async (pending) => {
+    if (!pending) return;
+    try {
+      await deleteOperator(pending.id);
+      setOpSuccess('Operator credentials deleted successfully.');
+    } catch (err) {
+      restorePendingOperatorToUi(pending);
+      setOpError(err.message || 'Failed to delete operator. It was restored to the list.');
+    }
+  };
+
+  const finalizePendingOperatorDelete = async () => {
+    const pending = pendingOperatorDeleteRef.current;
+    clearPendingOperatorDeleteTimers();
+    pendingOperatorDeleteRef.current = null;
+    setPendingOperatorDelete(null);
+    if (pending) await commitPendingOperatorDelete(pending);
+  };
+
+  const handleUndoOperatorDelete = () => {
+    const pending = pendingOperatorDeleteRef.current;
+    clearPendingOperatorDeleteTimers();
+    pendingOperatorDeleteRef.current = null;
+    setPendingOperatorDelete(null);
+    if (!pending) return;
+    restorePendingOperatorToUi(pending);
+    setOpSuccess('Operator revoke undone.');
+  };
+
+  const handleDeleteOperator = async (op) => {
+    if (!op?.id) return;
+    const id = op.id;
+    const label = op.full_name || op.email || `#${id}`;
+    if (
+      !window.confirm(
+        `Revoke workspace access for ${label}?\n\nYou can Undo for 30 seconds.`
+      )
+    ) {
       return;
     }
+
     setOpError('');
     setOpSuccess('');
-    try {
-      await deleteOperator(id);
-      setOpSuccess('Operator credentials deleted successfully.');
-      loadOperatorsData();
-      if (editingOp && editingOp.id === id) {
-        cancelEditOperator();
-      }
-      if (viewingOperator && viewingOperator.id === id) {
-        closeOperatorProfile();
-      }
-    } catch (err) {
-      setOpError(err.message || 'Failed to delete operator.');
+
+    // Commit any other pending undo deletes first
+    if (pendingLogDeleteRef.current) {
+      await finalizePendingLogDelete();
     }
+    if (pendingCustomerDeleteRef.current) {
+      await finalizePendingCustomerDelete();
+    }
+    if (pendingMasterDeleteRef.current) {
+      await finalizePendingMasterDelete();
+    }
+    if (pendingOperatorDeleteRef.current) {
+      await finalizePendingOperatorDelete();
+    }
+
+    const snapshot = { ...op };
+    setOperators((prev) => prev.filter((o) => Number(o.id) !== Number(id)));
+    if (editingOp && Number(editingOp.id) === Number(id)) {
+      cancelEditOperator();
+    }
+    if (viewingOperator && Number(viewingOperator.id) === Number(id)) {
+      closeOperatorProfile();
+    }
+
+    const pending = {
+      id,
+      operator: snapshot,
+      label,
+      secondsLeft: 30
+    };
+    pendingOperatorDeleteRef.current = pending;
+    setPendingOperatorDelete(pending);
+
+    pendingOperatorDeleteTickRef.current = setInterval(() => {
+      setPendingOperatorDelete((prev) => {
+        if (!prev) return null;
+        const next = prev.secondsLeft - 1;
+        if (next <= 0) return prev;
+        return { ...prev, secondsLeft: next };
+      });
+    }, 1000);
+
+    pendingOperatorDeleteTimerRef.current = setTimeout(() => {
+      finalizePendingOperatorDelete();
+    }, 30000);
   };
 
   const startEditOperator = (op) => {
@@ -3386,6 +3795,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     if (!op) return;
     setEditingOp(null);
     setViewingOperator(op);
+    setOpProfileSection('task_status');
     setExpandedOpMappingsId(null);
     setOpMappingsError('');
     setOpMappingsSuccess('');
@@ -3397,14 +3807,22 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpMasterDonePopup(null);
     setNewClientInputs({});
     setNewChamberTypes({});
+    setOpNewChamberName('');
+    setOpNewChamberType('Frozen');
     setOpMasterActivities([]);
     setOpMasterActivitiesError('');
-    const { fromDate, toDate } = getDefaultOpTaskRange(1); // default: today only
+    const { fromDate, toDate } = getDefaultOpTaskRange(1); // task status: today
+    const masterRange = getDefaultOpTaskRange(30); // master activity: last 30 days
     setOpTaskFromDate(fromDate);
     setOpTaskToDate(toDate);
     setOpTaskAppliedFrom(fromDate);
     setOpTaskAppliedTo(toDate);
+    setOpMasterFromDate(masterRange.fromDate);
+    setOpMasterToDate(masterRange.toDate);
+    setOpMasterAppliedFrom(masterRange.fromDate);
+    setOpMasterAppliedTo(masterRange.toDate);
     setOpTaskFilter('all');
+    setOpTaskChamberFilter('all');
     setOpTaskLogs([]);
     setOpTaskLogsError('');
     if (op.warehouse_name) {
@@ -3468,7 +3886,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   };
 
   const closeOperatorProfile = () => {
+    if (pendingMasterDeleteRef.current) {
+      finalizePendingMasterDelete();
+    }
     setViewingOperator(null);
+    setOpProfileSection('task_status');
     setOpMappings([]);
     setOpMappingsError('');
     setOpMappingsSuccess('');
@@ -3481,6 +3903,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpMasterDonePopup(null);
     setNewClientInputs({});
     setNewChamberTypes({});
+    setOpNewChamberName('');
+    setOpNewChamberType('Frozen');
+    setOpMasterFromDate('');
+    setOpMasterToDate('');
+    setOpMasterAppliedFrom('');
+    setOpMasterAppliedTo('');
     opMasterActivitiesEmailRef.current = '';
     setOpTaskFromDate('');
     setOpTaskToDate('');
@@ -3489,6 +3917,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpTaskLogs([]);
     setOpTaskLogsError('');
     setOpTaskFilter('all');
+    setOpTaskChamberFilter('all');
   };
 
   const cancelEditOperator = () => {
@@ -3684,23 +4113,111 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
-  const handleDeleteSubAdmin = async (id) => {
-    if (!window.confirm('Are you sure you want to revoke workspace access for this customer?')) {
+  const clearPendingCustomerDeleteTimers = () => {
+    if (pendingCustomerDeleteTimerRef.current) {
+      clearTimeout(pendingCustomerDeleteTimerRef.current);
+      pendingCustomerDeleteTimerRef.current = null;
+    }
+    if (pendingCustomerDeleteTickRef.current) {
+      clearInterval(pendingCustomerDeleteTickRef.current);
+      pendingCustomerDeleteTickRef.current = null;
+    }
+  };
+
+  const restorePendingCustomerToUi = (pending) => {
+    if (!pending?.customer) return;
+    setSubAdmins((prev) =>
+      prev.some((c) => Number(c.id) === Number(pending.id))
+        ? prev
+        : [pending.customer, ...prev]
+    );
+  };
+
+  const commitPendingCustomerDelete = async (pending) => {
+    if (!pending) return;
+    try {
+      await deleteSubAdmin(pending.id);
+      setSubAdminSuccess('Customer credentials deleted successfully.');
+      loadDashboardStatsData();
+    } catch (err) {
+      restorePendingCustomerToUi(pending);
+      setSubAdminError(err.message || 'Failed to delete customer. It was restored to the list.');
+    }
+  };
+
+  const finalizePendingCustomerDelete = async () => {
+    const pending = pendingCustomerDeleteRef.current;
+    clearPendingCustomerDeleteTimers();
+    pendingCustomerDeleteRef.current = null;
+    setPendingCustomerDelete(null);
+    if (pending) await commitPendingCustomerDelete(pending);
+  };
+
+  const handleUndoCustomerDelete = () => {
+    const pending = pendingCustomerDeleteRef.current;
+    clearPendingCustomerDeleteTimers();
+    pendingCustomerDeleteRef.current = null;
+    setPendingCustomerDelete(null);
+    if (!pending) return;
+    restorePendingCustomerToUi(pending);
+    setSubAdminSuccess('Customer revoke undone.');
+  };
+
+  const handleDeleteSubAdmin = async (sa) => {
+    if (!sa?.id) return;
+    const id = sa.id;
+    const label = sa.full_name || sa.email || `#${id}`;
+    if (
+      !window.confirm(
+        `Revoke workspace access for ${label}?\n\nYou can Undo for 30 seconds.`
+      )
+    ) {
       return;
     }
+
     setSubAdminError('');
     setSubAdminSuccess('');
-    try {
-      await deleteSubAdmin(id);
-      setSubAdminSuccess('Customer credentials deleted successfully.');
-      loadSubAdminsData();
-      loadDashboardStatsData();
-      if (editingSubAdmin && editingSubAdmin.id === id) {
-        cancelEditSubAdmin();
-      }
-    } catch (err) {
-      setSubAdminError(err.message || 'Failed to delete customer.');
+
+    if (pendingLogDeleteRef.current) {
+      await finalizePendingLogDelete();
     }
+    if (pendingOperatorDeleteRef.current) {
+      await finalizePendingOperatorDelete();
+    }
+    if (pendingMasterDeleteRef.current) {
+      await finalizePendingMasterDelete();
+    }
+    if (pendingCustomerDeleteRef.current) {
+      await finalizePendingCustomerDelete();
+    }
+
+    const snapshot = { ...sa };
+    setSubAdmins((prev) => prev.filter((c) => Number(c.id) !== Number(id)));
+    if (editingSubAdmin && Number(editingSubAdmin.id) === Number(id)) {
+      cancelEditSubAdmin();
+    }
+
+    const pending = {
+      id,
+      customer: snapshot,
+      label,
+      secondsLeft: 30
+    };
+    pendingCustomerDeleteRef.current = pending;
+    setPendingCustomerDelete(pending);
+
+    pendingCustomerDeleteTickRef.current = setInterval(() => {
+      setPendingCustomerDelete((prev) => {
+        if (!prev) return null;
+        const next = prev.secondsLeft - 1;
+        if (next <= 0) return prev;
+        return { ...prev, secondsLeft: next };
+      });
+    }, 1000);
+
+    pendingCustomerDeleteTimerRef.current = setTimeout(() => {
+      finalizePendingCustomerDelete();
+    }, 30000);
   };
 
   const startEditSubAdmin = (sa) => {
@@ -3964,6 +4481,90 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     });
   };
 
+  const clearPendingLogDeleteTimers = () => {
+    if (pendingLogDeleteTimerRef.current) {
+      clearTimeout(pendingLogDeleteTimerRef.current);
+      pendingLogDeleteTimerRef.current = null;
+    }
+    if (pendingLogDeleteTickRef.current) {
+      clearInterval(pendingLogDeleteTickRef.current);
+      pendingLogDeleteTickRef.current = null;
+    }
+  };
+
+  const restorePendingLogToUi = (pending) => {
+    if (!pending?.log) return;
+    const { type, id, log } = pending;
+    if (type === 'daily') {
+      setChamberLogs((prev) => (prev.some((r) => r.id === id) ? prev : [log, ...prev]));
+    } else if (type === 'inward') {
+      setInwardLogs((prev) => (prev.some((r) => r.inward_id === id) ? prev : [log, ...prev]));
+    } else {
+      setOutwardLogs((prev) => (prev.some((r) => r.outward_id === id) ? prev : [log, ...prev]));
+    }
+    setHistoryTotal((t) => (Number(t) || 0) + 1);
+  };
+
+  const commitPendingLogDelete = async (pending) => {
+    if (!pending) return;
+    try {
+      if (pending.type === 'daily') await deleteChamberLog(pending.id);
+      else if (pending.type === 'inward') await deleteInwardLog(pending.id);
+      else await deleteOutwardLog(pending.id);
+    } catch (err) {
+      restorePendingLogToUi(pending);
+      alert(err.message || 'Failed to delete log. It was restored to the list.');
+    }
+  };
+
+  const finalizePendingLogDelete = async () => {
+    const pending = pendingLogDeleteRef.current;
+    clearPendingLogDeleteTimers();
+    pendingLogDeleteRef.current = null;
+    setPendingLogDelete(null);
+    if (pending) await commitPendingLogDelete(pending);
+  };
+
+  const handleUndoLogDelete = () => {
+    const pending = pendingLogDeleteRef.current;
+    clearPendingLogDeleteTimers();
+    pendingLogDeleteRef.current = null;
+    setPendingLogDelete(null);
+    if (!pending) return;
+    restorePendingLogToUi(pending);
+  };
+
+  useEffect(() => {
+    return () => {
+      // If admin leaves while delete is pending, commit the delete
+      const pendingLog = pendingLogDeleteRef.current;
+      clearPendingLogDeleteTimers();
+      if (pendingLog) {
+        commitPendingLogDelete(pendingLog);
+        pendingLogDeleteRef.current = null;
+      }
+      const pendingOp = pendingOperatorDeleteRef.current;
+      clearPendingOperatorDeleteTimers();
+      if (pendingOp) {
+        commitPendingOperatorDelete(pendingOp);
+        pendingOperatorDeleteRef.current = null;
+      }
+      const pendingCustomer = pendingCustomerDeleteRef.current;
+      clearPendingCustomerDeleteTimers();
+      if (pendingCustomer) {
+        commitPendingCustomerDelete(pendingCustomer);
+        pendingCustomerDeleteRef.current = null;
+      }
+      const pendingMaster = pendingMasterDeleteRef.current;
+      clearPendingMasterDeleteTimers();
+      if (pendingMaster) {
+        commitPendingMasterDelete(pendingMaster);
+        pendingMasterDeleteRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const startSaEditLog = (type, log) => {
     setSelectedDetailLog(null);
     setSaEditLog({ type, data: log });
@@ -3972,26 +4573,72 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const handleSaDeleteLog = async (type, log) => {
     const id = type === 'daily' ? log.id : type === 'inward' ? log.inward_id : log.outward_id;
     const ref = log.reference_no || `#${id}`;
-    if (!window.confirm(`Delete this ${type === 'daily' ? 'Chamber' : type === 'inward' ? 'Inward' : 'Outward'} log (${ref})?\n\nSuper Admin delete — no permission request required.`)) {
+    const kindLabel = type === 'daily' ? 'Chamber' : type === 'inward' ? 'Inward' : 'Outward';
+    if (!window.confirm(`Delete this ${kindLabel} log (${ref})?\n\nYou can Undo for 30 seconds.`)) {
       return;
     }
+
+    // If another delete is waiting, commit it first
+    if (pendingOperatorDeleteRef.current) {
+      await finalizePendingOperatorDelete();
+    }
+    if (pendingCustomerDeleteRef.current) {
+      await finalizePendingCustomerDelete();
+    }
+    if (pendingMasterDeleteRef.current) {
+      await finalizePendingMasterDelete();
+    }
+    if (pendingLogDeleteRef.current) {
+      await finalizePendingLogDelete();
+    }
+
     setSaLogActionBusy(true);
     try {
-      if (type === 'daily') await deleteChamberLog(id);
-      else if (type === 'inward') await deleteInwardLog(id);
-      else await deleteOutwardLog(id);
-
+      const snapshot = { ...log };
       setSelectedDetailLog(null);
       if (saEditLog) setSaEditLog(null);
+      if (searchedRecord) {
+        const sid =
+          searchedRecordType === 'daily'
+            ? searchedRecord.id
+            : searchedRecordType === 'inward'
+              ? searchedRecord.inward_id
+              : searchedRecord.outward_id;
+        if (sid === id) {
+          setSearchedRecord(null);
+          setSearchedRecordType('');
+        }
+      }
 
       if (type === 'daily') setChamberLogs((prev) => prev.filter((r) => r.id !== id));
       else if (type === 'inward') setInwardLogs((prev) => prev.filter((r) => r.inward_id !== id));
       else setOutwardLogs((prev) => prev.filter((r) => r.outward_id !== id));
 
       setHistoryTotal((t) => Math.max(0, (Number(t) || 0) - 1));
-      alert('Log deleted successfully.');
-    } catch (err) {
-      alert(err.message || 'Failed to delete log.');
+
+      const pending = {
+        type,
+        id,
+        log: snapshot,
+        ref,
+        kindLabel,
+        secondsLeft: 30
+      };
+      pendingLogDeleteRef.current = pending;
+      setPendingLogDelete(pending);
+
+      pendingLogDeleteTickRef.current = setInterval(() => {
+        setPendingLogDelete((prev) => {
+          if (!prev) return null;
+          const next = prev.secondsLeft - 1;
+          if (next <= 0) return prev;
+          return { ...prev, secondsLeft: next };
+        });
+      }, 1000);
+
+      pendingLogDeleteTimerRef.current = setTimeout(() => {
+        finalizePendingLogDelete();
+      }, 30000);
     } finally {
       setSaLogActionBusy(false);
     }
@@ -7267,17 +7914,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             <span className="profile-label">Created Time</span>
                             <span className="profile-value">{formatDateTimeStr(searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at)}</span>
                           </div>
-                          {getUpdateDiff(
-                            searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
-                            searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
-                          ) && (
-                            <div className="profile-item">
-                              <span className="profile-label">Last Updated Time</span>
-                              <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
-                                {formatDateTimeStr(searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at)}
-                              </span>
-                            </div>
-                          )}
+                          <div className="profile-item">
+                            <span className="profile-label">Last Updated Time</span>
+                            <span
+                              className="profile-value"
+                              style={
+                                formatUpdatedAtStr(
+                                  searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
+                                  searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
+                                ) !== '-'
+                                  ? { color: '#0284c7', fontWeight: '800' }
+                                  : undefined
+                              }
+                            >
+                              {formatUpdatedAtStr(
+                                searchedRecord.created_at || searchedRecord.inward_created_at || searchedRecord.outward_created_at,
+                                searchedRecord.updated_at || searchedRecord.inward_updated_at || searchedRecord.outward_updated_at
+                              )}
+                            </span>
+                          </div>
                           {(Number(searchedRecord.update_count) > 0 || searchedRecord.update_details) && (
                             <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                               <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>Last Updated Details</span>
@@ -9344,7 +9999,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     <button type="button" className="sa-op-icon-btn" onClick={() => startEditSubAdmin(sa)} title="Edit">
                                       <Edit size={14} />
                                     </button>
-                                    <button type="button" className="sa-op-icon-btn danger" onClick={() => handleDeleteSubAdmin(sa.id)} title="Revoke">
+                                    <button type="button" className="sa-op-icon-btn danger" onClick={() => handleDeleteSubAdmin(sa)} title="Revoke">
                                       <Trash2 size={14} />
                                     </button>
                                   </div>
@@ -9386,7 +10041,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 const opDisplayChambers = getOperatorDisplayChambers(
                   opChambersList,
                   opMappings,
-                  op.chamber_limit || 4
+                  op.chamber_limit || 4,
+                  op.warehouse_name
                 );
                 const opTaskStatus = computeDoTaskStatus({
                   assignments: opActiveAssignments,
@@ -9395,9 +10051,22 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   toDate: opTaskAppliedTo,
                   today: localDateStr()
                 });
+                const opTaskChamberOptions = Array.from(
+                  new Set(
+                    (opTaskStatus.items || [])
+                      .map((item) => String(item.chamber_name || '').trim())
+                      .filter(Boolean)
+                  )
+                ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 const filteredOpTasks = opTaskStatus.items.filter((item) => {
-                  if (opTaskFilter === 'all') return true;
-                  return item.status === opTaskFilter;
+                  if (opTaskFilter !== 'all' && item.status !== opTaskFilter) return false;
+                  if (
+                    opTaskChamberFilter !== 'all' &&
+                    String(item.chamber_name || '').trim() !== opTaskChamberFilter
+                  ) {
+                    return false;
+                  }
+                  return true;
                 });
                 return (
                   <div className="do-gmail-view">
@@ -9418,7 +10087,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             <Edit size={12} />
                             Edit
                           </button>
-                          <button type="button" className="do-gmail-text-btn danger" onClick={() => handleDeleteOperator(op.id)}>
+                          <button type="button" className="do-gmail-text-btn danger" onClick={() => handleDeleteOperator(op)}>
                             <Trash2 size={12} />
                             Revoke
                           </button>
@@ -9441,12 +10110,40 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </div>
                     </div>
 
+                    <div className="sa-gmail-tabs sa-gmail-tabs-wrap do-profile-section-tabs">
+                      <button
+                        type="button"
+                        className={`sa-gmail-tab${opProfileSection === 'task_status' ? ' active' : ''}`}
+                        onClick={() => setOpProfileSection('task_status')}
+                      >
+                        <Thermometer size={14} />
+                        Chamber Task Status
+                      </button>
+                      <button
+                        type="button"
+                        className={`sa-gmail-tab${opProfileSection === 'mappings' ? ' active' : ''}`}
+                        onClick={() => setOpProfileSection('mappings')}
+                      >
+                        <LayoutGrid size={14} />
+                        Chamber &amp; Client Mappings
+                      </button>
+                      <button
+                        type="button"
+                        className={`sa-gmail-tab${opProfileSection === 'master_activity' ? ' active' : ''}`}
+                        onClick={() => setOpProfileSection('master_activity')}
+                      >
+                        <Activity size={14} />
+                        Master Setup Activity
+                      </button>
+                    </div>
+
+                    {opProfileSection === 'task_status' && (
                     <div className="do-gmail-panel do-gmail-task-panel">
                       <div className="do-gmail-toolbar">
                         <div>
                           <h3 className="do-gmail-title">Chamber Task Status</h3>
                           <p className="do-gmail-sub">
-                            Morning &amp; Evening inspections · {opTaskAppliedFrom || '—'} to {opTaskAppliedTo || '—'}
+                            Morning &amp; Evening inspections · today
                             {' · '}
                             {opTaskStatus.assignmentCount} active client{opTaskStatus.assignmentCount === 1 ? '' : 's'}
                             {!opTaskLogsLoading && opActiveAssignments.length > 0
@@ -9454,9 +10151,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               : ''}
                           </p>
                         </div>
-                        <span className={`do-gmail-status-pill ${opTaskStatus.statusTone}`}>
-                          {opTaskStatus.statusLabel}
-                        </span>
+                        <div className="do-map-edit-actions">
+                          <button
+                            type="button"
+                            className="do-gmail-text-btn"
+                            onClick={() => loadOpTaskStatus(op, opTaskAppliedFrom, opTaskAppliedTo)}
+                            disabled={opTaskLogsLoading}
+                          >
+                            {opTaskLogsLoading ? 'Loading…' : 'Refresh'}
+                          </button>
+                          <span className={`do-gmail-status-pill ${opTaskStatus.statusTone}`}>
+                            {opTaskStatus.statusLabel}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="do-gmail-task-stats">
@@ -9472,55 +10179,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           <strong>{opTaskStatus.overdue}</strong>
                           <span>Overdue</span>
                         </div>
-                      </div>
-
-                      <div className="do-gmail-filters do-gmail-task-filters">
-                        <input
-                          className="sa-op-filter"
-                          type="date"
-                          value={opTaskFromDate}
-                          max={opTaskToDate || undefined}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setOpTaskFromDate(val);
-                            if (val && opTaskToDate && val > opTaskToDate) setOpTaskToDate(val);
-                          }}
-                          title="From date"
-                        />
-                        <input
-                          className="sa-op-filter"
-                          type="date"
-                          value={opTaskToDate}
-                          min={opTaskFromDate || undefined}
-                          max={localDateStr()}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setOpTaskToDate(val);
-                            if (val && opTaskFromDate && val < opTaskFromDate) setOpTaskFromDate(val);
-                          }}
-                          title="To date"
-                        />
-                        <button
-                          type="button"
-                          className="do-gmail-text-btn"
-                          onClick={() => {
-                            setOpTaskAppliedFrom(opTaskFromDate);
-                            setOpTaskAppliedTo(opTaskToDate);
-                            setOpTaskFilter('all');
-                            loadOpTaskStatus(op, opTaskFromDate, opTaskToDate);
-                          }}
-                          disabled={opTaskLogsLoading}
-                        >
-                          {opTaskLogsLoading ? 'Loading…' : 'Apply'}
-                        </button>
-                        <button
-                          type="button"
-                          className="do-gmail-text-btn"
-                          onClick={() => loadOpTaskStatus(op, opTaskAppliedFrom, opTaskAppliedTo)}
-                          disabled={opTaskLogsLoading}
-                        >
-                          Refresh
-                        </button>
                       </div>
 
                       {opTaskLogsError && (
@@ -9562,7 +10220,24 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               <div className="do-gmail-inbox-head do-gmail-task-head">
                                 <span>Date</span>
                                 <span>Shift</span>
-                                <span>Chamber / Client</span>
+                                <span className="do-gmail-task-chamber-col">
+                                  <label className="do-gmail-task-chamber-filter">
+                                    <span className="do-gmail-task-chamber-filter-label">Chamber</span>
+                                    <select
+                                      value={opTaskChamberFilter}
+                                      onChange={(e) => setOpTaskChamberFilter(e.target.value)}
+                                      title="Filter by chamber"
+                                      aria-label="Filter by chamber"
+                                    >
+                                      <option value="all">All</option>
+                                      {opTaskChamberOptions.map((chamberName) => (
+                                        <option key={chamberName} value={chamberName}>
+                                          {chamberName}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                </span>
                                 <span style={{ textAlign: 'right' }}>Status</span>
                                 <span style={{ textAlign: 'right' }}>View</span>
                               </div>
@@ -9600,7 +10275,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               </div>
                               {filteredOpTasks.length > 120 && (
                                 <div className="do-gmail-empty">
-                                  Showing first 120 of {filteredOpTasks.length} tasks — narrow the date range to see more.
+                                  Showing first 120 of {filteredOpTasks.length} tasks — narrow the filters to see more.
                                 </div>
                               )}
                             </>
@@ -9608,36 +10283,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </>
                       )}
                     </div>
+                    )}
 
-                    <div className="do-gmail-panel">
+                    {opProfileSection === 'mappings' && (
+                    <div className="do-gmail-panel do-map-panel">
                       <div className="do-gmail-toolbar">
                         <div>
                           <h3 className="do-gmail-title">Chamber & Client Mappings</h3>
                           <p className="do-gmail-sub">
                             {op.warehouse_name
-                              ? `${op.warehouse_name} · ${opDisplayChambers.length} chamber${opDisplayChambers.length === 1 ? '' : 's'} in use (limit ${op.chamber_limit || 4})${opMasterEditMode ? ' · editing this operator master' : ''}`
+                              ? `Which clients sit in which chamber at ${op.warehouse_name}`
                               : 'Configure warehouse access to see chamber mappings.'}
                           </p>
                         </div>
-                        {op.warehouse_name ? (
-                          <button
-                            type="button"
-                            className={`do-gmail-text-btn${opMasterEditMode ? ' active' : ''}`}
-                            onClick={() => {
-                              setOpMappingsError('');
-                              setOpMappingsSuccess('');
-                              if (opMasterEditMode) {
-                                finishOpMasterEdit(op);
-                                return;
-                              }
-                              setOpMasterSessionChanges([]);
-                              setOpMasterEditMode(true);
-                            }}
-                          >
-                            <Edit size={12} />
-                            {opMasterEditMode ? 'Done' : 'Edit Master'}
-                          </button>
-                        ) : null}
                       </div>
 
                       {opMappingsError && (
@@ -9652,22 +10310,112 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       ) : opMappingsLoading ? (
                         <SaDataLoading label={`Loading mappings for ${op.warehouse_name}…`} compact />
                       ) : (
+                        (() => {
+                          const mappingSummary = opDisplayChambers.reduce(
+                            (acc, chamberRow) => {
+                              const chamberAssignments = opMappings.filter((m) =>
+                                assignmentMatchesDisplayChamber(m, chamberRow)
+                              );
+                              const activeClients = uniqueClientsByName(
+                                chamberAssignments.filter((m) => !isDeactiveAssignment(m))
+                              );
+                              const activeNames = new Set(
+                                activeClients.map((m) => String(m.client_name || '').trim().toLowerCase())
+                              );
+                              const deactiveClients = uniqueClientsByName(
+                                chamberAssignments.filter(
+                                  (m) =>
+                                    isDeactiveAssignment(m) &&
+                                    !activeNames.has(String(m.client_name || '').trim().toLowerCase())
+                                )
+                              );
+                              acc.active += activeClients.length;
+                              acc.deactive += deactiveClients.length;
+                              return acc;
+                            },
+                            { active: 0, deactive: 0 }
+                          );
+                          const chamberLimit = op.chamber_limit || 4;
+                          return (
                         <>
-                          <div className={`do-gmail-inbox-head${opMasterEditMode ? ' editing' : ''}`}>
-                            <span>Client</span>
-                            <span>Chamber</span>
-                            <span>Type</span>
-                            <span style={{ textAlign: 'right' }}>Status</span>
-                            {opMasterEditMode ? <span /> : null}
+                          <div className="do-map-summary">
+                            <div className="do-map-summary-item">
+                              <span>Warehouse</span>
+                              <strong>{op.warehouse_name}</strong>
+                            </div>
+                            <div className="do-map-summary-item">
+                              <span>Chambers used</span>
+                              <strong>
+                                {opDisplayChambers.length}
+                                <em> / {chamberLimit}</em>
+                              </strong>
+                            </div>
+                            <div className="do-map-summary-item">
+                              <span>Active clients</span>
+                              <strong className="do-map-tone-good">{mappingSummary.active}</strong>
+                            </div>
+                            <div className="do-map-summary-item">
+                              <span>Deactive clients</span>
+                              <strong className="do-map-tone-bad">{mappingSummary.deactive}</strong>
+                            </div>
                           </div>
+
+                          {opMasterEditMode ? (
+                            <div className="do-map-edit-banner">
+                              Editing master — add a chamber below, or edit/delete on each chamber card. Deletes have 30s Undo.
+                            </div>
+                          ) : (
+                            <div className="do-map-hint">
+                              Each block is one chamber. Use <strong>Edit Master</strong> on a chamber to add another chamber, update type, or manage clients.
+                            </div>
+                          )}
+
+                          {opMasterEditMode ? (
+                            <div className="do-map-add-chamber">
+                              <div className="do-map-add-chamber-title">Add chamber</div>
+                              <div className="do-map-add-chamber-row">
+                                <input
+                                  type="text"
+                                  placeholder={`e.g. Chamber ${(Number(op.chamber_limit) || 4) + 1}`}
+                                  value={opNewChamberName}
+                                  onChange={(e) => setOpNewChamberName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleAddOpChamber(op);
+                                    }
+                                  }}
+                                />
+                                <select
+                                  value={opNewChamberType}
+                                  onChange={(e) => setOpNewChamberType(e.target.value)}
+                                >
+                                  <option value="Frozen">Frozen</option>
+                                  <option value="Chilled">Chilled</option>
+                                  <option value="Dry">Dry</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  className="do-gmail-add-btn"
+                                  disabled={addingOpChamber}
+                                  onClick={() => handleAddOpChamber(op)}
+                                >
+                                  {addingOpChamber ? 'Adding…' : 'Add chamber'}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+
                           {opDisplayChambers.length === 0 ? (
                             <div className="do-gmail-empty">
                               {opMasterEditMode
-                                ? 'No chambers in use for this operator yet. The DO can request a chamber add from the mobile app; after approval it will appear here.'
-                                : 'No chambers assigned yet. Data Operator can request a chamber add from the mobile app.'}
+                                ? 'No chambers yet — use Add chamber above.'
+                                : 'No chambers assigned yet. Open Edit Master to add one, or approve a DO add request from mobile.'}
                             </div>
-                          ) : null}
-                          {opDisplayChambers.map((chamberRow) => {
+                          ) : (
+                            <div className="do-map-chambers">
+                              {opDisplayChambers.map((chamberRow, chamberIdx) => {
                             const chamberNum = chamberRow.chamberNum;
                             const chamberName = chamberRow.name;
                             const chamberAssignments = opMappings.filter((m) =>
@@ -9687,30 +10435,85 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               'Frozen';
                             const resolvedChamberId = chamberRow.id;
                             const typeEditKey = chamberNum != null ? chamberNum : `id-${resolvedChamberId}`;
-                            const rows = [
-                              ...activeClients.map((assign) => ({ ...assign, _status: 'Active' })),
-                              ...deactiveClients.map((assign) => ({ ...assign, _status: 'Deactive' }))
-                            ];
+                            const typeTone =
+                              String(chamberType).toLowerCase() === 'chilled'
+                                ? 'chilled'
+                                : String(chamberType).toLowerCase() === 'dry'
+                                  ? 'dry'
+                                  : String(chamberType).toLowerCase() === 'other'
+                                    ? 'other'
+                                    : 'frozen';
                             return (
-                              <div key={chamberRow.slotKey}>
-                                <div className="do-gmail-section-label do-gmail-chamber-label">
-                                  <span>
-                                    {chamberName} · Type: {chamberType} · {activeClients.length} active, {deactiveClients.length} deactive
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="do-gmail-chamber-delete"
-                                    disabled={deletingOpChamberId === resolvedChamberId}
-                                    title={`Delete ${chamberName}`}
-                                    onClick={() => handleDeleteOpChamber(op, resolvedChamberId, chamberName)}
-                                  >
-                                    <Trash2 size={13} />
-                                    {deletingOpChamberId === resolvedChamberId ? 'Deleting…' : 'Delete chamber'}
-                                  </button>
+                              <div key={chamberRow.slotKey} className="do-map-chamber">
+                                <div className="do-map-chamber-head">
+                                  <div className="do-map-chamber-title">
+                                    <span className="do-map-chamber-index">{chamberIdx + 1}</span>
+                                    <div>
+                                      <strong>{chamberName}</strong>
+                                      <p>
+                                        {activeClients.length} active
+                                        {deactiveClients.length > 0 ? ` · ${deactiveClients.length} deactive` : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="do-map-chamber-meta">
+                                    <span className={`do-map-type-pill ${typeTone}`}>{chamberType}</span>
+                                    {opMasterEditMode ? (
+                                      <div className="do-map-edit-actions">
+                                        <button
+                                          type="button"
+                                          className="do-gmail-text-btn"
+                                          onClick={cancelOpMasterEdit}
+                                        >
+                                          <X size={12} />
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="do-gmail-text-btn active"
+                                          onClick={() => finishOpMasterEdit(op)}
+                                        >
+                                          <Check size={12} />
+                                          Done
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="do-gmail-chamber-delete"
+                                          disabled={
+                                            !!pendingMasterDelete &&
+                                            pendingMasterDelete.kind === 'chamber' &&
+                                            Number(pendingMasterDelete.chamberId) === Number(resolvedChamberId)
+                                          }
+                                          title={`Delete ${chamberName}`}
+                                          onClick={() =>
+                                            handleDeleteOpChamber(op, resolvedChamberId, chamberName)
+                                          }
+                                        >
+                                          <Trash2 size={13} />
+                                          Delete
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="do-gmail-text-btn"
+                                        onClick={() => {
+                                          setOpMappingsError('');
+                                          setOpMappingsSuccess('');
+                                          setOpMasterSessionChanges([]);
+                                          setOpMasterEditMode(true);
+                                        }}
+                                      >
+                                        <Edit size={12} />
+                                        Edit Master
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
+
                                 {opMasterEditMode ? (
-                                  <div className="do-gmail-type-row">
-                                    <span>Update type</span>
+                                  <div className="do-gmail-type-row do-map-type-row">
+                                    <span>Chamber type</span>
                                     <select
                                       value={
                                         (chamberNum != null ? newChamberTypes[chamberNum] : newChamberTypes[typeEditKey]) ||
@@ -9754,74 +10557,120 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     </button>
                                   </div>
                                 ) : null}
-                                {rows.length === 0 && !opMasterEditMode ? (
-                                  <div className="do-gmail-empty">No clients in this chamber.</div>
-                                ) : rows.map((assign, aIdx) => (
-                                  <div
-                                    key={`${assign._status}-${assign.client_name}-${aIdx}`}
-                                    className={`do-gmail-inbox-row${assign._status === 'Deactive' ? ' deactive' : ''}${opMasterEditMode ? ' editing' : ''}`}
-                                  >
-                                    <span className="do-gmail-sender">{assign.client_name}</span>
-                                    <span className="do-gmail-snippet">{chamberName}</span>
-                                    <span className="do-gmail-snippet">{assign.chamber_type || chamberType}</span>
-                                    <span className={`do-gmail-status ${assign._status === 'Deactive' ? 'deactive' : 'active'}`}>
-                                      {assign._status}
-                                    </span>
-                                    {opMasterEditMode ? (
-                                      assign._status === 'Active' ? (
-                                        <button
-                                          type="button"
-                                          className="do-gmail-row-action"
-                                          title={`Remove ${assign.client_name}`}
-                                          onClick={() => handleDeleteOpMapping(op, assign.chamber_id || resolvedChamberId, assign.client_name, chamberName)}
+
+                                <div className="do-map-clients">
+                                  {activeClients.length === 0 && deactiveClients.length === 0 && !opMasterEditMode ? (
+                                    <div className="do-map-empty-clients">No clients in this chamber yet.</div>
+                                  ) : null}
+
+                                  {activeClients.length > 0 ? (
+                                    <div className="do-map-client-group">
+                                      <div className="do-map-client-group-label">
+                                        <span className="do-map-dot good" />
+                                        Active clients
+                                      </div>
+                                      {activeClients.map((assign, aIdx) => (
+                                        <div
+                                          key={`active-${assign.client_name}-${aIdx}`}
+                                          className={`do-map-client-row${opMasterEditMode ? ' editing' : ''}`}
                                         >
-                                          <Trash2 size={14} />
-                                        </button>
-                                      ) : <span />
-                                    ) : null}
-                                  </div>
-                                ))}
-                                {opMasterEditMode ? (
-                                  <div className="do-gmail-add-row">
-                                    <input
-                                      type="text"
-                                      placeholder={`Add client to ${chamberName}`}
-                                      value={newClientInputs[typeEditKey] || ''}
-                                      onChange={(e) => setNewClientInputs((prev) => ({ ...prev, [typeEditKey]: e.target.value }))}
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter') {
-                                          e.preventDefault();
-                                          handleAddOpMapping(op, resolvedChamberId, chamberName, typeEditKey);
+                                          <span className="do-map-client-name">{assign.client_name}</span>
+                                          <span className="do-gmail-status-pill good">Active</span>
+                                          {opMasterEditMode ? (
+                                            <button
+                                              type="button"
+                                              className="do-gmail-row-action"
+                                              title={`Remove ${assign.client_name}`}
+                                              onClick={() =>
+                                                handleDeleteOpMapping(
+                                                  op,
+                                                  assign.chamber_id || resolvedChamberId,
+                                                  assign.client_name,
+                                                  chamberName
+                                                )
+                                              }
+                                            >
+                                              <Trash2 size={14} />
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : null}
+
+                                  {deactiveClients.length > 0 ? (
+                                    <div className="do-map-client-group">
+                                      <div className="do-map-client-group-label">
+                                        <span className="do-map-dot bad" />
+                                        Deactive clients
+                                      </div>
+                                      {deactiveClients.map((assign, aIdx) => (
+                                        <div
+                                          key={`deactive-${assign.client_name}-${aIdx}`}
+                                          className="do-map-client-row deactive"
+                                        >
+                                          <span className="do-map-client-name">{assign.client_name}</span>
+                                          <span className="do-gmail-status-pill muted">Deactive</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : null}
+
+                                  {opMasterEditMode ? (
+                                    <div className="do-gmail-add-row do-map-add-row">
+                                      <input
+                                        type="text"
+                                        placeholder={`Add client to ${chamberName}`}
+                                        value={newClientInputs[typeEditKey] || ''}
+                                        onChange={(e) =>
+                                          setNewClientInputs((prev) => ({ ...prev, [typeEditKey]: e.target.value }))
                                         }
-                                      }}
-                                    />
-                                    <button
-                                      type="button"
-                                      className="do-gmail-add-btn"
-                                      disabled={
-                                        addingMappingChamberId === resolvedChamberId ||
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleAddOpMapping(op, resolvedChamberId, chamberName, typeEditKey);
+                                          }
+                                        }}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="do-gmail-add-btn"
+                                        disabled={
+                                          addingMappingChamberId === resolvedChamberId ||
+                                          addingMappingChamberId === typeEditKey
+                                        }
+                                        onClick={() =>
+                                          handleAddOpMapping(op, resolvedChamberId, chamberName, typeEditKey)
+                                        }
+                                      >
+                                        {addingMappingChamberId === resolvedChamberId ||
                                         addingMappingChamberId === typeEditKey
-                                      }
-                                      onClick={() => handleAddOpMapping(op, resolvedChamberId, chamberName, typeEditKey)}
-                                    >
-                                      {addingMappingChamberId === resolvedChamberId || addingMappingChamberId === typeEditKey
-                                        ? 'Adding...'
-                                        : 'Add client'}
-                                    </button>
-                                  </div>
-                                ) : null}
+                                          ? 'Adding...'
+                                          : 'Add client'}
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
                               </div>
                             );
-                          })}
+                              })}
+                            </div>
+                          )}
                         </>
+                          );
+                        })()
                       )}
                     </div>
+                    )}
 
+                    {opProfileSection === 'master_activity' && (
                     <div className="do-gmail-panel">
                       <div className="do-gmail-toolbar">
                         <div>
                           <h3 className="do-gmail-title">Master Setup Activity</h3>
-                          <p className="do-gmail-sub">Chamber, client and type changes from Master Setup</p>
+                          <p className="do-gmail-sub">
+                            Chamber, client and type changes · {opMasterAppliedFrom || '—'} to {opMasterAppliedTo || '—'}
+                          </p>
                         </div>
                         <button
                           type="button"
@@ -9833,16 +10682,78 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </button>
                       </div>
 
+                      <div className="do-gmail-filters do-gmail-task-filters">
+                        <input
+                          className="sa-op-filter"
+                          type="date"
+                          value={opMasterFromDate}
+                          max={opMasterToDate || undefined}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setOpMasterFromDate(val);
+                            if (val && opMasterToDate && val > opMasterToDate) setOpMasterToDate(val);
+                          }}
+                          title="From date"
+                        />
+                        <input
+                          className="sa-op-filter"
+                          type="date"
+                          value={opMasterToDate}
+                          min={opMasterFromDate || undefined}
+                          max={localDateStr()}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setOpMasterToDate(val);
+                            if (val && opMasterFromDate && val < opMasterFromDate) setOpMasterFromDate(val);
+                          }}
+                          title="To date"
+                        />
+                        <button
+                          type="button"
+                          className="do-gmail-text-btn"
+                          onClick={() => {
+                            setOpMasterAppliedFrom(opMasterFromDate);
+                            setOpMasterAppliedTo(opMasterToDate);
+                            setOpMasterActivityFilter('all');
+                            setOpMasterActivityPage(1);
+                            loadOpMasterActivities(op.email);
+                          }}
+                          disabled={opMasterActivitiesLoading}
+                        >
+                          {opMasterActivitiesLoading ? 'Loading…' : 'Apply'}
+                        </button>
+                        <button
+                          type="button"
+                          className="do-gmail-text-btn"
+                          onClick={() => loadOpMasterActivities(op.email)}
+                          disabled={opMasterActivitiesLoading}
+                        >
+                          Refresh
+                        </button>
+                      </div>
+
                       {opMasterActivitiesError && (
                         <div className="do-gmail-empty" style={{ color: '#c5221f' }}>{opMasterActivitiesError}</div>
                       )}
 
-                      {profileMasterActivities.length > 0 && (
+                      {(() => {
+                        const dateFilteredMasterActivities = profileMasterActivities.filter((act) => {
+                          if (!opMasterAppliedFrom && !opMasterAppliedTo) return true;
+                          const when = act?.created_at ? new Date(act.created_at) : null;
+                          if (!when || Number.isNaN(when.getTime())) return true;
+                          const day = localDateStr(when);
+                          if (opMasterAppliedFrom && day < opMasterAppliedFrom) return false;
+                          if (opMasterAppliedTo && day > opMasterAppliedTo) return false;
+                          return true;
+                        });
+                        return (
+                      <>
+                      {dateFilteredMasterActivities.length > 0 && (
                         <div className="do-gmail-filters">
                           {MASTER_ACTIVITY_FILTERS.map((item) => {
                             const count = item.id === 'all'
-                              ? profileMasterActivities.length
-                              : profileMasterActivities.filter((act) => masterActivityMatchesFilter(act, item.id)).length;
+                              ? dateFilteredMasterActivities.length
+                              : dateFilteredMasterActivities.filter((act) => masterActivityMatchesFilter(act, item.id)).length;
                             const active = opMasterActivityFilter === item.id;
                             return (
                               <button
@@ -9861,13 +10772,17 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         </div>
                       )}
 
-                      {opMasterActivitiesLoading && profileMasterActivities.length === 0 ? (
+                      {opMasterActivitiesLoading && dateFilteredMasterActivities.length === 0 ? (
                         <SaDataLoading label="Loading Master Setup activity…" compact />
-                      ) : profileMasterActivities.length === 0 ? (
-                        <div className="do-gmail-empty">No Master Setup changes yet for this operator.</div>
+                      ) : dateFilteredMasterActivities.length === 0 ? (
+                        <div className="do-gmail-empty">
+                          {profileMasterActivities.length === 0
+                            ? 'No Master Setup changes yet for this operator.'
+                            : 'No Master Setup activity in the selected date range.'}
+                        </div>
                       ) : (
                         (() => {
-                          const filteredActs = profileMasterActivities.filter((act) =>
+                          const filteredActs = dateFilteredMasterActivities.filter((act) =>
                             masterActivityMatchesFilter(act, opMasterActivityFilter)
                           );
                           if (filteredActs.length === 0) {
@@ -10000,7 +10915,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           );
                         })()
                       )}
+                      </>
+                        );
+                      })()}
                     </div>
+                    )}
                   </div>
                 );
               })()
@@ -10276,7 +11195,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                                     <button type="button" className="sa-op-icon-btn" onClick={() => startEditOperator(op)} title="Edit">
                                       <Edit size={14} />
                                     </button>
-                                    <button type="button" className="sa-op-icon-btn danger" onClick={() => handleDeleteOperator(op.id)} title="Revoke">
+                                    <button type="button" className="sa-op-icon-btn danger" onClick={() => handleDeleteOperator(op)} title="Revoke">
                                       <Trash2 size={14} />
                                     </button>
                                   </div>
@@ -10830,17 +11749,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <span className="profile-label">Created Time</span>
                         <span className="profile-value">{formatDateTimeStr(selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at)}</span>
                       </div>
-                      {getUpdateDiff(
-                        selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
-                        selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
-                      ) && (
-                        <div className="profile-item">
-                          <span className="profile-label">Last Updated Time</span>
-                          <span className="profile-value" style={{ color: '#0284c7', fontWeight: '800' }}>
-                            {formatDateTimeStr(selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at)}
-                          </span>
-                        </div>
-                      )}
+                      <div className="profile-item">
+                        <span className="profile-label">Last Updated Time</span>
+                        <span
+                          className="profile-value"
+                          style={
+                            formatUpdatedAtStr(
+                              selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
+                              selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
+                            ) !== '-'
+                              ? { color: '#0284c7', fontWeight: '800' }
+                              : undefined
+                          }
+                        >
+                          {formatUpdatedAtStr(
+                            selectedDetailLog.created_at || selectedDetailLog.inward_created_at || selectedDetailLog.outward_created_at,
+                            selectedDetailLog.updated_at || selectedDetailLog.inward_updated_at || selectedDetailLog.outward_updated_at
+                          )}
+                        </span>
+                      </div>
                       {(Number(selectedDetailLog.update_count) > 0 || selectedDetailLog.update_details) && (
                         <div className="profile-item" style={{ gridColumn: 'span 2' }}>
                           <span className="profile-label" style={{ color: 'var(--primary)', fontWeight: '800' }}>
@@ -11421,6 +12348,149 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           </div>
         </div>
       )}
+
+      {pendingLogDelete
+        ? createPortal(
+            <div className="sa-log-undo-toast" role="status">
+              <div className="sa-log-undo-head">
+                <span className="sa-log-undo-icon" aria-hidden>
+                  <Undo2 size={13} />
+                </span>
+                <div className="sa-log-undo-text">
+                  <strong>{pendingLogDelete.kindLabel}</strong> · <em>{pendingLogDelete.ref}</em> removed.
+                  <span className="sa-log-undo-timer">{pendingLogDelete.secondsLeft}s left</span>
+                </div>
+              </div>
+              <div className="sa-log-undo-actions">
+                <button type="button" className="sa-log-undo-btn" onClick={handleUndoLogDelete}>
+                  <Undo2 size={13} />
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  className="sa-log-undo-close"
+                  onClick={finalizePendingLogDelete}
+                  title="Dismiss — keep deleted"
+                  aria-label="Close undo"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {pendingOperatorDelete
+        ? createPortal(
+            <div className="sa-log-undo-toast" role="status">
+              <div className="sa-log-undo-head">
+                <span className="sa-log-undo-icon" aria-hidden>
+                  <Undo2 size={13} />
+                </span>
+                <div className="sa-log-undo-text">
+                  <strong>Operator</strong> · <em>{pendingOperatorDelete.label}</em> revoked.
+                  <span className="sa-log-undo-timer">{pendingOperatorDelete.secondsLeft}s left</span>
+                </div>
+              </div>
+              <div className="sa-log-undo-actions">
+                <button type="button" className="sa-log-undo-btn" onClick={handleUndoOperatorDelete}>
+                  <Undo2 size={13} />
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  className="sa-log-undo-close"
+                  onClick={finalizePendingOperatorDelete}
+                  title="Dismiss — keep revoked"
+                  aria-label="Close undo"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {pendingCustomerDelete
+        ? createPortal(
+            <div className="sa-log-undo-toast" role="status">
+              <div className="sa-log-undo-head">
+                <span className="sa-log-undo-icon" aria-hidden>
+                  <Undo2 size={13} />
+                </span>
+                <div className="sa-log-undo-text">
+                  <strong>Customer</strong> · <em>{pendingCustomerDelete.label}</em> revoked.
+                  <span className="sa-log-undo-timer">{pendingCustomerDelete.secondsLeft}s left</span>
+                </div>
+              </div>
+              <div className="sa-log-undo-actions">
+                <button type="button" className="sa-log-undo-btn" onClick={handleUndoCustomerDelete}>
+                  <Undo2 size={13} />
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  className="sa-log-undo-close"
+                  onClick={finalizePendingCustomerDelete}
+                  title="Dismiss — keep revoked"
+                  aria-label="Close undo"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {pendingMasterDelete
+        ? createPortal(
+            <div className="sa-log-undo-toast" role="status">
+              <div className="sa-log-undo-head">
+                <span className="sa-log-undo-icon" aria-hidden>
+                  <Undo2 size={13} />
+                </span>
+                <div className="sa-log-undo-text">
+                  {pendingMasterDelete.kind === 'chamber' ? (
+                    <>
+                      <strong>Chamber</strong> · <em>{pendingMasterDelete.label}</em> deleted.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Client</strong> · <em>{pendingMasterDelete.label}</em> removed
+                      {pendingMasterDelete.chamberName ? (
+                        <>
+                          {' '}
+                          from <em>{pendingMasterDelete.chamberName}</em>
+                        </>
+                      ) : null}
+                      .
+                    </>
+                  )}
+                  <span className="sa-log-undo-timer">{pendingMasterDelete.secondsLeft}s left</span>
+                </div>
+              </div>
+              <div className="sa-log-undo-actions">
+                <button type="button" className="sa-log-undo-btn" onClick={handleUndoMasterDelete}>
+                  <Undo2 size={13} />
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  className="sa-log-undo-close"
+                  onClick={finalizePendingMasterDelete}
+                  title="Dismiss — keep deleted"
+                  aria-label="Close undo"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }

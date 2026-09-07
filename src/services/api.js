@@ -569,6 +569,20 @@ export const updateChamber = async (id, data) => {
   return await res.json();
 };
 
+/** Super Admin: create a chamber (optionally for a DO warehouse). */
+export const createChamber = async (data) => {
+  const res = await fetch(`${API_BASE_URL}/chambers`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data || {})
+  });
+  if (!res.ok) {
+    throw new Error(await readApiError(res, 'Failed to create chamber.'));
+  }
+  return await res.json();
+};
+
 /** Super Admin: delete a chamber from master (client mappings deactivated). */
 export const deleteChamber = async (id, remark = '') => {
   const res = await fetch(`${API_BASE_URL}/chambers/${id}`, {

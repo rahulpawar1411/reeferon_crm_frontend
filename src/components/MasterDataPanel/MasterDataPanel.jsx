@@ -6,16 +6,20 @@
  * Master Setup: chambers + chamber_client_assignments).
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Building2,
   CheckCircle,
   Database,
-  Edit,
+  Edit3,
   Loader2,
-  Package,
+  Power,
+  PowerOff,
   RefreshCw,
   Search,
-  Users
+  Undo2,
+  Users,
+  X
 } from 'lucide-react';
 import {
   fetchMasterWarehouses,
@@ -32,9 +36,52 @@ import './MasterDataPanel.css';
 function StatusBadge({ active }) {
   const isActive = Number(active) !== 0;
   return (
-    <span className={`mdm-badge ${isActive ? 'active' : 'inactive'}`}>
+    <span
+      className={`mdm-badge ${isActive ? 'active' : 'inactive'}`}
+      title={isActive ? 'Shows in dropdowns for new work' : 'Hidden from dropdowns; history kept'}
+    >
+      <span className="mdm-badge-dot" aria-hidden />
       {isActive ? 'Active' : 'Inactive'}
     </span>
+  );
+}
+
+function DirectoryActions({ isActive, onEdit, onToggle, editLabel, toggleBusy }) {
+  return (
+    <div className="mdm-row-actions" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className="mdm-action-btn edit"
+        onClick={onEdit}
+        title={editLabel}
+      >
+        <Edit3 size={13} />
+        <span>Edit</span>
+      </button>
+      {Number(isActive) !== 0 ? (
+        <button
+          type="button"
+          className="mdm-action-btn inactive"
+          onClick={onToggle}
+          disabled={toggleBusy}
+          title="Hide from dropdowns — history stays"
+        >
+          <PowerOff size={13} />
+          <span>Inactive</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="mdm-action-btn active"
+          onClick={onToggle}
+          disabled={toggleBusy}
+          title="Show again in dropdowns"
+        >
+          <Power size={13} />
+          <span>Active</span>
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -60,6 +107,47 @@ export default function MasterDataPanel() {
   const [editingCl, setEditingCl] = useState(null);
   const [savingCl, setSavingCl] = useState(false);
   const clCodeManualRef = useRef(false);
+
+  const [togglingId, setTogglingId] = useState(null);
+  /** After Inactive: allow Undo for 30 seconds */
+  const [undoState, setUndoState] = useState(null);
+  const undoTimerRef = useRef(null);
+  const undoTickRef = useRef(null);
+
+  const clearUndoTimers = () => {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    if (undoTickRef.current) {
+      clearInterval(undoTickRef.current);
+      undoTickRef.current = null;
+    }
+  };
+
+  const dismissUndo = () => {
+    clearUndoTimers();
+    setUndoState(null);
+  };
+
+  const startUndoWindow = (payload) => {
+    clearUndoTimers();
+    setUndoState({ ...payload, secondsLeft: 30 });
+    undoTickRef.current = setInterval(() => {
+      setUndoState((prev) => {
+        if (!prev) return null;
+        const next = prev.secondsLeft - 1;
+        if (next <= 0) return prev;
+        return { ...prev, secondsLeft: next };
+      });
+    }, 1000);
+    undoTimerRef.current = setTimeout(() => {
+      clearUndoTimers();
+      setUndoState(null);
+    }, 30000);
+  };
+
+  useEffect(() => () => clearUndoTimers(), []);
 
   const load = async () => {
     setLoading(true);
@@ -228,16 +316,59 @@ export default function MasterDataPanel() {
   const toggleActive = async (type, row) => {
     setError('');
     setSuccess('');
+    setTogglingId(`${type}-${row.id}`);
+    const wasActive = Number(row.is_active) !== 0;
+    const nextActive = wasActive ? 0 : 1;
     try {
       if (type === 'warehouse') {
-        await updateMasterWarehouse(row.id, { is_active: Number(row.is_active) ? 0 : 1 });
+        await updateMasterWarehouse(row.id, { is_active: nextActive });
       } else {
-        await updateMasterClient(row.id, { is_active: Number(row.is_active) ? 0 : 1 });
+        await updateMasterClient(row.id, { is_active: nextActive });
       }
-      setSuccess(Number(row.is_active) ? 'Marked inactive — history is kept.' : 'Marked active again.');
+
+      if (wasActive) {
+        // Soft-delete (inactive) → offer Undo for 30s
+        const label =
+          type === 'warehouse'
+            ? row.warehouse_name || row.warehouse_code || 'Warehouse'
+            : row.client_name || row.client_code || 'Client';
+        setSuccess('');
+        startUndoWindow({
+          type,
+          id: row.id,
+          label,
+          code: type === 'warehouse' ? row.warehouse_code : row.client_code
+        });
+      } else {
+        dismissUndo();
+        setSuccess('Set to Active — available in dropdowns again.');
+      }
       await load();
     } catch (err) {
       setError(err.message || 'Failed to update status.');
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  const handleUndoInactive = async () => {
+    if (!undoState) return;
+    const { type, id, label } = undoState;
+    setTogglingId(`undo-${type}-${id}`);
+    setError('');
+    try {
+      if (type === 'warehouse') {
+        await updateMasterWarehouse(id, { is_active: 1 });
+      } else {
+        await updateMasterClient(id, { is_active: 1 });
+      }
+      dismissUndo();
+      setSuccess(`Undo successful — “${label}” is Active again.`);
+      await load();
+    } catch (err) {
+      setError(err.message || 'Undo failed. Please set Active manually.');
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -295,6 +426,49 @@ export default function MasterDataPanel() {
 
           {error ? <div className="sa-op-banner error">{error}</div> : null}
           {success ? <div className="sa-op-banner success">{success}</div> : null}
+          {undoState
+            ? createPortal(
+                <div className="sa-log-undo-toast mdm-undo-toast" role="status">
+                  <div className="sa-log-undo-head">
+                    <span className="sa-log-undo-icon" aria-hidden>
+                      <Undo2 size={13} />
+                    </span>
+                    <div className="sa-log-undo-text">
+                      <strong>{undoState.label}</strong>
+                      {undoState.code ? <> · {undoState.code}</> : null}
+                      {' '}inactive.
+                      <span className="sa-log-undo-timer">{undoState.secondsLeft}s left</span>
+                    </div>
+                  </div>
+                  <div className="sa-log-undo-actions">
+                    <button
+                      type="button"
+                      className="sa-log-undo-btn"
+                      onClick={handleUndoInactive}
+                      disabled={!!togglingId}
+                    >
+                      {togglingId?.startsWith('undo-') ? (
+                        <Loader2 size={13} className="spin" />
+                      ) : (
+                        <Undo2 size={13} />
+                      )}
+                      Undo
+                    </button>
+                    <button
+                      type="button"
+                      className="sa-log-undo-close"
+                      onClick={dismissUndo}
+                      title="Dismiss — keep inactive"
+                      aria-label="Close undo"
+                      disabled={!!togglingId}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </div>,
+                document.body
+              )
+            : null}
 
           {tab === 'warehouses' ? (
             <form className="sa-op-form" onSubmit={handleSaveWarehouse}>
@@ -433,8 +607,8 @@ export default function MasterDataPanel() {
               </h2>
               <p className="sa-op-sub">
                 {tab === 'warehouses'
-                  ? `${filteredWarehouses.length} warehouse${filteredWarehouses.length === 1 ? '' : 's'} · search, edit or change status`
-                  : `${filteredClients.length} client${filteredClients.length === 1 ? '' : 's'} · search, edit or change status`}
+                  ? `${filteredWarehouses.length} warehouse${filteredWarehouses.length === 1 ? '' : 's'} in directory`
+                  : `${filteredClients.length} client${filteredClients.length === 1 ? '' : 's'} in directory`}
               </p>
             </div>
             <div className="sa-op-dir-tools">
@@ -463,12 +637,42 @@ export default function MasterDataPanel() {
               </div>
             ) : (
               <div className="sa-op-inbox">
+                <div className="mdm-dir-legend" role="note">
+                  <div className="mdm-dir-legend-item edit">
+                    <span className="mdm-dir-legend-icon" aria-hidden>
+                      <Edit3 size={12} />
+                    </span>
+                    <div>
+                      <strong>Edit</strong>
+                      <em>Change details</em>
+                    </div>
+                  </div>
+                  <div className="mdm-dir-legend-item active">
+                    <span className="mdm-dir-legend-icon" aria-hidden>
+                      <Power size={12} />
+                    </span>
+                    <div>
+                      <strong>Active</strong>
+                      <em>Show in dropdowns</em>
+                    </div>
+                  </div>
+                  <div className="mdm-dir-legend-item inactive">
+                    <span className="mdm-dir-legend-icon" aria-hidden>
+                      <PowerOff size={12} />
+                    </span>
+                    <div>
+                      <strong>Inactive</strong>
+                      <em>Hide from new work · keep history</em>
+                    </div>
+                  </div>
+                </div>
                 {filteredWarehouses.map((row) => {
                   const initials = String(row.warehouse_code || row.warehouse_name || 'WH')
                     .slice(0, 2)
                     .toUpperCase();
+                  const inactive = Number(row.is_active) === 0;
                   return (
-                    <div key={row.id} className="sa-op-inbox-row">
+                    <div key={row.id} className={`sa-op-inbox-row mdm-dir-row${inactive ? ' is-inactive' : ''}`}>
                       <button
                         type="button"
                         className="sa-op-inbox-main"
@@ -486,24 +690,13 @@ export default function MasterDataPanel() {
                           {row.created_at ? new Date(row.created_at).toLocaleDateString('en-GB') : '—'}
                         </span>
                       </button>
-                      <div className="sa-op-row-actions">
-                        <button
-                          type="button"
-                          className="sa-op-icon-btn"
-                          onClick={() => startEditWarehouse(row)}
-                          title="Edit"
-                        >
-                          <Edit size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className="sa-op-icon-btn"
-                          onClick={() => toggleActive('warehouse', row)}
-                          title={Number(row.is_active) ? 'Mark inactive' : 'Reactivate'}
-                        >
-                          {Number(row.is_active) ? <Package size={14} /> : <CheckCircle size={14} />}
-                        </button>
-                      </div>
+                      <DirectoryActions
+                        isActive={row.is_active}
+                        onEdit={() => startEditWarehouse(row)}
+                        onToggle={() => toggleActive('warehouse', row)}
+                        editLabel="Edit warehouse name / city"
+                        toggleBusy={togglingId === `warehouse-${row.id}`}
+                      />
                     </div>
                   );
                 })}
@@ -516,12 +709,42 @@ export default function MasterDataPanel() {
             </div>
           ) : (
             <div className="sa-op-inbox">
+              <div className="mdm-dir-legend" role="note">
+                  <div className="mdm-dir-legend-item edit">
+                    <span className="mdm-dir-legend-icon" aria-hidden>
+                      <Edit3 size={12} />
+                    </span>
+                    <div>
+                      <strong>Edit</strong>
+                      <em>Change details</em>
+                    </div>
+                  </div>
+                  <div className="mdm-dir-legend-item active">
+                    <span className="mdm-dir-legend-icon" aria-hidden>
+                      <Power size={12} />
+                    </span>
+                    <div>
+                      <strong>Active</strong>
+                      <em>Show in dropdowns</em>
+                    </div>
+                  </div>
+                  <div className="mdm-dir-legend-item inactive">
+                    <span className="mdm-dir-legend-icon" aria-hidden>
+                      <PowerOff size={12} />
+                    </span>
+                    <div>
+                      <strong>Inactive</strong>
+                      <em>Hide from new work · keep history</em>
+                    </div>
+                  </div>
+                </div>
               {filteredClients.map((row) => {
                 const initials = String(row.client_code || row.client_name || 'CL')
                   .slice(0, 2)
                   .toUpperCase();
+                const inactive = Number(row.is_active) === 0;
                 return (
-                  <div key={row.id} className="sa-op-inbox-row">
+                  <div key={row.id} className={`sa-op-inbox-row mdm-dir-row${inactive ? ' is-inactive' : ''}`}>
                     <button
                       type="button"
                       className="sa-op-inbox-main"
@@ -541,24 +764,13 @@ export default function MasterDataPanel() {
                         {row.created_at ? new Date(row.created_at).toLocaleDateString('en-GB') : '—'}
                       </span>
                     </button>
-                    <div className="sa-op-row-actions">
-                      <button
-                        type="button"
-                        className="sa-op-icon-btn"
-                        onClick={() => startEditClient(row)}
-                        title="Edit"
-                      >
-                        <Edit size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="sa-op-icon-btn"
-                        onClick={() => toggleActive('client', row)}
-                        title={Number(row.is_active) ? 'Mark inactive' : 'Reactivate'}
-                      >
-                        {Number(row.is_active) ? <Package size={14} /> : <CheckCircle size={14} />}
-                      </button>
-                    </div>
+                    <DirectoryActions
+                      isActive={row.is_active}
+                      onEdit={() => startEditClient(row)}
+                      onToggle={() => toggleActive('client', row)}
+                      editLabel="Edit client name / warehouse link"
+                      toggleBusy={togglingId === `client-${row.id}`}
+                    />
                   </div>
                 );
               })}

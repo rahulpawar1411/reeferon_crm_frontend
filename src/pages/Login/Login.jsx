@@ -103,7 +103,13 @@ export default function Login({ onLoginSuccess }) {
         {/* Brand Header */}
         <div className="login-brand-header">
           <Logo compact={false} />
-          <p className="login-subtitle">ReeferON Daily Operations Portal</p>
+          <div className="login-vista-block">
+            <p className="login-vista-name">VISTA</p>
+            <p className="login-vista-line">
+              Visibility · Inspection · Stock · Trust · Audit
+            </p>
+            <p className="login-subtitle">ReeferON Cold Chain Platform</p>
+          </div>
         </div>
 
         {errorMsg && (

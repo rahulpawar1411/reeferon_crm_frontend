@@ -176,13 +176,17 @@ export default function LogProfileDetailModal({
                   <ProfileField label="Warehouse Facility" value={log.warehouse_name || '-'} />
                   <ProfileField label="Recorded By Operator" value={showOperator(log.operator_email)} />
                   <ProfileField label="Created Time" value={formatDateTimeStr(created)} />
-                  {getUpdateDiff(created, updated) && (
-                    <ProfileField
-                      label="Last Updated Time"
-                      value={formatDateTimeStr(updated)}
-                      valueStyle={{ color: '#0284c7', fontWeight: 800 }}
-                    />
-                  )}
+                  <ProfileField
+                    label="Last Updated Time"
+                    value={
+                      getUpdateDiff(created, updated) ? formatDateTimeStr(updated) : '-'
+                    }
+                    valueStyle={
+                      getUpdateDiff(created, updated)
+                        ? { color: '#0284c7', fontWeight: 800 }
+                        : undefined
+                    }
+                  />
                   {(Number(log.update_count) > 0 || log.update_details) && (
                     <ProfileField
                       label="Last Updated Details"
