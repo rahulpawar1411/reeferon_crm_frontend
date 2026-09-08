@@ -558,6 +558,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  // ~80% UI scale (same feel as browser zoom out to 80%)
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add('sa-ui-zoom-80');
+    return () => root.classList.remove('sa-ui-zoom-80');
+  }, []);
+
   useEffect(() => {
     localStorage.setItem('super_admin_active_menu', activeMenu);
   }, [activeMenu]);

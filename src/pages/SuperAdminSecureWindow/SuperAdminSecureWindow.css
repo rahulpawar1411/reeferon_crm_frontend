@@ -3,6 +3,21 @@
    Exact match with DO Operator window theme variables, sizing and layouts.
    ==================================================================== */
 
+/* Match ~80% browser zoom for denser Super Admin layout (modals/portals included) */
+html.sa-ui-zoom-80 {
+  zoom: 0.8;
+}
+
+/* Zoom shrinks 100vh visually — stretch sidebar to fill the real window height */
+html.sa-ui-zoom-80 .app-container > aside.do-sidebar,
+html.sa-ui-zoom-80 .secure-sidebar {
+  top: 0;
+  bottom: 0;
+  height: calc(100vh / 0.8);
+  min-height: calc(100vh / 0.8);
+  max-height: calc(100vh / 0.8);
+}
+
 .secure-viewport-wrapper {
   display: flex;
   width: 100vw;
@@ -844,13 +859,16 @@
   position: fixed;
   top: 0;
   left: 0;
+  bottom: 0;
   width: var(--sidebar-width);
   height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   overflow: hidden;
   z-index: 120;
+  box-sizing: border-box;
 }
 
 .app-container > aside.do-sidebar .secure-sidebar-top {
@@ -1139,8 +1157,10 @@
   position: fixed;
   top: 0;
   left: 0;
-  width: 100vw;
-  height: 100vh;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
   background-color: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -1153,23 +1173,36 @@
   to { opacity: 1; }
 }
 
-/* Mobile Right-Side Slide-In Navigation Drawer */
+/* Mobile Navigation Drawer — full screen on responsive */
 .mobile-right-drawer {
   position: fixed;
   top: 0;
+  left: 0;
   right: 0;
-  width: 280px;
-  max-width: 85vw;
-  height: 100vh;
+  bottom: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  min-height: 100%;
   background-color: #ffffff;
-  border-left: 1px solid #e2e8f0;
-  box-shadow: -10px 0 35px rgba(15, 23, 42, 0.2);
+  border-left: none;
+  box-shadow: none;
   z-index: 1002;
-  padding: 20px 16px;
+  padding: 16px 18px 24px;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   animation: slideInRight 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+/* With 80% UI zoom, fill the real viewport */
+html.sa-ui-zoom-80 .mobile-backdrop-overlay,
+html.sa-ui-zoom-80 .mobile-right-drawer {
+  width: calc(100vw / 0.8);
+  height: calc(100vh / 0.8);
+  max-width: none;
+  max-height: none;
 }
 
 @keyframes slideInRight {
@@ -1495,15 +1528,34 @@
     position: fixed !important;
     top: 0;
     left: 0 !important;
+    right: 0 !important;
     width: 100% !important;
+    max-width: 100% !important;
     margin-left: 0 !important;
     z-index: 1000 !important;
     background-color: #ffffff !important;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
 
+  html.sa-ui-zoom-80 .secure-admin-header {
+    width: calc(100vw / 0.8) !important;
+    max-width: none !important;
+  }
+
   .secure-admin-viewport {
     padding-top: 85px !important;
+  }
+
+  .mobile-right-drawer .clean-menu-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-right-drawer .right-drawer-footer {
+    margin-top: auto;
+    flex-shrink: 0;
   }
 }
 
