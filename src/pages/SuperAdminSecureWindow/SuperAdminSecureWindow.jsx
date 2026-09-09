@@ -751,6 +751,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [recordAllowHistory, setRecordAllowHistory] = useState([]);
   const [loadingAllowHistory, setLoadingAllowHistory] = useState(false);
   const [lightboxImg, setLightboxImg] = useState(null);
+  const [lightboxZoomed, setLightboxZoomed] = useState(false);
+
+  useEffect(() => {
+    setLightboxZoomed(false);
+  }, [lightboxImg]);
   /** Super Admin direct edit (no permission): { type: 'daily'|'inward'|'outward', data } */
   const [saEditLog, setSaEditLog] = useState(null);
   const [saLogActionBusy, setSaLogActionBusy] = useState(false);
@@ -12242,116 +12247,63 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         </div>
       )}
 
-      {/* Lightbox View Modal with absolute positioned controls */}
+      {/* Lightbox View Modal — proper size + click to zoom */}
       {lightboxImg && (
-        <div 
-          className="lightbox-overlay" 
-          onClick={() => setLightboxImg(null)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100vw',
-            height: '100vh',
-            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-            backdropFilter: 'blur(10px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 99999,
-            animation: 'fadeIn 0.22s ease'
+        <div
+          className="sa-lightbox-overlay"
+          onClick={() => {
+            setLightboxImg(null);
+            setLightboxZoomed(false);
           }}
         >
-          {/* Absolute Floating Controls Header */}
-          <div 
-            style={{
-              position: 'absolute',
-              top: '24px',
-              right: '24px',
-              display: 'flex',
-              gap: '12px',
-              zIndex: 100000,
-              pointerEvents: 'auto'
-            }}
+          <div
+            className={`sa-lightbox-popup${lightboxZoomed ? ' is-zoomed' : ''}`}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Download Button */}
-            <a 
-              href={lightboxImg && lightboxImg.includes('res.cloudinary.com') ? lightboxImg.replace('/upload/', '/upload/fl_attachment/') : lightboxImg} 
-              download={`Audit_Attachment_${new Date().getTime()}.png`}
-              title="Download Photo"
-              style={{
-                padding: '10px 20px',
-                backgroundColor: 'var(--primary)',
-                color: '#ffffff',
-                borderRadius: 'var(--radius-sm)',
-                fontWeight: '700',
-                fontSize: '0.84rem',
-                textDecoration: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                boxShadow: '0 4px 14px rgba(0, 162, 232, 0.4)',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-            >
-              <Download size={16} />
-              <span>Download Photo</span>
-            </a>
-
-            {/* Close Button */}
-            <button 
-              onClick={() => setLightboxImg(null)}
-              style={{
-                padding: '10px 18px',
-                backgroundColor: '#ef4444',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: '700',
-                fontSize: '0.84rem',
-                gap: '6px',
-                boxShadow: '0 4px 14px rgba(239, 68, 68, 0.3)',
-                transition: 'all 0.2s'
-              }}
-              title="Close View"
-            >
-              <X size={16} />
-              <span>Close</span>
-            </button>
-          </div>
-
-          {/* Image Wrapper */}
-          <div 
-            className="lightbox-content" 
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'transparent',
-              boxShadow: 'none',
-              border: 'none',
-              padding: 0
-            }}
-          >
-            <img 
-              src={lightboxImg} 
-              alt="Enlarged Audit Attachment" 
-              style={{
-                display: 'block',
-                maxWidth: '95vw',
-                maxHeight: '85vh',
-                width: 'auto',
-                height: 'auto',
-                objectFit: 'contain',
-                borderRadius: 'var(--radius-md)',
-                boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
-                border: '4px solid rgba(255,255,255,0.1)'
-              }}
-            />
+            <div className="sa-lightbox-header">
+              <strong>
+                Photo Preview
+                <span className="sa-lightbox-hint">
+                  {lightboxZoomed ? ' · Click image to zoom out' : ' · Click image to zoom in'}
+                </span>
+              </strong>
+              <div className="sa-lightbox-actions">
+                <a
+                  href={
+                    lightboxImg && lightboxImg.includes('res.cloudinary.com')
+                      ? lightboxImg.replace('/upload/', '/upload/fl_attachment/')
+                      : lightboxImg
+                  }
+                  download={`Audit_Attachment_${new Date().getTime()}.png`}
+                  title="Download Photo"
+                  className="sa-lightbox-download"
+                >
+                  <Download size={15} />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  className="sa-lightbox-close"
+                  onClick={() => {
+                    setLightboxImg(null);
+                    setLightboxZoomed(false);
+                  }}
+                  title="Close"
+                >
+                  <X size={16} />
+                  <span>Close</span>
+                </button>
+              </div>
+            </div>
+            <div className={`sa-lightbox-body${lightboxZoomed ? ' is-zoomed' : ''}`}>
+              <img
+                src={lightboxImg}
+                alt="Enlarged audit attachment"
+                className={lightboxZoomed ? 'is-zoomed' : ''}
+                onClick={() => setLightboxZoomed((z) => !z)}
+                title={lightboxZoomed ? 'Click to zoom out' : 'Click to zoom in'}
+              />
+            </div>
           </div>
         </div>
       )}
