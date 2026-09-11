@@ -42,6 +42,7 @@ import {
   requireExportDates,
   confirmExportSize,
   downloadCsv,
+  toCsvContent,
   formatExportProgress,
   getExportErrorMessage,
   isRetryableExportError
@@ -3488,50 +3489,49 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       return formatDateTimeDisplay(updated);
     };
 
-    let csvContent = "\uFEFF"; // UTF-8 BOM for correct Excel character loading
+    const dateSuffix = new Date().toISOString().split('T')[0];
 
     if (historyTab === 'daily') {
       const headers = [
-        "Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Chamber Name", 
-        "Client Code", "Client Name", "Shift", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
-        "Sensor Photo Name", "Photo Capture Time", "Photo Location (GPS)", "Time Variance (minutes)", "Box Count", 
+        "Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Chamber Name",
+        "Client Code", "Client Name", "Shift", "Inspection Time", "Box Temperature (°C)", "Supervisor Name",
+        "Sensor Photo Name", "Photo Capture Time", "Photo Location (GPS)", "Time Variance (minutes)", "Box Count",
         "Chamber Type", "Overdue Status/Time", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
-      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
-
-      filteredLogs.forEach(log => {
-        const row = [
-          log.id || '',
-          log.reference_no || '',
-          formatDateDisplay(log.formatted_date || log.entry_date),
-          log.warehouse_code || '',
-          log.warehouse_name || 'Generic',
-          log.operator_email || '-',
-          log.chamber_name || '',
-          log.client_code || '',
-          log.client_name || '',
-          resolveShiftLabel(log.shift, log.inspection_time, log.created_at),
-          log.inspection_time || '',
-          log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : (log.box_temp !== undefined ? `${log.box_temp}°C` : ''),
-          log.monitor_supervisor_name || '',
-          extractFilenames(log.temp_sensor_image),
-          log.photo_capture_time || '',
-          formatPhotoGpsForExport(
-            log.photo_capture_latitude,
-            log.photo_capture_longitude,
-            log.photo_capture_accuracy
-          ),
-          log.time_variance_minutes !== undefined ? log.time_variance_minutes : '',
-          log.box_count !== undefined ? log.box_count : '',
-          log.chamber_type || '',
-          log.overdue_time || '',
-          log.update_details || '',
-          log.update_count !== undefined ? log.update_count : 0,
-          formatDateTimeDisplay(log.created_at),
-          formatUpdatedAtDisplay(log.created_at, log.updated_at)
-        ];
-        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
-      });
+      const rows = filteredLogs.map((log) => [
+        log.id || '',
+        log.reference_no || '',
+        formatDateDisplay(log.formatted_date || log.entry_date),
+        log.warehouse_code || '',
+        log.warehouse_name || 'Generic',
+        log.operator_email || '-',
+        log.chamber_name || '',
+        log.client_code || '',
+        log.client_name || '',
+        resolveShiftLabel(log.shift, log.inspection_time, log.created_at),
+        log.inspection_time || '',
+        log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : (log.box_temp !== undefined ? `${log.box_temp}°C` : ''),
+        log.monitor_supervisor_name || '',
+        extractFilenames(log.temp_sensor_image),
+        log.photo_capture_time || '',
+        formatPhotoGpsForExport(
+          log.photo_capture_latitude,
+          log.photo_capture_longitude,
+          log.photo_capture_accuracy
+        ),
+        log.time_variance_minutes !== undefined ? log.time_variance_minutes : '',
+        log.box_count !== undefined ? log.box_count : '',
+        log.chamber_type || '',
+        log.overdue_time || '',
+        log.update_details || '',
+        log.update_count !== undefined ? log.update_count : 0,
+        formatDateTimeDisplay(log.created_at),
+        formatUpdatedAtDisplay(log.created_at, log.updated_at)
+      ]);
+      downloadCsv(
+        `ReeferON_ChamberLogs_SuperAdminExport_${dateSuffix}.csv`,
+        toCsvContent(headers, rows)
+      );
     } else if (historyTab === 'inward') {
       const headers = [
         "Inward Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
@@ -3543,11 +3543,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         "Material Temp Photo", "Vehicle Back Side Photo", "Vehicle Back Side Photo with Material", "Count Sheet Photo", 
         "Damage Boxes Photo", "Photo Capture Time & Location", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
-      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
-
-      filteredLogs.forEach(log => {
-        const row = [
-          log.inward_id || '',
+      const rows = filteredLogs.map((log) => [
+        log.inward_id || '',
           log.reference_no || '',
           formatDateDisplay(log.inward_entry_date),
           log.warehouse_code || '',
@@ -3591,9 +3588,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.inward_created_at),
           formatUpdatedAtDisplay(log.inward_created_at, log.inward_updated_at)
-        ];
-        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
-      });
+        ]);
+      downloadCsv(
+        `ReeferON_InwardLogs_SuperAdminExport_${dateSuffix}.csv`,
+        toCsvContent(headers, rows)
+      );
     } else if (historyTab === 'outward') {
       const headers = [
         "Outward Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Vehicle No", "Seal No", 
@@ -3605,11 +3604,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         "Pre-Cooling Temp Photo", "Material Temp Photo", "Vehicle Back Side Photo", "Vehicle Back Side Photo with Material", 
         "Damage Boxes Photo", "Photo Capture Time & Location", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
-      csvContent += headers.map(h => `"${h.replace(/"/g, '""')}"`).join(",") + "\n";
-
-      filteredLogs.forEach(log => {
-        const row = [
-          log.outward_id || '',
+      const rows = filteredLogs.map((log) => [
+        log.outward_id || '',
           log.reference_no || '',
           formatDateDisplay(log.outward_entry_date),
           log.warehouse_code || '',
@@ -3654,19 +3650,114 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.update_count !== undefined ? log.update_count : 0,
           formatDateTimeDisplay(log.outward_created_at),
           formatUpdatedAtDisplay(log.outward_created_at, log.outward_updated_at)
-        ];
-        csvContent += row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",") + "\n";
-      });
+        ]);
+      downloadCsv(
+        `ReeferON_OutwardLogs_SuperAdminExport_${dateSuffix}.csv`,
+        toCsvContent(headers, rows)
+      );
     }
-
-    const tabLabel = historyTab === 'daily' ? 'ChamberLogs' : (historyTab === 'inward' ? 'InwardLogs' : 'OutwardLogs');
-    const dateSuffix = new Date().toISOString().split('T')[0];
-    downloadCsv(`ReeferON_${tabLabel}_SuperAdminExport_${dateSuffix}.csv`, csvContent);
     } catch (err) {
       setExportFailure(err, 'history');
     } finally {
       setLogsExportLoading(false);
       setLogsExportProgressLabel('Exporting…');
+    }
+  };
+
+  const handleExportOpChamberClientMappings = (op) => {
+    setExportError(null);
+    setOpMappingsError('');
+    try {
+      if (!op?.warehouse_name) {
+        throw new Error('Warehouse is not configured for this operator.');
+      }
+      const displayChambers = getOperatorDisplayChambers(
+        opChambersList,
+        opMappings,
+        op.chamber_limit || 4,
+        op.warehouse_name
+      );
+      if (!displayChambers.length) {
+        throw new Error('No chambers or clients to export.');
+      }
+
+      const headers = [
+        'Operator Name',
+        'Operator Email',
+        'Warehouse',
+        'Chamber',
+        'Chamber Type',
+        'Client Name',
+        'Client Code',
+        'Status'
+      ];
+      const rows = [];
+
+      displayChambers.forEach((chamberRow) => {
+        const chamberAssignments = (opMappings || []).filter((m) =>
+          assignmentMatchesDisplayChamber(m, chamberRow)
+        );
+        const activeClients = uniqueClientsByName(
+          chamberAssignments.filter((m) => !isDeactiveAssignment(m))
+        );
+        const activeNames = new Set(
+          activeClients.map((m) => String(m.client_name || '').trim().toLowerCase())
+        );
+        const deactiveClients = uniqueClientsByName(
+          chamberAssignments.filter(
+            (m) =>
+              isDeactiveAssignment(m) &&
+              !activeNames.has(String(m.client_name || '').trim().toLowerCase())
+          )
+        );
+        const chamberType =
+          activeClients[0]?.chamber_type ||
+          deactiveClients[0]?.chamber_type ||
+          (chamberRow.chamberNum != null ? opChamberTypeByNum[chamberRow.chamberNum] : null) ||
+          chamberRow.chamber_type ||
+          'Frozen';
+
+        const base = [
+          op.full_name || '',
+          op.email || '',
+          op.warehouse_name || '',
+          chamberRow.name || '',
+          chamberType
+        ];
+
+        if (!activeClients.length && !deactiveClients.length) {
+          rows.push([...base, '', '', 'No clients']);
+          return;
+        }
+        activeClients.forEach((client) => {
+          rows.push([
+            ...base,
+            client.client_name || '',
+            client.client_code || '',
+            'Active'
+          ]);
+        });
+        deactiveClients.forEach((client) => {
+          rows.push([
+            ...base,
+            client.client_name || '',
+            client.client_code || '',
+            'Deactive'
+          ]);
+        });
+      });
+
+      const safeName = String(op.full_name || op.email || 'Operator')
+        .replace(/[^\w]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40) || 'Operator';
+      const dateSuffix = new Date().toISOString().split('T')[0];
+      downloadCsv(
+        `ReeferON_ChamberClientMappings_${safeName}_${dateSuffix}.csv`,
+        toCsvContent(headers, rows)
+      );
+    } catch (err) {
+      setOpMappingsError(err.message || 'Failed to export chamber and client mappings.');
     }
   };
 
@@ -7583,7 +7674,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
 
         {activeMenu === 'history_logs' && (
-          <div className="sa-um sa-history">
+          <div className={`sa-um sa-history sa-history--${historyTab}`}>
             <div className="sa-gmail-tabs sa-gmail-tabs-wrap">
               <button
                 type="button"
@@ -7622,20 +7713,24 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
             <div className="sa-op-gmail">
               <section className="sa-op-card sa-op-directory">
-                <div className="sa-op-dir-toolbar">
-                  <div>
+                <div className="sa-op-dir-toolbar sa-history-toolbar">
+                  <div className="sa-history-heading">
+                    <p className="sa-history-kicker">
+                      {historyTab === 'daily' ? 'Chamber Logs' : historyTab === 'inward' ? 'Inward Logs' : 'Outward Logs'}
+                    </p>
                     <h2 className="sa-op-title">System History Database Logs</h2>
                     <p className="sa-op-sub">
                       {historyTab === 'daily'
-                        ? 'Chamber temperature inspection history'
+                        ? 'Chamber temperature inspection history — filter by warehouse, shift, search, or date'
                         : historyTab === 'inward'
-                          ? 'Inward receiving & unloading history'
-                          : 'Outward loading & dispatch history'}
-                      {' · '}
-                      Filter by warehouse, shift, search, or date range
+                          ? 'Inward receiving & unloading history — filter by warehouse, search, or date'
+                          : 'Outward loading & dispatch history — filter by warehouse, search, or date'}
                     </p>
                   </div>
                   <div className="sa-op-dir-tools">
+                    <span className="sa-history-count">
+                      {Number(historyTotal || 0).toLocaleString()} records
+                    </span>
                     <select
                       className="sa-op-filter"
                       value={selectedWarehouse}
@@ -7651,19 +7746,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       ))}
                     </select>
                     {historyTab === 'daily' ? (
-                      <select
-                        className="sa-op-filter"
-                        value={historyShiftFilter}
-                        onChange={(e) => {
-                          setHistoryShiftFilter(e.target.value);
-                          setHistoryPage(1);
-                        }}
-                        title="Morning / Evening shift"
-                      >
-                        <option value="All">All Shifts</option>
-                        <option value="Morning">Morning</option>
-                        <option value="Evening">Evening</option>
-                      </select>
+                      <div className="sa-history-shift" role="group" aria-label="Shift filter">
+                        {['All', 'Morning', 'Evening'].map((shift) => (
+                          <button
+                            key={shift}
+                            type="button"
+                            className={`sa-history-shift-btn${historyShiftFilter === shift ? ' active' : ''}`}
+                            onClick={() => {
+                              setHistoryShiftFilter(shift);
+                              setHistoryPage(1);
+                            }}
+                          >
+                            {shift === 'All' ? 'All shifts' : shift}
+                          </button>
+                        ))}
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -7769,7 +7866,15 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     disabled={logsExportLoading || loadingLogs}
                   >
                     <Download size={14} />
-                    <span>{logsExportLoading ? logsExportProgressLabel : 'Export'}</span>
+                    <span>
+                      {logsExportLoading
+                        ? logsExportProgressLabel
+                        : historyTab === 'daily'
+                          ? 'Export Chamber Logs'
+                          : historyTab === 'inward'
+                            ? 'Export Inward Logs'
+                            : 'Export Outward Logs'}
+                    </span>
                   </button>
                   {logsExportLoading && (
                     <button
@@ -7806,6 +7911,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   </div>
                 ) : (
                   <>
+                    <div className="sa-history-sheet-banner">
+                      {historyTab === 'daily'
+                        ? 'Chamber Logs'
+                        : historyTab === 'inward'
+                          ? 'Inward Logs'
+                          : 'Outward Logs'}
+                    </div>
                     <div className="sa-history-table-wrap">
                       <table className="logs-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
@@ -10645,6 +10757,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               : 'Configure warehouse access to see chamber mappings.'}
                           </p>
                         </div>
+                        <button
+                          type="button"
+                          className="sa-op-btn-export"
+                          onClick={() => handleExportOpChamberClientMappings(op)}
+                          disabled={opMappingsLoading || !op.warehouse_name}
+                          title="Export this DO chamber and client list"
+                        >
+                          <Download size={14} />
+                          Export
+                        </button>
                       </div>
 
                       {opMappingsError && (

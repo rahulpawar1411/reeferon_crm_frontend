@@ -4395,8 +4395,7 @@ html.sa-ui-zoom-80 .sa-lightbox-popup.is-zoomed {
 }
 
 .sa-activity .logs-table th,
-.sa-lookup .logs-table th,
-.sa-history .logs-table th {
+.sa-lookup .logs-table th {
   font-weight: 500;
   color: #5f6368;
   background: #f1f3f4 !important;
@@ -4425,6 +4424,136 @@ html.sa-ui-zoom-80 .sa-lightbox-popup.is-zoomed {
 
 .sa-history .sa-activity-filters .sa-op-search {
   width: min(42vw, 300px);
+}
+
+.sa-history-heading {
+  min-width: 0;
+}
+
+.sa-history-kicker {
+  margin: 0 0 2px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1a73e8;
+}
+
+.sa-history-count {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #1a73e8;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sa-history-toolbar {
+  background: linear-gradient(90deg, #e8f0fe 0%, #f8fbff 100%) !important;
+}
+
+.sa-history-shift {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 2px;
+  background: #ffffff;
+  border: 1px solid #c4d7f5;
+  border-radius: 8px;
+}
+
+.sa-history-shift-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: #174ea6;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sa-history-shift-btn:hover {
+  background: #e8f0fe;
+}
+
+.sa-history-shift-btn.active {
+  background: #1a73e8;
+  color: #ffffff;
+}
+
+.sa-history-sheet-banner {
+  padding: 8px 12px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffffff;
+  background: #0b57d0;
+}
+
+.sa-history--daily .sa-gmail-tab.active {
+  color: #1a73e8;
+}
+
+.sa-history--daily .logs-table th {
+  background: #1a73e8 !important;
+  color: #ffffff !important;
+  font-weight: 700;
+}
+
+.sa-history--inward .sa-history-kicker {
+  color: #0d9488;
+}
+
+.sa-history--inward .sa-history-toolbar {
+  background: linear-gradient(90deg, #e6fffa 0%, #f0fdfa 100%) !important;
+}
+
+.sa-history--inward .sa-history-count,
+.sa-history--inward .sa-history-sheet-banner {
+  background: #0f766e;
+}
+
+.sa-history--inward .sa-gmail-tab.active {
+  color: #0d9488;
+}
+
+.sa-history--inward .logs-table th {
+  background: #0d9488 !important;
+  color: #ffffff !important;
+  font-weight: 700;
+}
+
+.sa-history--outward .sa-history-kicker {
+  color: #ea580c;
+}
+
+.sa-history--outward .sa-history-toolbar {
+  background: linear-gradient(90deg, #fff7ed 0%, #fffbeb 100%) !important;
+}
+
+.sa-history--outward .sa-history-count,
+.sa-history--outward .sa-history-sheet-banner {
+  background: #c2410c;
+}
+
+.sa-history--outward .sa-gmail-tab.active {
+  color: #ea580c;
+}
+
+.sa-history--outward .logs-table th {
+  background: #ea580c !important;
+  color: #ffffff !important;
+  font-weight: 700;
 }
 
 .sa-lookup .profile-modal-body,

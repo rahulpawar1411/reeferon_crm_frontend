@@ -80,6 +80,19 @@ export function downloadCsv(filename, csvContent) {
   URL.revokeObjectURL(url);
 }
 
+export function csvEscape(val) {
+  return `"${String(val ?? '').replace(/"/g, '""')}"`;
+}
+
+/** Plain CSV Excel can open as a normal workbook (headers + data only). */
+export function toCsvContent(headers = [], rows = []) {
+  const lines = [headers.map(csvEscape).join(',')];
+  (rows || []).forEach((row) => {
+    lines.push((row || []).map(csvEscape).join(','));
+  });
+  return `\uFEFF${lines.join('\n')}\n`;
+}
+
 export function formatExportProgress(progress) {
   if (!progress) return 'Exporting…';
   const loaded = Number(progress.loaded) || 0;
