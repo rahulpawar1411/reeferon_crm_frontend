@@ -113,6 +113,7 @@ function buildLogListQuery(params = {}) {
   if (params.action && params.action !== 'All') qs.set('action', params.action);
   if (params.category) qs.set('category', params.category);
   if (params.operatorEmail) qs.set('operatorEmail', params.operatorEmail);
+  if (params.shift && params.shift !== 'All') qs.set('shift', params.shift);
   if (params.export) qs.set('export', '1');
   const s = qs.toString();
   return s ? `?${s}` : '';
@@ -270,7 +271,8 @@ export const fetchChamberLogs = async (search = '', options = {}) => {
     fromDate: options.fromDate,
     toDate: options.toDate,
     warehouse: options.warehouse,
-    operatorEmail: options.operatorEmail
+    operatorEmail: options.operatorEmail,
+    shift: options.shift
   };
   const result = await fetchChamberLogsPage(params);
   if (options.paginated) return result;

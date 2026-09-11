@@ -742,6 +742,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const opMasterActivitiesEmailRef = useRef('');
   const [logsSearch, setLogsSearch] = useState('');
   const [selectedWarehouse, setSelectedWarehouse] = useState('All');
+  const [historyShiftFilter, setHistoryShiftFilter] = useState('All');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [appliedFromDate, setAppliedFromDate] = useState('');
@@ -2947,7 +2948,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       search: appliedLogsSearch,
       fromDate: toApiDateParam(appliedFromDate),
       toDate: toApiDateParam(appliedToDate),
-      warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined
+      warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined,
+      shift: historyTab === 'daily' && historyShiftFilter !== 'All' ? historyShiftFilter : undefined
     };
 
     try {
@@ -3022,7 +3024,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   useEffect(() => {
     if (activeMenu !== 'history_logs') return;
     loadHistoryLogs();
-  }, [activeMenu, historyTab, historyPage, appliedFromDate, appliedToDate, appliedLogsSearch, selectedWarehouse]);
+  }, [activeMenu, historyTab, historyPage, appliedFromDate, appliedToDate, appliedLogsSearch, selectedWarehouse, historyShiftFilter]);
 
   useEffect(() => {
     setHistoryPage(1);
@@ -3416,6 +3418,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         fromDate: from,
         toDate: to,
         warehouse: selectedWarehouse !== 'All' ? selectedWarehouse : undefined,
+        shift: historyTab === 'daily' && historyShiftFilter !== 'All' ? historyShiftFilter : undefined,
         signal
       };
       const onProgress = (p) => setLogsExportProgressLabel(formatExportProgress(p));
@@ -3490,7 +3493,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     if (historyTab === 'daily') {
       const headers = [
         "Log ID", "Reference No", "Date", "Warehouse Code", "Warehouse Name", "Operator Email", "Chamber Name", 
-        "Client Code", "Client Name", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
+        "Client Code", "Client Name", "Shift", "Inspection Time", "Box Temperature (°C)", "Supervisor Name", 
         "Sensor Photo Name", "Photo Capture Time", "Photo Location (GPS)", "Time Variance (minutes)", "Box Count", 
         "Chamber Type", "Overdue Status/Time", "Edit Details Log", "Edit Count", "Created At", "Updated At"
       ];
@@ -3507,6 +3510,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           log.chamber_name || '',
           log.client_code || '',
           log.client_name || '',
+          resolveShiftLabel(log.shift, log.inspection_time, log.created_at),
           log.inspection_time || '',
           log.chamber_temp !== undefined ? `${log.chamber_temp}°C` : (log.box_temp !== undefined ? `${log.box_temp}°C` : ''),
           log.monitor_supervisor_name || '',
@@ -7628,7 +7632,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           ? 'Inward receiving & unloading history'
                           : 'Outward loading & dispatch history'}
                       {' · '}
-                      Filter by warehouse, search, or date range
+                      Filter by warehouse, shift, search, or date range
                     </p>
                   </div>
                   <div className="sa-op-dir-tools">
@@ -7646,6 +7650,21 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <option key={w} value={w}>{w}</option>
                       ))}
                     </select>
+                    {historyTab === 'daily' ? (
+                      <select
+                        className="sa-op-filter"
+                        value={historyShiftFilter}
+                        onChange={(e) => {
+                          setHistoryShiftFilter(e.target.value);
+                          setHistoryPage(1);
+                        }}
+                        title="Morning / Evening shift"
+                      >
+                        <option value="All">All Shifts</option>
+                        <option value="Morning">Morning</option>
+                        <option value="Evening">Evening</option>
+                      </select>
+                    ) : null}
                   </div>
                 </div>
 
@@ -7737,6 +7756,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       setAppliedToDate('');
                       setAppliedLogsSearch('');
                       setLogsSearch('');
+                      setHistoryShiftFilter('All');
                       setHistoryPage(1);
                     }}
                   >
@@ -7797,6 +7817,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                               <th>Operator Email</th>
                               <th>Chamber</th>
                               <th>Client Name</th>
+                              <th>Shift</th>
                               <th>Inspection Time</th>
                               <th>Temp (°C)</th>
                               <th>Supervisor</th>
@@ -7900,6 +7921,9 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <td style={{ padding: '12px 16px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{renderOperatorEmail(log.operator_email)}</td>
                         <td style={{ padding: '12px 16px' }}>{log.chamber_name}</td>
                         <td style={{ padding: '12px 16px' }}>{log.client_name}</td>
+                        <td style={{ padding: '12px 16px', fontWeight: 700 }}>
+                          {resolveShiftLabel(log.shift, log.inspection_time, log.created_at)}
+                        </td>
                         <td style={{ padding: '12px 16px' }}>{log.inspection_time}</td>
                         <td style={{ padding: '12px 16px' }}>
                           <span className="status-badge" style={{ 
