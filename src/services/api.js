@@ -496,6 +496,12 @@ export const fetchDashboardStats = async () => {
   return data.stats || data;
 };
 
+/** Today's DO chamber tasks: completed / pending / overdue per operator + warehouse. */
+export const fetchDoTaskOverview = async () => {
+  const res = await fetch(`${API_BASE_URL}/dashboard/do-task-overview`);
+  return await assertOk(res, 'Failed to fetch DO daily task overview.');
+};
+
 export const fetchInventoryReconciliation = async ({
   search,
   warehouse,

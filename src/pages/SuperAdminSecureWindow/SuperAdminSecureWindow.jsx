@@ -7,10 +7,10 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
-  ShieldCheck, Clock, LogOut, Database, Lock,
+  ShieldCheck, Clock, LogOut, Database, Lock, Calendar,
   Thermometer, Trash2, Edit, UserPlus, ShieldAlert,
   Menu, X, ChevronRight, User, Eye, EyeOff, Activity, Search, Download, History, LayoutDashboard,
-  Copy, Check, Loader2, CheckCircle, MessageSquareWarning, MessageSquare, Smartphone, Package, Users, LayoutGrid,
+  Copy, Check, Loader2, CheckCircle, ClipboardCheck, MessageSquareWarning, MessageSquare, Smartphone, Package, Users, LayoutGrid,
   ChevronDown, ChevronUp, Plus, ArrowLeft, Undo2
 } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
@@ -20,7 +20,7 @@ import {
   fetchAllOperatorActivities,
   fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
   fetchRecordPermissionHistory,
-  fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats,
+  fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats, fetchDoTaskOverview,
   fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs, fetchAllLogPages,
   deleteChamberLog, deleteInwardLog, deleteOutwardLog,
   toApiDateParam,
@@ -1220,6 +1220,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     totalSubAdmins: 0,
     totalOperators: 0
   });
+  const [doTaskOverview, setDoTaskOverview] = useState(null);
+  const [loadingDoTasks, setLoadingDoTasks] = useState(false);
+  const [doTaskError, setDoTaskError] = useState('');
+  const [doTaskFilter, setDoTaskFilter] = useState('all');
+  const [doTaskSearch, setDoTaskSearch] = useState('');
 
 
 
@@ -1879,6 +1884,26 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     } finally {
       setOpTaskLogsLoading(false);
     }
+  };
+
+  const applyOpTaskDateRange = (op, fromDate, toDate) => {
+    const from = toApiDateParam(fromDate);
+    const to = toApiDateParam(toDate);
+    if (!from || !to) {
+      setOpTaskLogsError('Select a valid date range.');
+      return;
+    }
+    if (from > to) {
+      setOpTaskLogsError("'From Date' must be on or before 'To Date'.");
+      return;
+    }
+    setOpTaskFromDate(from);
+    setOpTaskToDate(to);
+    setOpTaskAppliedFrom(from);
+    setOpTaskAppliedTo(to);
+    setOpTaskFilter('all');
+    setOpTaskChamberFilter('all');
+    loadOpTaskStatus(op, from, to);
   };
 
   const handleToggleOpMappings = async (op) => {
@@ -2825,6 +2850,34 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     [permissionRequests, operators]
   );
 
+  const doTaskSummary = doTaskOverview?.summary || {};
+  const doTaskRows = useMemo(() => {
+    const rows = Array.isArray(doTaskOverview?.operators) ? [...doTaskOverview.operators] : [];
+    const q = String(doTaskSearch || '').trim().toLowerCase();
+    const filtered = rows.filter((op) => {
+      const pending = Number(op.pending) || 0;
+      const overdue = Number(op.overdue) || 0;
+      const completed = Number(op.completed) || 0;
+      const expected = Number(op.expected_today) || completed + pending;
+      if (doTaskFilter === 'pending' && pending === 0) return false;
+      if (doTaskFilter === 'overdue' && overdue === 0) return false;
+      if (doTaskFilter === 'done' && !(pending === 0 && expected > 0 && overdue === 0)) return false;
+      if (!q) return true;
+      const hay = `${op.name || ''} ${op.full_name || ''} ${op.email || ''} ${op.warehouse_name || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+    filtered.sort((a, b) => {
+      const ao = Number(a.overdue) || 0;
+      const bo = Number(b.overdue) || 0;
+      if (ao !== bo) return bo - ao;
+      const ap = Number(a.pending) || 0;
+      const bp = Number(b.pending) || 0;
+      if (ap !== bp) return bp - ap;
+      return String(a.name || a.full_name || '').localeCompare(String(b.name || b.full_name || ''));
+    });
+    return filtered;
+  }, [doTaskOverview, doTaskFilter, doTaskSearch]);
+
   const loadDashboardStatsData = async () => {
     try {
       const stats = await fetchDashboardStats();
@@ -2834,6 +2887,20 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       checkNewDOChanges();
     } catch (err) {
       console.error('Error loading dashboard stats:', err);
+    }
+  };
+
+  const loadDoTaskOverview = async () => {
+    setLoadingDoTasks(true);
+    setDoTaskError('');
+    try {
+      const data = await fetchDoTaskOverview();
+      setDoTaskOverview(data || null);
+    } catch (err) {
+      console.error('Error loading DO daily tasks:', err);
+      setDoTaskError(err.message || 'Failed to load DO daily tasks.');
+    } finally {
+      setLoadingDoTasks(false);
     }
   };
 
@@ -2912,6 +2979,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     if (activeMenu === 'dashboard') {
       loadOperatorsData();
       loadDashboardStatsData();
+      loadDoTaskOverview();
       loadSubAdminsData();
       loadCustomerReportsData();
       loadPermissionRequests(true);
@@ -3846,6 +3914,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       loadOpMasterActivities(op.email),
       loadOpTaskStatus(op, fromDate, toDate)
     ]);
+  };
+
+  const openDoFromDashboard = (row) => {
+    if (!row) return;
+    const match = (operators || []).find((op) =>
+      (row.id != null && Number(op.id) === Number(row.id))
+      || (op.email && row.email && String(op.email).toLowerCase() === String(row.email).toLowerCase())
+    );
+    const op = match || {
+      id: row.id,
+      email: row.email,
+      full_name: row.full_name || row.name,
+      phone_no: row.phone_no,
+      warehouse_name: row.warehouse_name,
+      warehouse_code: row.warehouse_code,
+      chamber_limit: row.chamber_limit
+    };
+    setActiveMenu('data_operators');
+    openOperatorProfile(op);
   };
 
   const openChamberTaskProfile = async (task, op) => {
@@ -5832,7 +5919,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   <div>
                     <h2 className="sa-op-title">Control Center Dashboard</h2>
                     <p className="sa-op-sub">
-                      Super Admin overview of operators, customers, warehouses and activity
+                      Super Admin overview of operators, daily chamber tasks, warehouses and activity
                     </p>
                   </div>
                 </div>
@@ -5893,6 +5980,140 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   </button>
                 ) : null}
               </div>
+            </section>
+
+            <section className="sa-op-card sa-dash-tasks">
+              <div className="sa-dash-task-head">
+                <div className="sa-dash-task-head-left">
+                  <ClipboardCheck size={14} color="#1a73e8" />
+                  <strong>DO tasks today</strong>
+                  <span>
+                    {doTaskOverview?.today
+                      ? new Date(`${doTaskOverview.today}T12:00:00`).toLocaleDateString('en-GB', {
+                          day: 'numeric',
+                          month: 'short'
+                        })
+                      : 'Today'}
+                    {' · Morning + Evening'}
+                  </span>
+                </div>
+                <div className="sa-dash-task-head-stats">
+                  <em className="done" title="Morning completed / total">
+                    <b>
+                      {Number(doTaskSummary.morning_completed) || 0}
+                      /{Number(doTaskSummary.morning_expected) || 0}
+                    </b>
+                    {' '}Mor
+                  </em>
+                  <em className="pending" title="Evening completed / total">
+                    <b>
+                      {Number(doTaskSummary.evening_completed) || 0}
+                      /{Number(doTaskSummary.evening_expected) || 0}
+                    </b>
+                    {' '}Evn
+                  </em>
+                  <em className="overdue"><b>{Number(doTaskSummary.overdue) || 0}</b> Over</em>
+                </div>
+                <button
+                  type="button"
+                  className="sa-op-btn-text"
+                  onClick={loadDoTaskOverview}
+                  disabled={loadingDoTasks}
+                >
+                  {loadingDoTasks ? '…' : 'Refresh'}
+                </button>
+              </div>
+
+              <div className="sa-dash-task-tools">
+                <div className="sa-dash-task-filters">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'pending', label: 'Pend' },
+                    { id: 'overdue', label: 'Over' },
+                    { id: 'done', label: 'Done' }
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`sa-dash-task-filter${doTaskFilter === tab.id ? ' active' : ''}`}
+                      onClick={() => setDoTaskFilter(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <label className="sa-dash-task-search">
+                  <Search size={12} />
+                  <input
+                    type="search"
+                    value={doTaskSearch}
+                    onChange={(e) => setDoTaskSearch(e.target.value)}
+                    placeholder="DO / warehouse"
+                  />
+                </label>
+              </div>
+
+              {doTaskError ? (
+                <div className="sa-op-banner-wrap">
+                  <LoadErrorBanner
+                    message={doTaskError}
+                    onRetry={loadDoTaskOverview}
+                    onDismiss={() => setDoTaskError('')}
+                  />
+                </div>
+              ) : null}
+
+              {loadingDoTasks && !doTaskOverview ? (
+                <div className="sa-dash-task-empty">Loading…</div>
+              ) : doTaskRows.length === 0 ? (
+                <div className="sa-dash-task-empty">
+                  {doTaskSearch || doTaskFilter !== 'all' ? 'No match.' : 'No DOs yet.'}
+                </div>
+              ) : (
+                <div className="sa-dash-task-list">
+                  <div className="sa-dash-task-cols">
+                    <span />
+                    <span>DO</span>
+                    <span>Warehouse</span>
+                    <span>Mor done/total</span>
+                    <span>Evn done/total</span>
+                    <span>Over</span>
+                  </div>
+                  {doTaskRows.map((op, idx) => {
+                    const totalTasks = Number(op.assignment_count) || 0;
+                    const mornExp = Number(op.morning_expected) || totalTasks;
+                    const eveExp = Number(op.evening_expected) || totalTasks;
+                    const mornDone = Number(op.morning_completed) || 0;
+                    const eveDone = Number(op.evening_completed) || 0;
+                    const overdue = Number(op.overdue) || 0;
+                    const mornPend = Number(op.morning_pending) || Math.max(0, mornExp - mornDone);
+                    const evePend = Number(op.evening_pending) || Math.max(0, eveExp - eveDone);
+                    const tone = overdue > 0 ? 'bad' : (mornPend > 0 || evePend > 0) ? 'warn' : (mornExp + eveExp) > 0 ? 'good' : 'muted';
+                    return (
+                      <button
+                        key={`${op.id || op.email || op.name}-${idx}`}
+                        type="button"
+                        className={`sa-dash-task-row tone-${tone}`}
+                        onClick={() => openDoFromDashboard(op)}
+                        title={`${op.name || op.full_name || 'DO'} · Morning ${mornDone}/${mornExp} · Evening ${eveDone}/${eveExp}`}
+                      >
+                        <span className="sa-dash-task-dot" />
+                        <strong>{op.name || op.full_name || 'DO'}</strong>
+                        <em>{op.warehouse_name || '—'}</em>
+                        <span className={`sa-dash-task-shift${mornPend > 0 ? ' pending' : mornExp > 0 ? ' done' : ''}`}>
+                          <b>{mornDone}</b>
+                          <i>/{mornExp}</i>
+                        </span>
+                        <span className={`sa-dash-task-shift${evePend > 0 ? ' pending' : eveExp > 0 ? ' done' : ''}`}>
+                          <b>{eveDone}</b>
+                          <i>/{eveExp}</i>
+                        </span>
+                        <b className="overdue">{overdue}</b>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             {hasPendingRequests ? (
@@ -6007,7 +6228,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           </button>
                           <button
                             type="button"
-                            className="sa-op-btn-text"
+                            className="sa-op-btn-text danger"
                             onClick={() => openDenyPermissionModal(pr)}
                           >
                             Deny
@@ -6964,17 +7185,26 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       >
                         Apply Filter
                       </button>
-                      <button
-                        type="button"
-                        className="sa-op-btn-text"
-                        disabled={loadingMonthSheet}
-                        onClick={() => {
-                          const { fromDate, toDate } = getDefaultOpTaskRange(30);
-                          openClientMonthSheet(row, { fromDate, toDate });
-                        }}
-                      >
-                        Last 30 days
-                      </button>
+                      {[
+                        { days: 1, label: 'Today' },
+                        { days: 7, label: '7 days' },
+                        { days: 30, label: '30 days' }
+                      ].map((preset) => {
+                        const range = getDefaultOpTaskRange(preset.days);
+                        const active =
+                          monthSheetFromDate === range.fromDate && monthSheetToDate === range.toDate;
+                        return (
+                          <button
+                            key={preset.days}
+                            type="button"
+                            className={`sa-op-btn-text${active ? ' sa-op-btn-text-active' : ''}`}
+                            disabled={loadingMonthSheet}
+                            onClick={() => openClientMonthSheet(row, { fromDate: range.fromDate, toDate: range.toDate })}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
                     </div>
 
                     <div className="sa-box-stat-grid sa-box-month-stats">
@@ -10155,7 +10385,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <div>
                           <h3 className="do-gmail-title">Chamber Task Status</h3>
                           <p className="do-gmail-sub">
-                            Morning &amp; Evening inspections · today
+                            Morning &amp; Evening inspections
+                            {' · '}
+                            {opTaskAppliedFrom && opTaskAppliedTo
+                              ? (opTaskAppliedFrom === opTaskAppliedTo
+                                ? opTaskAppliedFrom
+                                : `${opTaskAppliedFrom} to ${opTaskAppliedTo}`)
+                              : 'select dates'}
                             {' · '}
                             {opTaskStatus.assignmentCount} active client{opTaskStatus.assignmentCount === 1 ? '' : 's'}
                             {!opTaskLogsLoading && opActiveAssignments.length > 0
@@ -10164,18 +10400,95 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           </p>
                         </div>
                         <div className="do-map-edit-actions">
-                          <button
-                            type="button"
-                            className="do-gmail-text-btn"
-                            onClick={() => loadOpTaskStatus(op, opTaskAppliedFrom, opTaskAppliedTo)}
-                            disabled={opTaskLogsLoading}
-                          >
-                            {opTaskLogsLoading ? 'Loading…' : 'Refresh'}
-                          </button>
                           <span className={`do-gmail-status-pill ${opTaskStatus.statusTone}`}>
                             {opTaskStatus.statusLabel}
                           </span>
                         </div>
+                      </div>
+
+                      <div className="do-gmail-filters do-gmail-task-filters">
+                        <label className="do-gmail-task-date-field">
+                          <Calendar size={12} />
+                          <span>From</span>
+                          <input
+                            className="sa-op-filter"
+                            type="date"
+                            value={opTaskFromDate}
+                            max={opTaskToDate || localDateStr()}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOpTaskFromDate(val);
+                              if (val && opTaskToDate && val > opTaskToDate) setOpTaskToDate(val);
+                            }}
+                            title="From date"
+                          />
+                        </label>
+                        <label className="do-gmail-task-date-field">
+                          <span>To</span>
+                          <input
+                            className="sa-op-filter"
+                            type="date"
+                            value={opTaskToDate}
+                            min={opTaskFromDate || undefined}
+                            max={localDateStr()}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOpTaskToDate(val);
+                              if (val && opTaskFromDate && val < opTaskFromDate) setOpTaskFromDate(val);
+                            }}
+                            title="To date"
+                          />
+                        </label>
+                        <div className="do-gmail-task-actions">
+                          <button
+                            type="button"
+                            className="do-gmail-task-btn primary"
+                            onClick={() => applyOpTaskDateRange(op, opTaskFromDate, opTaskToDate)}
+                            disabled={opTaskLogsLoading || !opTaskFromDate || !opTaskToDate}
+                          >
+                            Apply
+                          </button>
+                          <button
+                            type="button"
+                            className="do-gmail-task-btn"
+                            onClick={() => {
+                              const { fromDate, toDate } = getDefaultOpTaskRange(1);
+                              applyOpTaskDateRange(op, fromDate, toDate);
+                            }}
+                            disabled={opTaskLogsLoading}
+                            title="Reset to today"
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            className="do-gmail-task-btn"
+                            onClick={() => loadOpTaskStatus(op, opTaskAppliedFrom, opTaskAppliedTo)}
+                            disabled={opTaskLogsLoading}
+                          >
+                            {opTaskLogsLoading ? 'Refreshing…' : 'Refresh'}
+                          </button>
+                        </div>
+                        {[
+                          { days: 1, label: 'Today' },
+                          { days: 7, label: '7 days' },
+                          { days: 30, label: '30 days' }
+                        ].map((preset) => {
+                          const range = getDefaultOpTaskRange(preset.days);
+                          const active =
+                            opTaskAppliedFrom === range.fromDate && opTaskAppliedTo === range.toDate;
+                          return (
+                            <button
+                              key={preset.days}
+                              type="button"
+                              className={`do-gmail-task-btn${active ? ' active' : ''}`}
+                              onClick={() => applyOpTaskDateRange(op, range.fromDate, range.toDate)}
+                              disabled={opTaskLogsLoading}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
                       </div>
 
                       <div className="do-gmail-task-stats">
@@ -10684,14 +10997,6 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                             Chamber, client and type changes · {opMasterAppliedFrom || '—'} to {opMasterAppliedTo || '—'}
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          className="do-gmail-text-btn"
-                          onClick={() => loadOpMasterActivities(op.email)}
-                          disabled={opMasterActivitiesLoading}
-                        >
-                          {opMasterActivitiesLoading ? 'Refreshing...' : 'Refresh'}
-                        </button>
                       </div>
 
                       <div className="do-gmail-filters do-gmail-task-filters">
@@ -10720,28 +11025,76 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           }}
                           title="To date"
                         />
-                        <button
-                          type="button"
-                          className="do-gmail-text-btn"
-                          onClick={() => {
-                            setOpMasterAppliedFrom(opMasterFromDate);
-                            setOpMasterAppliedTo(opMasterToDate);
-                            setOpMasterActivityFilter('all');
-                            setOpMasterActivityPage(1);
-                            loadOpMasterActivities(op.email);
-                          }}
-                          disabled={opMasterActivitiesLoading}
-                        >
-                          {opMasterActivitiesLoading ? 'Loading…' : 'Apply'}
-                        </button>
-                        <button
-                          type="button"
-                          className="do-gmail-text-btn"
-                          onClick={() => loadOpMasterActivities(op.email)}
-                          disabled={opMasterActivitiesLoading}
-                        >
-                          Refresh
-                        </button>
+                        <div className="do-gmail-task-actions">
+                          <button
+                            type="button"
+                            className="do-gmail-task-btn primary"
+                            onClick={() => {
+                              setOpMasterAppliedFrom(opMasterFromDate);
+                              setOpMasterAppliedTo(opMasterToDate);
+                              setOpMasterActivityFilter('all');
+                              setOpMasterActivityPage(1);
+                              loadOpMasterActivities(op.email);
+                            }}
+                            disabled={opMasterActivitiesLoading || !opMasterFromDate || !opMasterToDate}
+                          >
+                            Apply
+                          </button>
+                          <button
+                            type="button"
+                            className="do-gmail-task-btn"
+                            onClick={() => {
+                              const { fromDate, toDate } = getDefaultOpTaskRange(30);
+                              setOpMasterFromDate(fromDate);
+                              setOpMasterToDate(toDate);
+                              setOpMasterAppliedFrom(fromDate);
+                              setOpMasterAppliedTo(toDate);
+                              setOpMasterActivityFilter('all');
+                              setOpMasterActivityPage(1);
+                              loadOpMasterActivities(op.email);
+                            }}
+                            disabled={opMasterActivitiesLoading}
+                            title="Reset to last 30 days"
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            className="do-gmail-task-btn"
+                            onClick={() => loadOpMasterActivities(op.email)}
+                            disabled={opMasterActivitiesLoading}
+                          >
+                            {opMasterActivitiesLoading ? 'Refreshing…' : 'Refresh'}
+                          </button>
+                        </div>
+                        {[
+                          { days: 1, label: 'Today' },
+                          { days: 7, label: '7 days' },
+                          { days: 30, label: '30 days' }
+                        ].map((preset) => {
+                          const range = getDefaultOpTaskRange(preset.days);
+                          const active =
+                            opMasterAppliedFrom === range.fromDate && opMasterAppliedTo === range.toDate;
+                          return (
+                            <button
+                              key={preset.days}
+                              type="button"
+                              className={`do-gmail-task-btn${active ? ' active' : ''}`}
+                              onClick={() => {
+                                setOpMasterFromDate(range.fromDate);
+                                setOpMasterToDate(range.toDate);
+                                setOpMasterAppliedFrom(range.fromDate);
+                                setOpMasterAppliedTo(range.toDate);
+                                setOpMasterActivityFilter('all');
+                                setOpMasterActivityPage(1);
+                                loadOpMasterActivities(op.email);
+                              }}
+                              disabled={opMasterActivitiesLoading}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
                       </div>
 
                       {opMasterActivitiesError && (
@@ -11424,14 +11777,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                       </select>
                       <button
                         type="button"
-                        className="sa-op-btn-text"
+                        className="sa-op-btn-primary"
                         onClick={loadCustomerReportsData}
                         disabled={loadingCustomerReports}
                       >
                         {loadingCustomerReports ? (
                           <>
                             <Loader2 size={14} className="spinner-icon" />
-                            Refresh
+                            Apply
                           </>
                         ) : 'Apply'}
                       </button>
