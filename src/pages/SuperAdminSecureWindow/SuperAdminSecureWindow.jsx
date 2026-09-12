@@ -1227,6 +1227,7 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
   const [doTaskError, setDoTaskError] = useState('');
   const [doTaskFilter, setDoTaskFilter] = useState('all');
   const [doTaskSearch, setDoTaskSearch] = useState('');
+  const [doTaskDate, setDoTaskDate] = useState(() => localDateStr());
 
 
 
@@ -2892,12 +2893,22 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
   };
 
-  const loadDoTaskOverview = async () => {
+  const loadDoTaskOverview = async (dateOverride) => {
     setLoadingDoTasks(true);
     setDoTaskError('');
     try {
-      const data = await fetchDoTaskOverview();
+      const date =
+        toApiDateParam(dateOverride !== undefined ? dateOverride : doTaskDate) ||
+        localDateStr();
+      const data = await fetchDoTaskOverview({ date });
+      // Guard: older servers ignore ?date= and always return "today"
+      if (data?.today && data.today !== date) {
+        setDoTaskError(
+          `Server returned ${data.today} instead of ${date}. Restart backend to enable date filter.`
+        );
+      }
       setDoTaskOverview(data || null);
+      if (data?.today) setDoTaskDate(data.today);
     } catch (err) {
       console.error('Error loading DO daily tasks:', err);
       setDoTaskError(err.message || 'Failed to load DO daily tasks.');
@@ -6080,51 +6091,93 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
             <section className="sa-op-card sa-dash-tasks">
               <div className="sa-dash-task-head">
                 <div className="sa-dash-task-head-left">
-                  <ClipboardCheck size={14} color="#1a73e8" />
-                  <strong>DO tasks today</strong>
-                  <span>
-                    {doTaskOverview?.today
-                      ? new Date(`${doTaskOverview.today}T12:00:00`).toLocaleDateString('en-GB', {
-                          day: 'numeric',
-                          month: 'short'
-                        })
-                      : 'Today'}
-                    {' · Morning + Evening'}
+                  <span className="sa-dash-task-icon">
+                    <ClipboardCheck size={15} />
                   </span>
-                </div>
-                <div className="sa-dash-task-head-stats">
-                  <em className="done" title="Morning completed / total">
-                    <b>
-                      {Number(doTaskSummary.morning_completed) || 0}
-                      /{Number(doTaskSummary.morning_expected) || 0}
-                    </b>
-                    {' '}Mor
-                  </em>
-                  <em className="pending" title="Evening completed / total">
-                    <b>
-                      {Number(doTaskSummary.evening_completed) || 0}
-                      /{Number(doTaskSummary.evening_expected) || 0}
-                    </b>
-                    {' '}Evn
-                  </em>
-                  <em className="overdue"><b>{Number(doTaskSummary.overdue) || 0}</b> Over</em>
+                  <div className="sa-dash-task-titles">
+                    <strong>DO tasks</strong>
+                    <span>
+                      {doTaskOverview?.today
+                        ? new Date(`${doTaskOverview.today}T12:00:00`).toLocaleDateString('en-GB', {
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric'
+                          })
+                        : doTaskDate === localDateStr()
+                          ? 'Today'
+                          : doTaskDate}
+                      {' · Morning + Evening'}
+                    </span>
+                  </div>
                 </div>
                 <button
                   type="button"
                   className="sa-op-btn-text"
-                  onClick={loadDoTaskOverview}
+                  onClick={() => loadDoTaskOverview(doTaskDate)}
                   disabled={loadingDoTasks}
                 >
-                  {loadingDoTasks ? '…' : 'Refresh'}
+                  {loadingDoTasks ? <Loader2 size={12} className="sa-spin" /> : null}
+                  {loadingDoTasks ? 'Loading' : 'Refresh'}
                 </button>
               </div>
 
+              <div className="sa-dash-task-metrics">
+                <div className="sa-dash-task-metric done" title="Morning completed / expected">
+                  <span>Morning</span>
+                  <strong>
+                    {Number(doTaskSummary.morning_completed) || 0}
+                    <i>/{Number(doTaskSummary.morning_expected) || 0}</i>
+                  </strong>
+                </div>
+                <div className="sa-dash-task-metric evening" title="Evening completed / expected">
+                  <span>Evening</span>
+                  <strong>
+                    {Number(doTaskSummary.evening_completed) || 0}
+                    <i>/{Number(doTaskSummary.evening_expected) || 0}</i>
+                  </strong>
+                </div>
+                <div className="sa-dash-task-metric overdue" title="Missing logs in prior 5 days">
+                  <span>Overdue</span>
+                  <strong>{Number(doTaskSummary.overdue) || 0}</strong>
+                </div>
+              </div>
+
               <div className="sa-dash-task-tools">
+                <label className="sa-dash-task-date-wrap" title="Filter by date">
+                  <Calendar size={13} />
+                  <input
+                    className="sa-op-filter sa-dash-task-date"
+                    type="date"
+                    value={doTaskDate}
+                    max={localDateStr()}
+                    onChange={(e) => {
+                      const val = e.target.value || localDateStr();
+                      setDoTaskDate(val);
+                      loadDoTaskOverview(val);
+                    }}
+                    aria-label="DO tasks date"
+                  />
+                </label>
+                {doTaskDate !== localDateStr() ? (
+                  <button
+                    type="button"
+                    className="sa-dash-task-today-btn"
+                    onClick={() => {
+                      const today = localDateStr();
+                      setDoTaskDate(today);
+                      loadDoTaskOverview(today);
+                    }}
+                    disabled={loadingDoTasks}
+                  >
+                    Today
+                  </button>
+                ) : null}
                 <div className="sa-dash-task-filters">
                   {[
                     { id: 'all', label: 'All' },
-                    { id: 'pending', label: 'Pend' },
-                    { id: 'overdue', label: 'Over' },
+                    { id: 'pending', label: 'Pending' },
+                    { id: 'overdue', label: 'Overdue' },
                     { id: 'done', label: 'Done' }
                   ].map((tab) => (
                     <button
@@ -6138,12 +6191,12 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   ))}
                 </div>
                 <label className="sa-dash-task-search">
-                  <Search size={12} />
+                  <Search size={13} />
                   <input
                     type="search"
                     value={doTaskSearch}
                     onChange={(e) => setDoTaskSearch(e.target.value)}
-                    placeholder="DO / warehouse"
+                    placeholder="Search DO or warehouse"
                   />
                 </label>
               </div>
@@ -6152,26 +6205,33 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 <div className="sa-op-banner-wrap">
                   <LoadErrorBanner
                     message={doTaskError}
-                    onRetry={loadDoTaskOverview}
+                    onRetry={() => loadDoTaskOverview(doTaskDate)}
                     onDismiss={() => setDoTaskError('')}
                   />
                 </div>
               ) : null}
 
               {loadingDoTasks && !doTaskOverview ? (
-                <div className="sa-dash-task-empty">Loading…</div>
+                <div className="sa-dash-task-empty">Loading DO tasks…</div>
               ) : doTaskRows.length === 0 ? (
                 <div className="sa-dash-task-empty">
-                  {doTaskSearch || doTaskFilter !== 'all' ? 'No match.' : 'No DOs yet.'}
+                  {doTaskSearch || doTaskFilter !== 'all'
+                    ? 'No operators match this filter.'
+                    : 'No data operators yet.'}
                 </div>
               ) : (
                 <div className="sa-dash-task-list">
+                  {!(Number(doTaskSummary.morning_completed) || Number(doTaskSummary.evening_completed)) ? (
+                    <div className="sa-dash-task-hint">
+                      No submissions on this date. Choose another day to see completed Morning / Evening counts.
+                    </div>
+                  ) : null}
                   <div className="sa-dash-task-cols">
                     <span />
-                    <span>DO</span>
+                    <span>Operator</span>
                     <span>Warehouse</span>
-                    <span>Mor done/total</span>
-                    <span>Evn done/total</span>
+                    <span>Morning</span>
+                    <span>Evening</span>
                     <span>Over</span>
                   </div>
                   {doTaskRows.map((op, idx) => {
@@ -6183,7 +6243,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     const overdue = Number(op.overdue) || 0;
                     const mornPend = Number(op.morning_pending) || Math.max(0, mornExp - mornDone);
                     const evePend = Number(op.evening_pending) || Math.max(0, eveExp - eveDone);
-                    const tone = overdue > 0 ? 'bad' : (mornPend > 0 || evePend > 0) ? 'warn' : (mornExp + eveExp) > 0 ? 'good' : 'muted';
+                    const mornPct = mornExp > 0 ? Math.min(100, Math.round((mornDone / mornExp) * 100)) : 0;
+                    const evePct = eveExp > 0 ? Math.min(100, Math.round((eveDone / eveExp) * 100)) : 0;
+                    const tone =
+                      overdue > 0
+                        ? 'bad'
+                        : mornPend > 0 || evePend > 0
+                          ? 'warn'
+                          : mornExp + eveExp > 0
+                            ? 'good'
+                            : 'muted';
                     return (
                       <button
                         key={`${op.id || op.email || op.name}-${idx}`}
@@ -6195,15 +6264,29 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         <span className="sa-dash-task-dot" />
                         <strong>{op.name || op.full_name || 'DO'}</strong>
                         <em>{op.warehouse_name || '—'}</em>
-                        <span className={`sa-dash-task-shift${mornPend > 0 ? ' pending' : mornExp > 0 ? ' done' : ''}`}>
-                          <b>{mornDone}</b>
-                          <i>/{mornExp}</i>
+                        <span
+                          className={`sa-dash-task-shift${mornPend > 0 ? ' pending' : mornExp > 0 ? ' done' : ''}`}
+                        >
+                          <span className="sa-dash-task-shift-top">
+                            <b>{mornDone}</b>
+                            <i>/{mornExp}</i>
+                          </span>
+                          <span className="sa-dash-task-bar" aria-hidden>
+                            <span style={{ width: `${mornPct}%` }} />
+                          </span>
                         </span>
-                        <span className={`sa-dash-task-shift${evePend > 0 ? ' pending' : eveExp > 0 ? ' done' : ''}`}>
-                          <b>{eveDone}</b>
-                          <i>/{eveExp}</i>
+                        <span
+                          className={`sa-dash-task-shift${evePend > 0 ? ' pending' : eveExp > 0 ? ' done' : ''}`}
+                        >
+                          <span className="sa-dash-task-shift-top">
+                            <b>{eveDone}</b>
+                            <i>/{eveExp}</i>
+                          </span>
+                          <span className="sa-dash-task-bar" aria-hidden>
+                            <span style={{ width: `${evePct}%` }} />
+                          </span>
                         </span>
-                        <b className="overdue">{overdue}</b>
+                        <b className={`overdue${overdue > 0 ? ' hot' : ''}`}>{overdue}</b>
                       </button>
                     );
                   })}

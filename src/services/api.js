@@ -498,9 +498,15 @@ export const fetchDashboardStats = async () => {
   return data.stats || data;
 };
 
-/** Today's DO chamber tasks: completed / pending / overdue per operator + warehouse. */
-export const fetchDoTaskOverview = async () => {
-  const res = await fetch(`${API_BASE_URL}/dashboard/do-task-overview`);
+/** DO chamber tasks for a day: completed / pending / overdue per operator + warehouse. */
+export const fetchDoTaskOverview = async ({ date } = {}) => {
+  const queryParams = new URLSearchParams();
+  const day = toApiDateParam(date);
+  if (day) queryParams.append('date', day);
+  const qs = queryParams.toString();
+  const res = await fetch(
+    `${API_BASE_URL}/dashboard/do-task-overview${qs ? `?${qs}` : ''}`
+  );
   return await assertOk(res, 'Failed to fetch DO daily task overview.');
 };
 
