@@ -24,6 +24,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   };
   const todayStr = getLocalTodayStr();
   const fileInputRef = useRef({});
+  const submissionKeyRef = useRef(null);
 
   const [logs, setLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
@@ -688,6 +689,13 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
 
     setSubmitting(true);
 
+    if (!editData && !submissionKeyRef.current) {
+      submissionKeyRef.current = {
+        id: `web_in_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        at: new Date().toISOString()
+      };
+    }
+
     const submissionData = new FormData();
     Object.keys(formData).forEach(key => {
       if (key === 'inward_driver_no') {
@@ -726,6 +734,11 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
       submissionData.append('inward_damage_boxes_photo', file);
     });
 
+    if (!editData && submissionKeyRef.current) {
+      submissionData.append('client_submission_id', submissionKeyRef.current.id);
+      submissionData.append('client_submitted_at', submissionKeyRef.current.at);
+    }
+
     let res;
     if (editData) {
       res = await updateInwardLog(editData.inward_id, submissionData);
@@ -736,6 +749,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
     setVerificationData(null);
 
      if (res) {
+      submissionKeyRef.current = null;
       setSuccessMsg(editData ? 'Inward record updated successfully' : 'Inward temperature saved successfully');
       if (editData && setEditData) setEditData(null);
       loadLogs();
