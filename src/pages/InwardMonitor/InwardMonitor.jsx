@@ -677,6 +677,7 @@ export default function InwardMonitor({ editData, setEditData, setActiveDOMenu }
   };
 
   const handleConfirmSubmit = async () => {
+    if (submitting) return;
     if (!validateUnloadingStartAfterReporting()) {
       return;
     }

@@ -601,6 +601,7 @@ export default function OutwardMonitor({ editData, setEditData, setActiveDOMenu 
   };
 
   const handleConfirmSubmit = async () => {
+    if (submitting) return;
     const cleanTime = (t) => t && t.includes(' ') ? t.split(' ')[1] : (t || '');
     
     // Validate same-day loading start vs reporting time
