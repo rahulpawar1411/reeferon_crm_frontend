@@ -9,7 +9,7 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 import Login from './pages/Login/Login';
 import Logo from './components/Logo/Logo';
-import { API_BASE_URL, clearAuthSession, fetchPermissionRequests } from './services/api';
+import { API_BASE_URL, clearAuthSession, fetchPermissionRequests, logBackendConnection } from './services/api';
 import './App.css';
 import './styles/shell-layout.css';
 
@@ -103,6 +103,10 @@ export default function App() {
     return () => {
       window.removeEventListener('unauthorized-session-expired', handleSessionExpired);
     };
+  }, []);
+
+  useEffect(() => {
+    logBackendConnection();
   }, []);
 
   // DO Notifications red-dot: only when at least one Super Admin APPROVAL is waiting (not Done yet)

@@ -3,13 +3,13 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://YOUR_RENDER_BACKEND_URL/api/:splat"
+  to = "https://YOUR_RAILWAY_BACKEND.up.railway.app/api/:splat"
   status = 200
   force = true
 
 [[redirects]]
   from = "/uploads/*"
-  to = "https://YOUR_RENDER_BACKEND_URL/uploads/:splat"
+  to = "https://YOUR_RAILWAY_BACKEND.up.railway.app/uploads/:splat"
   status = 200
   force = true
 

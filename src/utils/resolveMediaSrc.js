@@ -1,15 +1,28 @@
 /**
  * Build display URL candidates for uploaded media.
  *
- * Live DB often stores `uploads/…` while the file also lives on Cloudinary
- * under `crm/<folder>/<file>`. Prefer CDN for those paths so local backends
- * without the binary still show images; keep `/uploads` as fallback.
+ * MySQL may still store Cloudinary URLs from the old CDN.
+ * Those URLs stay as-is in the DB. We map them to:
+ *   /uploads/crm/inward_images|outward_images|daily_temp_monitor_images/<file>
+ * (same Cloudinary public_id path).
  */
 
 const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'de9ba8bpk';
 
 const UPLOAD_FOLDER_RE =
   /(outward_images|inward_images|daily_temp_monitor_images|crm\/(?:outward_images|inward_images|daily_temp_monitor_images))/i;
+
+function apiOrigin() {
+  const api = String(import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+  if (/^https?:\/\//i.test(api)) return api.replace(/\/api$/i, '');
+  return '';
+}
+
+function toUploadsUrl(relPath) {
+  const clean = String(relPath || '').replace(/^\/+/, '');
+  const origin = apiOrigin();
+  return origin ? `${origin}/${clean}` : `/${clean}`;
+}
 
 /** Map Cloudinary CRM URL → local uploads path. */
 export function cloudinaryUrlToUploadsPath(raw) {
@@ -20,25 +33,26 @@ export function cloudinaryUrlToUploadsPath(raw) {
   const match = value.match(/\/upload\/(?:v\d+\/)?(.+?)(?:\?|$)/i);
   if (!match) return null;
 
-  let rest = match[1].replace(/^crm\//i, '');
+  let rest = match[1];
+  if (rest.startsWith('crm/')) rest = rest.slice(4);
   if (!UPLOAD_FOLDER_RE.test(rest)) return null;
   if (rest.startsWith('crm/')) rest = rest.slice(4);
-  return `uploads/${rest}`;
+  return `uploads/crm/${rest}`;
 }
 
-/** Map uploads/… path → Cloudinary CDN URL (testing / backup only). */
+/** Map uploads/… path → Cloudinary CDN URL (optional fallback only). */
 export function uploadsPathToCloudinaryUrl(raw) {
   if (raw == null) return null;
   const value = String(raw).trim().replace(/\\/g, '/').replace(/^\/+/, '');
   if (!value.startsWith('uploads/')) return null;
 
   const match = value.match(
-    /^uploads\/(outward_images|inward_images|daily_temp_monitor_images)\/(.+)$/i
+    /^uploads\/(?:crm\/)?(outward_images|inward_images|daily_temp_monitor_images)\/(.+)$/i
   );
   if (!match || !match[2]) return null;
 
   const folder = match[1];
-  const file = match[2];
+  const file = String(match[2]).replace(/\.(jpe?g|png|webp|gif)$/i, '');
   return `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/crm/${folder}/${file}`;
 }
 
@@ -46,14 +60,13 @@ function isCloudinaryUrl(u) {
   return /^https?:\/\/res\.cloudinary\.com\//i.test(String(u || ''));
 }
 
-/** Live/production: Cloudinary first. Local: /uploads unless flag is on. */
 function preferCdnFirst() {
-  return import.meta.env.PROD || import.meta.env.VITE_PREFER_CLOUDINARY === 'true';
+  return import.meta.env.VITE_PREFER_CLOUDINARY === 'true';
 }
 
 /**
  * Resolve a single best-effort src for <img>.
- * Default: `/uploads/…` on the API/server.
+ * Default: server /uploads. Cloudinary only if VITE_PREFER_CLOUDINARY=true.
  */
 export function resolveMediaSrc(path) {
   const candidates = buildMediaSrcCandidates(path);
@@ -67,7 +80,7 @@ export function resolveMediaSrc(path) {
 
 /**
  * Ordered candidates for onError fallback.
- * Default order: server uploads first; Cloudinary only if testing flag is on.
+ * Default: local uploads first, then original Cloudinary URL.
  */
 export function buildMediaSrcCandidates(path) {
   if (path == null) return [];
@@ -90,10 +103,9 @@ export function buildMediaSrcCandidates(path) {
     const local = cloudinaryUrlToUploadsPath(value);
     if (cdnFirst) {
       push(value);
-      if (local) push(`/${local}`);
+      if (local) push(toUploadsUrl(local));
     } else {
-      // Feature: prefer mapped /uploads when CDN URL is stored
-      if (local) push(`/${local}`);
+      if (local) push(toUploadsUrl(local));
       push(value);
     }
     return out;
@@ -102,18 +114,14 @@ export function buildMediaSrcCandidates(path) {
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
 
   if (normalized.startsWith('uploads/')) {
-    const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
-    // Live DB often stores uploads/… while the real file is on Cloudinary (same name).
-    // Prefer CDN so local/dev backends without the file still show images.
-    if (cloudUrl) push(cloudUrl);
-    push(`/${normalized}`);
+    push(toUploadsUrl(normalized));
+    if (cdnFirst) {
+      const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
+      if (cloudUrl) push(cloudUrl);
+    }
     return out;
   }
 
-  if (!normalized.includes('/')) {
-    push(`/${normalized}`);
-  } else {
-    push(`/${normalized}`);
-  }
+  push(toUploadsUrl(normalized));
   return out;
 }

@@ -14,6 +14,52 @@
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
+function apiHostLabel(base) {
+  const raw = String(base || '').trim();
+  if (!raw || raw === '/api' || /localhost|127\.0\.0\.1/.test(raw)) return 'LOCAL';
+  if (/railway\.app/i.test(raw)) return 'PRODUCTION';
+  if (/^https:\/\//i.test(raw)) return 'PRODUCTION';
+  return 'CUSTOM';
+}
+
+/** Browser console: which backend is used + /api/health status + DB. */
+export async function logBackendConnection() {
+  const mode = apiHostLabel(API_BASE_URL);
+  const api = String(API_BASE_URL).replace(/\/$/, '');
+  console.info(
+    `%c[ReeferON] ${mode} backend%c\nAPI: ${api}`,
+    'background:#059669;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700',
+    'color:#111;font-weight:600'
+  );
+
+  try {
+    const healthUrl = `${api}/health`;
+    const res = await fetch(healthUrl, { credentials: 'include' });
+    const data = await res.json().catch(() => ({}));
+    const info = data.data || {};
+    const db = info.database || (data.success ? 'connected' : 'disconnected');
+    const status = info.status || (res.ok && data.success ? 'Online' : 'Offline');
+    const dbError = info.databaseError || null;
+
+    if (res.ok && data.success) {
+      console.info(
+        `[ReeferON] Status: ${status} | Database: ${db}` +
+          (info.uploads ? ` | Uploads: ${info.uploads}` : '') +
+          (typeof info.cloudinaryUploads === 'boolean'
+            ? ` | Cloudinary: ${info.cloudinaryUploads ? 'on' : 'off'}`
+            : '')
+      );
+    } else {
+      console.warn(
+        `[ReeferON] Health failed (${res.status}). Status: ${status} | Database: ${db}` +
+          (dbError ? ` | ${dbError}` : '')
+      );
+    }
+  } catch (err) {
+    console.error('[ReeferON] Backend not reachable:', api, err?.message || err);
+  }
+}
+
 const AUTH_TOKEN_KEY = 'auth_token';
 
 export function getAuthToken() {
