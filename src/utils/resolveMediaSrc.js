@@ -66,7 +66,8 @@ function preferCdnFirst() {
 
 /**
  * Resolve a single best-effort src for <img>.
- * Default: server /uploads. Cloudinary only if VITE_PREFER_CLOUDINARY=true.
+ * Default: Cloudinary CDN when VITE_PREFER_CLOUDINARY=true.
+ * Otherwise server /uploads.
  */
 export function resolveMediaSrc(path) {
   const candidates = buildMediaSrcCandidates(path);
@@ -114,10 +115,12 @@ export function buildMediaSrcCandidates(path) {
   const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '');
 
   if (normalized.startsWith('uploads/')) {
-    push(toUploadsUrl(normalized));
     if (cdnFirst) {
       const cloudUrl = uploadsPathToCloudinaryUrl(normalized);
       if (cloudUrl) push(cloudUrl);
+      push(toUploadsUrl(normalized));
+    } else {
+      push(toUploadsUrl(normalized));
     }
     return out;
   }

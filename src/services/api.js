@@ -49,22 +49,22 @@ export async function fetchHealthSnapshot() {
     const res = await fetch(`${api}/health`, { credentials: 'include' });
     const data = await res.json().catch(() => ({}));
     const info = data.data || {};
-    const db = info.db || {};
-    const backend = info.backend || {};
-    snapshot.ok = Boolean(res.ok && data.success && (info.databaseConnected !== false));
-    snapshot.status = info.status || (snapshot.ok ? 'Online' : 'Degraded');
-    snapshot.database = info.database || (snapshot.ok ? 'connected' : 'disconnected');
-    snapshot.databaseConnected = snapshot.database === 'connected';
-    snapshot.dbHost = db.host || '';
-    snapshot.dbName = db.name || '';
-    snapshot.dbKind = db.kind || '';
-    snapshot.deployedOn = backend.deployedOn || '';
-    snapshot.backendHost = backend.publicHost || '';
-    snapshot.databaseError = info.databaseError || db.error || null;
+    snapshot.ok = Boolean(res.ok && data.success);
+    snapshot.status = info.status || (snapshot.ok ? 'Online' : 'Offline');
     snapshot.message = data.message || '';
-    snapshot.uploads = info.uploads;
-    snapshot.cloudinaryUploads = info.cloudinaryUploads;
-    snapshot.allowedFrontend = info.frontend?.allowedOrigin || null;
+    snapshot.deployedOn = /railway\.app/i.test(api) ? 'railway' : snapshot.mode;
+
+    try {
+      const dbRes = await fetch(`${api}/health/db`, { credentials: 'include' });
+      const dbData = await dbRes.json().catch(() => ({}));
+      const dbInfo = dbData.data || {};
+      snapshot.database = dbInfo.database || 'disconnected';
+      snapshot.databaseConnected = snapshot.database === 'connected';
+      snapshot.databaseError = dbInfo.databaseError || null;
+    } catch (_) {
+      snapshot.database = 'disconnected';
+      snapshot.databaseConnected = false;
+    }
     return snapshot;
   } catch (err) {
     snapshot.message = err?.message || 'Backend not reachable';
