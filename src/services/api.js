@@ -18,7 +18,7 @@ function apiHostLabel(base) {
   const raw = String(base || '').trim();
   if (!raw || raw === '/api' || /localhost|127\.0\.0\.1/.test(raw)) return 'LOCAL';
   if (/railway\.app/i.test(raw)) return 'PRODUCTION';
-  if (/onrender\.com/i.test(raw)) return 'OLD-RENDER';
+  if (/onrender\.com/i.test(raw)) return 'RENDER';
   if (/^https:\/\//i.test(raw)) return 'PRODUCTION';
   return 'CUSTOM';
 }
@@ -52,7 +52,11 @@ export async function fetchHealthSnapshot() {
     snapshot.ok = Boolean(res.ok && data.success);
     snapshot.status = info.status || (snapshot.ok ? 'Online' : 'Offline');
     snapshot.message = data.message || '';
-    snapshot.deployedOn = /railway\.app/i.test(api) ? 'railway' : snapshot.mode;
+    snapshot.deployedOn = /onrender\.com/i.test(api)
+      ? 'RENDER'
+      : /railway\.app/i.test(api)
+        ? 'RAILWAY'
+        : snapshot.mode;
 
     try {
       const dbRes = await fetch(`${api}/health/db`, { credentials: 'include' });
@@ -61,6 +65,9 @@ export async function fetchHealthSnapshot() {
       snapshot.database = dbInfo.database || 'disconnected';
       snapshot.databaseConnected = snapshot.database === 'connected';
       snapshot.databaseError = dbInfo.databaseError || null;
+      snapshot.dbHost = dbInfo.dbHost || '';
+      snapshot.dbName = dbInfo.dbName || '';
+      snapshot.dbKind = dbInfo.dbKind || '';
     } catch (_) {
       snapshot.database = 'disconnected';
       snapshot.databaseConnected = false;
