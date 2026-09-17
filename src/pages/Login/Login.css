@@ -281,6 +281,37 @@
   to { transform: rotate(360deg); }
 }
 
+.login-env-status {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #334155;
+  word-break: break-all;
+}
+
+.login-env-status p {
+  margin: 0 0 4px;
+}
+
+.login-env-status p:last-child {
+  margin-bottom: 0;
+}
+
+.login-env-status.is-ok {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.login-env-status.is-bad {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
 .login-footer-notice {
   text-align: center;
   padding: 0 10px;

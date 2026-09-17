@@ -4,10 +4,10 @@
 // Renders secure login portal for Super Admin, Customer, and DO Operator.
 // ====================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Lock, Mail, ShieldAlert, Loader2, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import Logo from '../../components/Logo/Logo';
-import { API_BASE_URL, setAuthToken } from '../../services/api';
+import { API_BASE_URL, setAuthToken, fetchHealthSnapshot } from '../../services/api';
 import './Login.css';
 
 export default function Login({ onLoginSuccess }) {
@@ -16,6 +16,17 @@ export default function Login({ onLoginSuccess }) {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
+  const [health, setHealth] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchHealthSnapshot().then((snap) => {
+      if (!cancelled) setHealth(snap);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -186,8 +197,27 @@ export default function Login({ onLoginSuccess }) {
           </button>
         </form>
 
-        <div className="login-footer-notice">
-          <p>Protected by active TLS encryption & rate limiters. Unauthorized attempts will be logged.</p>
+        <div className={`login-env-status ${health?.ok ? 'is-ok' : health ? 'is-bad' : 'is-wait'}`}>
+          <p>
+            <strong>Frontend:</strong> {health?.frontendOrigin || window.location.origin}
+          </p>
+          <p>
+            <strong>Backend:</strong>{' '}
+            {health
+              ? `${health.deployedOn || health.mode} · ${health.api}`
+              : API_BASE_URL}
+          </p>
+          <p>
+            <strong>Database:</strong>{' '}
+            {health
+              ? health.databaseConnected
+                ? `connected · ${health.dbHost}${health.dbName ? ` / ${health.dbName}` : ''} (${health.dbKind || 'db'})`
+                : `NOT connected${health.databaseError ? ` · ${health.databaseError}` : ''}`
+              : 'checking…'}
+          </p>
+          <p>
+            <strong>Status:</strong> {health?.status || 'checking…'}
+          </p>
         </div>
       </div>
     </div>
