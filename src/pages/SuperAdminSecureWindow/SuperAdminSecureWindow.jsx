@@ -21,6 +21,7 @@ import {
   fetchPermissionRequests, updatePermissionRequest, fetchSystemConfig, updateSystemConfig,
   fetchRecordPermissionHistory,
   fetchChamberLogs, fetchInwardLogs, fetchOutwardLogs, fetchDashboardStats, fetchDoTaskOverview,
+  fetchDoOperatorIoCounts,
   fetchAllChamberLogs, fetchAllInwardLogs, fetchAllOutwardLogs, fetchAllLogPages,
   deleteChamberLog, deleteInwardLog, deleteOutwardLog,
   toApiDateParam,
@@ -1572,7 +1573,16 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       setOperators(list);
       setViewingOperator((prev) => {
         if (!prev?.id) return prev;
-        return list.find((o) => Number(o.id) === Number(prev.id)) || prev;
+        const next = list.find((o) => Number(o.id) === Number(prev.id));
+        if (!next) return prev;
+        return {
+          ...prev,
+          ...next,
+          total_inward: Number(next.total_inward ?? prev.total_inward) || 0,
+          total_outward: Number(next.total_outward ?? prev.total_outward) || 0,
+          today_inward: Number(next.today_inward ?? prev.today_inward) || 0,
+          today_outward: Number(next.today_outward ?? prev.today_outward) || 0
+        };
       });
     } catch (err) {
       setOpError(err.message || 'Failed to fetch operators.');
@@ -2907,7 +2917,23 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
           `Server returned ${data.today} instead of ${date}. Restart backend to enable date filter.`
         );
       }
-      setDoTaskOverview(data || null);
+      const operators = Array.isArray(data?.operators)
+        ? data.operators.map((op) => ({
+            ...op,
+            total_inward: Number(op.total_inward) || 0,
+            total_outward: Number(op.total_outward) || 0,
+            today_inward: Number(op.today_inward) || 0,
+            today_outward: Number(op.today_outward) || 0
+          }))
+        : [];
+      const summary = {
+        ...(data?.summary || {}),
+        total_inward: Number(data?.summary?.total_inward) || 0,
+        total_outward: Number(data?.summary?.total_outward) || 0,
+        today_inward: Number(data?.summary?.today_inward) || 0,
+        today_outward: Number(data?.summary?.today_outward) || 0
+      };
+      setDoTaskOverview(data ? { ...data, summary, operators } : null);
       if (data?.today) setDoTaskDate(data.today);
     } catch (err) {
       console.error('Error loading DO daily tasks:', err);
@@ -3979,8 +4005,19 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
   const openOperatorProfile = async (op) => {
     if (!op) return;
+    const emailKey = String(op.email || '').trim().toLowerCase();
+    const fromTasks = (doTaskOverview?.operators || []).find(
+      (row) => String(row.email || '').trim().toLowerCase() === emailKey
+    );
     setEditingOp(null);
-    setViewingOperator(op);
+    setViewingOperator({
+      ...op,
+      total_inward: Number(op.total_inward ?? fromTasks?.total_inward) || 0,
+      total_outward: Number(op.total_outward ?? fromTasks?.total_outward) || 0,
+      today_inward: Number(op.today_inward ?? fromTasks?.today_inward) || 0,
+      today_outward: Number(op.today_outward ?? fromTasks?.today_outward) || 0,
+      io_counts_loading: true
+    });
     setOpProfileSection('task_status');
     setExpandedOpMappingsId(null);
     setOpMappingsError('');
@@ -4011,6 +4048,31 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     setOpTaskChamberFilter('all');
     setOpTaskLogs([]);
     setOpTaskLogsError('');
+
+    const loadIoCounts = (async () => {
+      try {
+        const counts = await fetchDoOperatorIoCounts(op.email);
+        setViewingOperator((prev) => {
+          if (!prev || String(prev.email || '').toLowerCase() !== emailKey) return prev;
+          return {
+            ...prev,
+            total_inward: Number(counts.total_inward) || 0,
+            total_outward: Number(counts.total_outward) || 0,
+            today_inward: Number(counts.today_inward) || 0,
+            today_outward: Number(counts.today_outward) || 0,
+            io_counts_loading: false,
+            io_counts_today: counts.today || localDateStr()
+          };
+        });
+      } catch (err) {
+        console.warn('DO profile IO counts failed:', err.message || err);
+        setViewingOperator((prev) => {
+          if (!prev || String(prev.email || '').toLowerCase() !== emailKey) return prev;
+          return { ...prev, io_counts_loading: false };
+        });
+      }
+    })();
+
     if (op.warehouse_name) {
       await loadOpMappings(op.warehouse_name);
     } else {
@@ -4018,7 +4080,8 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
     }
     await Promise.all([
       loadOpMasterActivities(op.email),
-      loadOpTaskStatus(op, fromDate, toDate)
+      loadOpTaskStatus(op, fromDate, toDate),
+      loadIoCounts
     ]);
   };
 
@@ -4038,7 +4101,13 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
       chamber_limit: row.chamber_limit
     };
     setActiveMenu('data_operators');
-    openOperatorProfile(op);
+    openOperatorProfile({
+      ...op,
+      total_inward: row.total_inward ?? match?.total_inward ?? 0,
+      total_outward: row.total_outward ?? match?.total_outward ?? 0,
+      today_inward: row.today_inward ?? match?.today_inward ?? 0,
+      today_outward: row.today_outward ?? match?.today_outward ?? 0
+    });
   };
 
   const openChamberTaskProfile = async (task, op) => {
@@ -5314,30 +5383,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
         <div className="secure-sidebar-bottom">
           <div
             className={`secure-profile-badge secure-profile-badge--clickable${activeMenu === 'super_admin_profile' ? ' is-active' : ''}`}
-            onClick={openSuperAdminProfileWindow}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                openSuperAdminProfileWindow();
-              }
-            }}
-            title="Open Super Admin Profile"
           >
-            <div className="secure-avatar">SA</div>
-            <div className="secure-user-info">
-              <strong>Super Admin</strong>
-              <span>{user?.email || 'admin@reeferon.com'}</span>
-            </div>
+            <button
+              type="button"
+              className="secure-profile-main"
+              onClick={openSuperAdminProfileWindow}
+              title="Open Super Admin Profile"
+            >
+              <div className="secure-avatar">SA</div>
+              <div className="secure-user-info">
+                <strong>Super Admin</strong>
+                <span>{user?.email || 'admin@reeferon.com'}</span>
+              </div>
+            </button>
             <button
               type="button"
               className="secure-logout-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onLogout();
-              }}
+              onClick={onLogout}
               title="Log Out Session"
+              aria-label="Log out"
             >
               <LogOut size={16} />
             </button>
@@ -5347,33 +5411,25 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
 
       {/* 2. Main Workspace Layout */}
       {/* Header */}
-      <header
-        className="secure-admin-header"
-        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '0 24px', zIndex: 110 }}
-      >
-        {/* Left section: Mobile-only Logo */}
-        <div className="secure-header-left" style={{ position: 'absolute', left: '24px', display: 'flex', alignItems: 'center' }}>
+      <header className="secure-admin-header">
+        <div className="secure-header-left">
           <div className="secure-mobile-logo mobile-only">
             <Logo compact={true} />
           </div>
         </div>
 
-        {/* Center section: Super Admin + date/time below */}
-        <div className="secure-header-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', textAlign: 'center' }}>
-          <span className="secure-role-tag" style={{ margin: 0 }}>
-            Super Admin
-          </span>
-          <div className="secure-clock-subtext" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: '700' }}>
+        <div className="secure-header-center">
+          <span className="secure-role-tag">Super Admin</span>
+          <div className="secure-clock-subtext">
             <span>{formatDate(time)}</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+            <span className="secure-clock-time">
               <Clock size={12} />
               {formatTime(time)}
             </span>
           </div>
         </div>
 
-        {/* Right section: Mobile Hamburger Button & Spacers */}
-        <div className="secure-header-right" style={{ position: 'absolute', right: '24px', display: 'flex', alignItems: 'center' }}>
+        <div className="secure-header-right">
           <button 
             className="mobile-hamburger-btn mobile-only"
             onClick={() => setIsMobileMenuOpen(prev => !prev)}
@@ -6122,24 +6178,44 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                 </button>
               </div>
 
-              <div className="sa-dash-task-metrics">
-                <div className="sa-dash-task-metric done" title="Morning completed / expected">
-                  <span>Morning</span>
-                  <strong>
-                    {Number(doTaskSummary.morning_completed) || 0}
-                    <i>/{Number(doTaskSummary.morning_expected) || 0}</i>
-                  </strong>
+              <div className="sa-dash-task-summary">
+                <div className="sa-dash-task-summary-group">
+                  <div className="sa-dash-task-metric done" title="Morning completed / expected">
+                    <span>Morning</span>
+                    <strong>
+                      {Number(doTaskSummary.morning_completed) || 0}
+                      <i>/{Number(doTaskSummary.morning_expected) || 0}</i>
+                    </strong>
+                  </div>
+                  <div className="sa-dash-task-metric evening" title="Evening completed / expected">
+                    <span>Evening</span>
+                    <strong>
+                      {Number(doTaskSummary.evening_completed) || 0}
+                      <i>/{Number(doTaskSummary.evening_expected) || 0}</i>
+                    </strong>
+                  </div>
+                  <div className="sa-dash-task-metric overdue" title="Missing logs in prior 5 days">
+                    <span>Overdue</span>
+                    <strong>{Number(doTaskSummary.overdue) || 0}</strong>
+                  </div>
                 </div>
-                <div className="sa-dash-task-metric evening" title="Evening completed / expected">
-                  <span>Evening</span>
-                  <strong>
-                    {Number(doTaskSummary.evening_completed) || 0}
-                    <i>/{Number(doTaskSummary.evening_expected) || 0}</i>
-                  </strong>
-                </div>
-                <div className="sa-dash-task-metric overdue" title="Missing logs in prior 5 days">
-                  <span>Overdue</span>
-                  <strong>{Number(doTaskSummary.overdue) || 0}</strong>
+                <div className="sa-dash-task-summary-group io">
+                  <div className="sa-dash-task-metric inward" title="All inward records till now (all DOs)">
+                    <span>Total Inward</span>
+                    <strong>{Number(doTaskSummary.total_inward) || 0}</strong>
+                  </div>
+                  <div className="sa-dash-task-metric outward" title="All outward records till now (all DOs)">
+                    <span>Total Outward</span>
+                    <strong>{Number(doTaskSummary.total_outward) || 0}</strong>
+                  </div>
+                  <div className="sa-dash-task-metric inward-today" title={`Inward on ${doTaskOverview?.today || doTaskDate || 'selected day'}`}>
+                    <span>{doTaskDate === localDateStr() ? 'Today In' : 'Day In'}</span>
+                    <strong>{Number(doTaskSummary.today_inward) || 0}</strong>
+                  </div>
+                  <div className="sa-dash-task-metric outward-today" title={`Outward on ${doTaskOverview?.today || doTaskDate || 'selected day'}`}>
+                    <span>{doTaskDate === localDateStr() ? 'Today Out' : 'Day Out'}</span>
+                    <strong>{Number(doTaskSummary.today_outward) || 0}</strong>
+                  </div>
                 </div>
               </div>
 
@@ -6227,12 +6303,14 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     </div>
                   ) : null}
                   <div className="sa-dash-task-cols">
-                    <span />
+                    <span className="sa-dash-task-col-status" />
                     <span>Operator</span>
                     <span>Warehouse</span>
-                    <span>Morning</span>
-                    <span>Evening</span>
-                    <span>Over</span>
+                    <span className="sa-dash-task-col-num">Morning</span>
+                    <span className="sa-dash-task-col-num">Evening</span>
+                    <span className="sa-dash-task-col-num">Over</span>
+                    <span className="sa-dash-task-col-num">Inward</span>
+                    <span className="sa-dash-task-col-num">Outward</span>
                   </div>
                   {doTaskRows.map((op, idx) => {
                     const totalTasks = Number(op.assignment_count) || 0;
@@ -6243,8 +6321,10 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                     const overdue = Number(op.overdue) || 0;
                     const mornPend = Number(op.morning_pending) || Math.max(0, mornExp - mornDone);
                     const evePend = Number(op.evening_pending) || Math.max(0, eveExp - eveDone);
-                    const mornPct = mornExp > 0 ? Math.min(100, Math.round((mornDone / mornExp) * 100)) : 0;
-                    const evePct = eveExp > 0 ? Math.min(100, Math.round((eveDone / eveExp) * 100)) : 0;
+                    const inTotal = Number(op.total_inward) || 0;
+                    const outTotal = Number(op.total_outward) || 0;
+                    const inToday = Number(op.today_inward) || 0;
+                    const outToday = Number(op.today_outward) || 0;
                     const tone =
                       overdue > 0
                         ? 'bad'
@@ -6259,34 +6339,35 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                         type="button"
                         className={`sa-dash-task-row tone-${tone}`}
                         onClick={() => openDoFromDashboard(op)}
-                        title={`${op.name || op.full_name || 'DO'} · Morning ${mornDone}/${mornExp} · Evening ${eveDone}/${eveExp}`}
+                        title={`${op.name || op.full_name || 'DO'} · Inward ${inTotal} (today ${inToday}) · Outward ${outTotal} (today ${outToday})`}
                       >
                         <span className="sa-dash-task-dot" />
-                        <strong>{op.name || op.full_name || 'DO'}</strong>
-                        <em>{op.warehouse_name || '—'}</em>
+                        <span className="sa-dash-task-op">
+                          <strong>{op.name || op.full_name || 'DO'}</strong>
+                          <small>{op.email || '—'}</small>
+                        </span>
+                        <span className="sa-dash-task-wh">{op.warehouse_name || '—'}</span>
                         <span
                           className={`sa-dash-task-shift${mornPend > 0 ? ' pending' : mornExp > 0 ? ' done' : ''}`}
                         >
-                          <span className="sa-dash-task-shift-top">
-                            <b>{mornDone}</b>
-                            <i>/{mornExp}</i>
-                          </span>
-                          <span className="sa-dash-task-bar" aria-hidden>
-                            <span style={{ width: `${mornPct}%` }} />
-                          </span>
+                          <b>{mornDone}</b>
+                          <i>/{mornExp}</i>
                         </span>
                         <span
                           className={`sa-dash-task-shift${evePend > 0 ? ' pending' : eveExp > 0 ? ' done' : ''}`}
                         >
-                          <span className="sa-dash-task-shift-top">
-                            <b>{eveDone}</b>
-                            <i>/{eveExp}</i>
-                          </span>
-                          <span className="sa-dash-task-bar" aria-hidden>
-                            <span style={{ width: `${evePct}%` }} />
-                          </span>
+                          <b>{eveDone}</b>
+                          <i>/{eveExp}</i>
                         </span>
                         <b className={`overdue${overdue > 0 ? ' hot' : ''}`}>{overdue}</b>
+                        <span className="sa-dash-task-io inward" title={`Inward total ${inTotal} · today ${inToday}`}>
+                          <b>{inTotal}</b>
+                          <i>today {inToday}</i>
+                        </span>
+                        <span className="sa-dash-task-io outward" title={`Outward total ${outTotal} · today ${outToday}`}>
+                          <b>{outTotal}</b>
+                          <i>today {outToday}</i>
+                        </span>
                       </button>
                     );
                   })}
@@ -10498,6 +10579,11 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                   { label: 'Chamber Limit', value: `Chambers 1 to ${op.chamber_limit || 4}` },
                   { label: 'Registration Date', value: op.created_at ? new Date(op.created_at).toLocaleDateString('en-GB') : '—' }
                 ];
+                const inTotal = Number(op.total_inward) || 0;
+                const outTotal = Number(op.total_outward) || 0;
+                const inToday = Number(op.today_inward) || 0;
+                const outToday = Number(op.today_outward) || 0;
+                const ioLoading = Boolean(op.io_counts_loading);
                 const opActiveAssignments = getActiveOperatorAssignments(opMappings, op.chamber_limit || 4);
                 const opDisplayChambers = getOperatorDisplayChambers(
                   opChambersList,
@@ -10561,6 +10647,29 @@ export default function SuperAdminSecureWindow({ user, onLogout, onUserUpdate })
                           <div className="do-gmail-row-value">{field.value}</div>
                         </div>
                       ))}
+                      <div className="do-gmail-section-label">Inward &amp; Outward (this DO)</div>
+                      <div className="do-profile-io-metrics">
+                        <div className="do-profile-io-card inward">
+                          <span>Total Inward</span>
+                          <strong>{ioLoading ? '…' : inTotal}</strong>
+                          <em>All records by {op.email || 'this DO'}</em>
+                        </div>
+                        <div className="do-profile-io-card outward">
+                          <span>Total Outward</span>
+                          <strong>{ioLoading ? '…' : outTotal}</strong>
+                          <em>All records by {op.email || 'this DO'}</em>
+                        </div>
+                        <div className="do-profile-io-card inward-today">
+                          <span>Today Inward</span>
+                          <strong>{ioLoading ? '…' : inToday}</strong>
+                          <em>Entry date {op.io_counts_today || localDateStr()}</em>
+                        </div>
+                        <div className="do-profile-io-card outward-today">
+                          <span>Today Outward</span>
+                          <strong>{ioLoading ? '…' : outToday}</strong>
+                          <em>Entry date {op.io_counts_today || localDateStr()}</em>
+                        </div>
+                      </div>
                       <div className="do-gmail-row">
                         <div className="do-gmail-row-label">Access</div>
                         <div className="do-gmail-row-value">

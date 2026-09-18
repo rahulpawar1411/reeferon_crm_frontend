@@ -609,6 +609,22 @@ export const fetchDoTaskOverview = async ({ date } = {}) => {
   return await assertOk(res, 'Failed to fetch DO daily task overview.');
 };
 
+/** One DO's inward/outward total + today counts (by operator email). */
+export const fetchDoOperatorIoCounts = async (email) => {
+  const q = String(email || '').trim();
+  if (!q) {
+    return {
+      total_inward: 0,
+      total_outward: 0,
+      today_inward: 0,
+      today_outward: 0
+    };
+  }
+  const qs = new URLSearchParams({ email: q });
+  const res = await fetch(`${API_BASE_URL}/dashboard/do-operator-io-counts?${qs.toString()}`);
+  return await assertOk(res, 'Failed to fetch DO inward/outward counts.');
+};
+
 export const fetchInventoryReconciliation = async ({
   search,
   warehouse,
